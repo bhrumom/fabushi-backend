@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>支付宝Web支付测试</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      overflow: hidden;
+    }
+
+    /* 加载动画样式 */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+      transition: opacity 0.5s ease-out;
+    }
+
+    .loading-content {
+      text-align: center;
+      color: white;
+    }
+
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid rgba(255, 255, 255, 0.3);
+      border-top: 4px solid #ffffff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 20px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+      font-size: 16px;
+      opacity: 0.9;
+      margin-bottom: 8px;
+    }
+
+    .loading-subtext {
+      font-size: 14px;
+      opacity: 0.7;
+    }
+
+    .fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* 主内容样式 */
+    .main-content {
+      opacity: 0;
+      transition: opacity 0.5s ease-in;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .main-content.show {
+      opacity: 1;
+    }
+
+    .container {
+      background: white;
+      padding: 40px;
+      border-radius: 15px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      text-align: center;
+      max-width: 500px;
+      backdrop-filter: blur(10px);
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 20px;
+    }
+    .status {
+      font-size: 18px;
+      color: #666;
+      margin: 20px 0;
+      min-height: 30px;
+    }
+    button {
+      background-color: #1677ff;
+      color: white;
+      border: none;
+      padding: 12px 30px;
+      font-size: 16px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    button:hover {
+      background-color: #4096ff;
+    }
+    button:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #1677ff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-left: 10px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .instructions {
+      margin-top: 30px;
+      padding: 20px;
+      background-color: #f9f9f9;
+      border-radius: 5px;
+      text-align: left;
+    }
+    .instructions h3 {
+      color: #333;
+      margin-top: 0;
+    }
+    .instructions ol {
+      color: #666;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <!-- 加载动画 -->
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="loading-content">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">支付宝Web支付测试</div>
+      <div class="loading-subtext">正在初始化...</div>
+    </div>
+  </div>
+
+  <!-- 主内容 -->
+  <div id="main-content" class="main-content">
+    <div class="container">
+      <h1>支付宝Web支付测试</h1>
+      <div class="status" id="status">准备就绪</div>
+      <button id="testBtn" onclick="testAlipayWebPayment()">测试支付宝Web支付</button>
+      
+      <div class="instructions">
+        <h3>测试说明：</h3>
+        <ol>
+          <li>点击按钮创建支付宝Web订单</li>
+          <li>系统会跳转到支付宝电脑网站支付页面</li>
+          <li>在支付宝页面完成支付</li>
+          <li>支付完成后返回应用</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let isLoading = false;
+
+    function testAlipayWebPayment() {
+      if (isLoading) return;
+      
+      isLoading = true;
+      const btn = document.getElementById('testBtn');
+      const status = document.getElementById('status');
+      
+      btn.disabled = true;
+      btn.innerHTML = '测试中<span class="loading"></span>';
+      status.textContent = '正在创建订单...';
+
+      // 模拟订单创建过程
+      status.textContent = '正在创建模拟订单...';
+      
+      // 模拟订单创建成功
+      setTimeout(() => {
+        const result = {
+          success: true,
+          orderId: 'test_order_' + Date.now(),
+          paymentUrl: 'https://openapi.alipay.com/gateway.do?app_id=2021000000000000&method=alipay.trade.page.pay&format=JSON&charset=utf-8&sign_type=RSA2&timestamp=' + new Date().toISOString() + '&version=1.0&biz_content=' + encodeURIComponent(JSON.stringify({
+            out_trade_no: 'test_order_' + Date.now(),
+            product_code: 'FAST_INSTANT_TRADE_PAY',
+            total_amount: '0.01',
+            subject: '测试会员月卡'
+          }))
+        };
+        
+        status.textContent = '订单创建成功，正在跳转到支付宝...';
+        
+        // 模拟跳转到支付宝支付页面
+        setTimeout(() => {
+          if (result.paymentUrl) {
+            // 在新窗口打开支付URL
+            window.open(result.paymentUrl, '_blank');
+            status.textContent = '已跳转到支付宝支付页面';
+          } else {
+            status.textContent = '支付URL获取失败';
+          }
+          
+          isLoading = false;
+          btn.disabled = false;
+          btn.innerHTML = '测试支付宝Web支付';
+        }, 1000);
+      }, 1500);
+    }
+
+    // 页面加载完成后的初始化
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log('支付宝Web支付测试页面已加载');
+      // 隐藏加载动画，显示主内容
+      setTimeout(function() {
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const mainContent = document.getElementById('main-content');
+        
+        loadingOverlay.classList.add('fade-out');
+        mainContent.classList.add('show');
+        
+        // 动画完成后移除加载层
+        setTimeout(function() {
+          loadingOverlay.style.display = 'none';
+        }, 500);
+      }, 1000); // 延迟1秒显示内容，让加载动画更自然
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+# Flutter Web Headers Configuration
+# 为Flutter Web应用配置必要的HTTP头部
+
+/*
+  # 安全头部
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  X-XSS-Protection: 1; mode=block
+  Referrer-Policy: strict-origin-when-cross-origin
+  
+  # CORS头部 - 允许API访问
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
+  Access-Control-Allow-Headers: Content-Type, Authorization, Range
+  Access-Control-Expose-Headers: Content-Length, Content-Range, Etag
+  
+  # 缓存控制
+  Cache-Control: public, max-age=31536000, immutable
+
+# Flutter Web特定文件的缓存策略
+/flutter_service_worker.js
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+  Expires: 0
+
+/main.dart.js
+  Cache-Control: public, max-age=300
+
+/flutter.js
+  Cache-Control: public, max-age=31536000, immutable
+
+# 字体文件缓存
+/assets/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# 图片资源缓存
+/assets/images/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# 音频文件缓存
+/assets/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# HTML文件 - 不缓存以确保更新
+/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+  Expires: 0
+
+# Manifest文件
+/manifest.json
+  Cache-Control: public, max-age=86400

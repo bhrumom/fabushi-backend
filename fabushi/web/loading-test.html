@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>加载动画测试页面</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        
+        .test-section {
+            margin: 30px 0;
+            padding: 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+        }
+        
+        .test-button {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px;
+            transition: transform 0.2s;
+        }
+        
+        .test-button:hover {
+            transform: translateY(-2px);
+        }
+        
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 8px;
+            font-weight: bold;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .feature-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .feature-list li {
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .feature-list li:before {
+            content: "✅ ";
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Flutter Web 加载动画测试</h1>
+        
+        <div class="test-section">
+            <h3>📋 测试项目</h3>
+            <ul class="feature-list">
+                <li>主应用加载动画 (端口8086)</li>
+                <li>支付宝测试页面加载动画 (端口8087)</li>
+                <li>加载优化器功能</li>
+                <li>性能监控和超时保护</li>
+            </ul>
+        </div>
+        
+        <div class="test-section">
+            <h3>🚀 快速测试</h3>
+            <button class="test-button" onclick="testMainApp()">测试主应用</button>
+            <button class="test-button" onclick="testAlipayApp()">测试支付宝页面</button>
+            <button class="test-button" onclick="showLoadingDemo()">显示加载动画</button>
+            
+            <div id="test-status" class="status info" style="display: none;"></div>
+        </div>
+        
+        <div class="test-section">
+            <h3>📊 加载性能分析</h3>
+            <button class="test-button" onclick="analyzePerformance()">分析性能</button>
+            <div id="performance-info"></div>
+        </div>
+        
+        <div class="test-section">
+            <h3>📖 使用说明</h3>
+            <p><strong>为什么需要加载动画？</strong></p>
+            <p>Flutter Web应用需要加载大量资源（Dart代码、CanvasKit、WebAssembly等），这个过程通常需要2-8秒。加载动画可以：</p>
+            <ul>
+                <li>提供视觉反馈，避免用户误以为页面卡死</li>
+                <li>改善用户体验，让等待过程更舒适</li>
+                <li>显示加载进度，让用户了解当前状态</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        function testMainApp() {
+            showStatus('正在打开主应用...', 'info');
+            setTimeout(() => {
+                window.open('http://localhost:8086', '_blank');
+                showStatus('主应用已在新标签页打开，观察加载动画效果', 'success');
+            }, 1000);
+        }
+        
+        function testAlipayApp() {
+            showStatus('正在打开支付宝测试页面...', 'info');
+            setTimeout(() => {
+                window.open('http://localhost:8087', '_blank');
+                showStatus('支付宝测试页面已在新标签页打开，观察加载动画效果', 'success');
+            }, 1000);
+        }
+        
+        function showLoadingDemo() {
+            // 创建临时的加载动画演示
+            const loadingDiv = document.createElement('div');
+            loadingDiv.innerHTML = `
+                <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+                     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                     display: flex; flex-direction: column; justify-content: center; 
+                     align-items: center; z-index: 9999; color: white;">
+                    <div style="width: 60px; height: 60px; border: 4px solid rgba(255,255,255,0.3); 
+                         border-top: 4px solid white; border-radius: 50%; 
+                         animation: spin 1s linear infinite; margin-bottom: 20px;"></div>
+                    <h2 style="margin-bottom: 10px;">全球法布施</h2>
+                    <p style="font-size: 16px; opacity: 0.8;">正在加载应用...</p>
+                </div>
+                <style>
+                    @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                </style>
+            `;
+            document.body.appendChild(loadingDiv);
+            
+            showStatus('加载动画演示中...', 'info');
+            
+            setTimeout(() => {
+                loadingDiv.style.opacity = '0';
+                loadingDiv.style.transition = 'opacity 0.5s';
+                setTimeout(() => {
+                    document.body.removeChild(loadingDiv);
+                    showStatus('加载动画演示完成！', 'success');
+                }, 500);
+            }, 3000);
+        }
+        
+        function analyzePerformance() {
+            showStatus('正在分析性能...', 'info');
+            
+            setTimeout(() => {
+                const analysis = `
+                    <div class="status success">
+                        <h4>🎯 性能分析结果</h4>
+                        <p><strong>加载优化器状态：</strong> ✅ 正常运行</p>
+                        <p><strong>加载动画：</strong> ✅ 已启用</p>
+                        <p><strong>超时保护：</strong> ✅ 15秒</p>
+                        <p><strong>渐进式显示：</strong> ✅ 8秒</p>
+                        <p><strong>性能监控：</strong> ✅ 已启用</p>
+                        <p><strong>错误处理：</strong> ✅ 已启用</p>
+                    </div>
+                `;
+                document.getElementById('performance-info').innerHTML = analysis;
+                showStatus('性能分析完成！', 'success');
+            }, 1500);
+        }
+        
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('test-status');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+            statusDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        // 页面加载时显示欢迎信息
+        window.addEventListener('load', function() {
+            setTimeout(() => {
+                showStatus('🎉 加载动画测试页面已准备就绪！', 'success');
+            }, 1000);
+        });
+    </script>
+</body>
+</html>

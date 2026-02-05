@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Globe</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #0e0c15; }
+        #container { width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, earth, controls, beams = [];
+        const R = 120;
+
+        function init() {
+            scene = new THREE.Scene();
+            
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.set(0, 0, 350);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x0e0c15, 1);
+            document.getElementById('container').appendChild(renderer.domElement);
+            
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(200, 200, 300);
+            scene.add(directionalLight);
+            
+            createEarth();
+            createStars();
+            
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.5;
+            
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('message', handleMessage);
+            
+            animate();
+        }
+
+        function createEarth() {
+            const group = new THREE.Group();
+            
+            const geometry = new THREE.SphereGeometry(R, 64, 64);
+            const material = new THREE.MeshPhongMaterial({
+                color: 0x13162c,
+                transparent: true,
+                opacity: 0.9
+            });
+            earth = new THREE.Mesh(geometry, material);
+            group.add(earth);
+            
+            const wireframe = new THREE.SphereGeometry(R + 1, 32, 32);
+            const wireMaterial = new THREE.MeshBasicMaterial({
+                color: 0x797eff,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.3
+            });
+            const wire = new THREE.Mesh(wireframe, wireMaterial);
+            group.add(wire);
+            
+            const spriteGeometry = new THREE.SphereGeometry(R + 5, 64, 64);
+            const spriteMaterial = new THREE.MeshBasicMaterial({
+                color: 0x272335,
+                transparent: true,
+                opacity: 0.2,
+                side: THREE.BackSide
+            });
+            const sprite = new THREE.Mesh(spriteGeometry, spriteMaterial);
+            group.add(sprite);
+            
+            scene.add(group);
+        }
+
+        function createStars() {
+            const starsGeometry = new THREE.BufferGeometry();
+            const starsMaterial = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: 2,
+                transparent: true
+            });
+            
+            const starsVertices = [];
+            for (let i = 0; i < 1000; i++) {
+                const x = (Math.random() - 0.5) * 2000;
+                const y = (Math.random() - 0.5) * 2000;
+                const z = (Math.random() - 0.5) * 2000;
+                starsVertices.push(x, y, z);
+            }
+            
+            starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+            const stars = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(stars);
+        }
+
+        function createBeam(from, to) {
+            const curve = new THREE.QuadraticBezierCurve3(
+                new THREE.Vector3(from.x, from.y, from.z),
+                new THREE.Vector3(
+                    (from.x + to.x) / 2,
+                    (from.y + to.y) / 2 + 50,
+                    (from.z + to.z) / 2
+                ),
+                new THREE.Vector3(to.x, to.y, to.z)
+            );
+            
+            const points = curve.getPoints(50);
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            
+            const colors = [];
+            const rainbowColors = [
+                new THREE.Color(0xff0000),
+                new THREE.Color(0xff7f00),
+                new THREE.Color(0xffff00),
+                new THREE.Color(0x00ff00),
+                new THREE.Color(0x0000ff),
+                new THREE.Color(0x4b0082),
+                new THREE.Color(0x9400d3)
+            ];
+            
+            for (let i = 0; i < points.length; i++) {
+                const colorIndex = Math.floor((i / points.length) * rainbowColors.length);
+                const color = rainbowColors[Math.min(colorIndex, rainbowColors.length - 1)];
+                colors.push(color.r, color.g, color.b);
+            }
+            
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            
+            const material = new THREE.LineBasicMaterial({
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8,
+                linewidth: 2
+            });
+            
+            const line = new THREE.Line(geometry, material);
+            scene.add(line);
+            
+            beams.push({ line, progress: 0, maxProgress: 100 });
+            
+            setTimeout(() => {
+                scene.remove(line);
+                beams = beams.filter(b => b.line !== line);
+            }, 3000);
+        }
+
+        function lonLatToVector3(lon, lat, radius) {
+            const phi = (90 - lat) * (Math.PI / 180);
+            const theta = (lon + 180) * (Math.PI / 180);
+            
+            const x = -(radius * Math.sin(phi) * Math.cos(theta));
+            const z = radius * Math.sin(phi) * Math.sin(theta);
+            const y = radius * Math.cos(phi);
+            
+            return new THREE.Vector3(x, y, z);
+        }
+
+        function handleMessage(event) {
+            const data = event.data;
+            if (data.type === 'startTransfer') {
+                const userPos = lonLatToVector3(0, 0, R);
+                
+                for (let i = 0; i < 8; i++) {
+                    const angle = (i / 8) * Math.PI * 2;
+                    const targetLon = Math.cos(angle) * 180;
+                    const targetLat = Math.sin(angle) * 90;
+                    const targetPos = lonLatToVector3(targetLon, targetLat, R);
+                    
+                    setTimeout(() => {
+                        createBeam(userPos, targetPos);
+                    }, i * 200);
+                }
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>

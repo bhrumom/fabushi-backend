@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>验证</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+
+        .container {
+            text-align: center;
+            max-width: 400px;
+        }
+
+        h2 {
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+
+        .loading {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #FFE66D;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .error {
+            color: #ff6b6b;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .error.active {
+            display: block;
+        }
+
+        /* reCAPTCHA容器 */
+        #recaptcha-container {
+            margin: 20px auto;
+        }
+    </style>
+    <!-- Firebase reCAPTCHA Site Key: 6Lc8dRwqAAAAADqLRH6Qy9cJdBGX3NnBrFPNxMGy (从Firebase控制台获取) -->
+    <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
+</head>
+
+<body>
+    <div class="container">
+        <h2>🔐 安全验证</h2>
+        <p>正在进行人机验证，请稍候...</p>
+
+        <div id="recaptcha-container"></div>
+
+        <div class="loading active" id="loading">
+            <div class="spinner"></div>
+            <p>验证中...</p>
+        </div>
+
+        <div class="error" id="error"></div>
+    </div>
+
+    <script>
+        // 从URL获取回调信息
+        const urlParams = new URLSearchParams(window.location.search);
+        const siteKey = urlParams.get('siteKey') || '6LdyQDcqAAAAAMmrBgVX6bEEG3w6t3TgCCqAhVjR'; // 默认Firebase测试Key
+
+        let recaptchaVerifier;
+
+        function onRecaptchaLoad() {
+            try {
+                recaptchaVerifier = grecaptcha.render('recaptcha-container', {
+                    'sitekey': siteKey,
+                    'callback': onRecaptchaSuccess,
+                    'error-callback': onRecaptchaError,
+                    'theme': 'dark',
+                    'size': 'normal'
+                });
+
+                document.getElementById('loading').classList.remove('active');
+            } catch (e) {
+                showError('reCAPTCHA加载失败: ' + e.message);
+            }
+        }
+
+        function onRecaptchaSuccess(token) {
+            document.getElementById('loading').classList.add('active');
+            document.getElementById('loading').querySelector('p').textContent = '验证成功，正在处理...';
+
+            // 通过Flutter WebView Channel发送token
+            if (window.flutter_inappwebview) {
+                window.flutter_inappwebview.callHandler('onRecaptchaToken', token);
+            } else if (window.RecaptchaCallback) {
+                window.RecaptchaCallback.postMessage(token);
+            } else {
+                // 后备方案：修改URL hash
+                window.location.hash = 'token=' + encodeURIComponent(token);
+            }
+        }
+
+        function onRecaptchaError() {
+            showError('reCAPTCHA验证失败，请刷新页面重试');
+        }
+
+        function showError(message) {
+            const errorEl = document.getElementById('error');
+            errorEl.textContent = message;
+            errorEl.classList.add('active');
+            document.getElementById('loading').classList.remove('active');
+        }
+
+        // 等待reCAPTCHA脚本加载完成
+        if (typeof grecaptcha !== 'undefined') {
+            grecaptcha.ready(onRecaptchaLoad);
+        } else {
+            window.onload = function () {
+                if (typeof grecaptcha !== 'undefined') {
+                    grecaptcha.ready(onRecaptchaLoad);
+                } else {
+                    showError('reCAPTCHA加载超时，请检查网络');
+                }
+            };
+        }
+    </script>
+</body>
+
+</html>

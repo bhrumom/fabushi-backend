@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Globe Stream</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { overflow: hidden; background: #0e0c15; }
+        #container { width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        class GlobeScene {
+            constructor(container) {
+                this.container = container;
+                this.R = 120;
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.controls = null;
+                this.earthGroup = null;
+                this.flyLines = [];
+                this.init();
+            }
+
+            init() {
+                this.createScene();
+                this.createCamera();
+                this.createRenderer();
+                this.createLights();
+                this.createStars();
+                this.createEarth();
+                this.createControls();
+                this.animate();
+                
+                window.addEventListener('resize', () => this.onResize());
+                window.addEventListener('message', (e) => this.handleMessage(e));
+            }
+
+            createScene() {
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x0e0c15);
+            }
+
+            createCamera() {
+                const aspect = window.innerWidth / window.innerHeight;
+                this.camera = new THREE.PerspectiveCamera(60, aspect, 1, 2000);
+                this.camera.position.set(0, 0, 350);
+                this.camera.lookAt(0, 0, 0);
+            }
+
+            createRenderer() {
+                this.renderer = new THREE.WebGLRenderer({ 
+                    antialias: true,
+                    alpha: true 
+                });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(window.devicePixelRatio);
+                this.container.appendChild(this.renderer.domElement);
+            }
+
+            createLights() {
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                this.scene.add(ambientLight);
+
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(200, 200, 300);
+                this.scene.add(directionalLight);
+
+                const pointLight = new THREE.PointLight(0x4488ff, 0.4, 600);
+                pointLight.position.set(-150, 0, 150);
+                this.scene.add(pointLight);
+            }
+
+            createStars() {
+                const starsGeometry = new THREE.BufferGeometry();
+                const starsMaterial = new THREE.PointsMaterial({
+                    color: 0xffffff,
+                    size: 2,
+                    transparent: true,
+                    opacity: 0.8
+                });
+
+                const positions = [];
+                for (let i = 0; i < 3000; i++) {
+                    const x = (Math.random() - 0.5) * 2000;
+                    const y = (Math.random() - 0.5) * 2000;
+                    const z = (Math.random() - 0.5) * 2000;
+                    positions.push(x, y, z);
+                }
+
+                starsGeometry.setAttribute('position', 
+                    new THREE.Float32BufferAttribute(positions, 3));
+                const stars = new THREE.Points(starsGeometry, starsMaterial);
+                this.scene.add(stars);
+            }
+
+            createEarth() {
+                this.earthGroup = new THREE.Group();
+
+                // 地球主体
+                const geometry = new THREE.SphereGeometry(this.R, 64, 64);
+                const material = new THREE.MeshPhongMaterial({
+                    color: 0x13162c,
+                    emissive: 0x0a0e1a,
+                    shininess: 30,
+                    transparent: true,
+                    opacity: 0.95
+                });
+                const earth = new THREE.Mesh(geometry, material);
+                this.earthGroup.add(earth);
+
+                // 大气层
+                const atmosphereGeo = new THREE.SphereGeometry(this.R + 8, 64, 64);
+                const atmosphereMat = new THREE.MeshPhongMaterial({
+                    color: 0x272335,
+                    transparent: true,
+                    opacity: 0.2,
+                    side: THREE.BackSide
+                });
+                const atmosphere = new THREE.Mesh(atmosphereGeo, atmosphereMat);
+                this.earthGroup.add(atmosphere);
+
+                // 经纬线
+                this.createGridLines();
+
+                // 光圈
+                this.createGlowRing();
+
+                this.scene.add(this.earthGroup);
+            }
+
+            createGridLines() {
+                const lineMaterial = new THREE.LineBasicMaterial({
+                    color: 0x797eff,
+                    transparent: true,
+                    opacity: 0.3
+                });
+
+                // 纬线
+                for (let lat = -80; lat <= 80; lat += 20) {
+                    const radius = this.R * Math.cos(lat * Math.PI / 180);
+                    const y = this.R * Math.sin(lat * Math.PI / 180);
+                    const points = [];
+                    
+                    for (let i = 0; i <= 64; i++) {
+                        const angle = (i / 64) * Math.PI * 2;
+                        points.push(new THREE.Vector3(
+                            radius * Math.cos(angle),
+                            y,
+                            radius * Math.sin(angle)
+                        ));
+                    }
+                    
+                    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                    const line = new THREE.Line(geometry, lineMaterial);
+                    this.earthGroup.add(line);
+                }
+
+                // 经线
+                for (let lon = 0; lon < 360; lon += 30) {
+                    const points = [];
+                    for (let i = 0; i <= 64; i++) {
+                        const lat = (i / 64) * Math.PI - Math.PI / 2;
+                        const angle = lon * Math.PI / 180;
+                        points.push(new THREE.Vector3(
+                            this.R * Math.cos(lat) * Math.cos(angle),
+                            this.R * Math.sin(lat),
+                            this.R * Math.cos(lat) * Math.sin(angle)
+                        ));
+                    }
+                    
+                    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                    const line = new THREE.Line(geometry, lineMaterial);
+                    this.earthGroup.add(line);
+                }
+            }
+
+            createGlowRing() {
+                const ringGeo = new THREE.RingGeometry(this.R + 10, this.R + 15, 64);
+                const ringMat = new THREE.MeshBasicMaterial({
+                    color: 0x797eff,
+                    transparent: true,
+                    opacity: 0.15,
+                    side: THREE.DoubleSide
+                });
+                const ring = new THREE.Mesh(ringGeo, ringMat);
+                ring.rotation.x = Math.PI / 2;
+                this.earthGroup.add(ring);
+            }
+
+            createControls() {
+                this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.dampingFactor = 0.05;
+                this.controls.autoRotate = true;
+                this.controls.autoRotateSpeed = 0.5;
+                this.controls.minDistance = 200;
+                this.controls.maxDistance = 600;
+                this.controls.enablePan = false;
+            }
+
+            lonLatToVector3(lon, lat, radius) {
+                const phi = (90 - lat) * (Math.PI / 180);
+                const theta = (lon + 180) * (Math.PI / 180);
+                
+                return new THREE.Vector3(
+                    -(radius * Math.sin(phi) * Math.cos(theta)),
+                    radius * Math.cos(phi),
+                    radius * Math.sin(phi) * Math.sin(theta)
+                );
+            }
+
+            createFlyLine(from, to) {
+                const curve = new THREE.QuadraticBezierCurve3(
+                    from,
+                    new THREE.Vector3(
+                        (from.x + to.x) / 2,
+                        (from.y + to.y) / 2 + 100,
+                        (from.z + to.z) / 2
+                    ),
+                    to
+                );
+
+                const points = curve.getPoints(50);
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+
+                // 七彩渐变
+                const colors = [];
+                const rainbow = [
+                    new THREE.Color(0xff0000),
+                    new THREE.Color(0xff7f00),
+                    new THREE.Color(0xffff00),
+                    new THREE.Color(0x00ff00),
+                    new THREE.Color(0x00ffff),
+                    new THREE.Color(0x0000ff),
+                    new THREE.Color(0x9400d3)
+                ];
+
+                for (let i = 0; i < points.length; i++) {
+                    const t = i / (points.length - 1);
+                    const idx = t * (rainbow.length - 1);
+                    const c1 = rainbow[Math.floor(idx)];
+                    const c2 = rainbow[Math.ceil(idx)];
+                    const color = c1.clone().lerp(c2, idx % 1);
+                    colors.push(color.r, color.g, color.b);
+                }
+
+                geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+                const material = new THREE.LineBasicMaterial({
+                    vertexColors: true,
+                    transparent: true,
+                    opacity: 0,
+                    linewidth: 2
+                });
+
+                const line = new THREE.Line(geometry, material);
+                this.scene.add(line);
+
+                // 动画
+                let progress = 0;
+                const animate = () => {
+                    if (progress < 1) {
+                        progress += 0.015;
+                        material.opacity = Math.sin(progress * Math.PI) * 0.9;
+                        requestAnimationFrame(animate);
+                    } else {
+                        setTimeout(() => {
+                            this.scene.remove(line);
+                            geometry.dispose();
+                            material.dispose();
+                        }, 1000);
+                    }
+                };
+                animate();
+
+                // 目标点光晕
+                const glowGeo = new THREE.SphereGeometry(4, 16, 16);
+                const glowMat = new THREE.MeshBasicMaterial({
+                    color: 0x00ffff,
+                    transparent: true,
+                    opacity: 0.9
+                });
+                const glow = new THREE.Mesh(glowGeo, glowMat);
+                glow.position.copy(to);
+                this.scene.add(glow);
+
+                setTimeout(() => {
+                    this.scene.remove(glow);
+                    glowGeo.dispose();
+                    glowMat.dispose();
+                }, 3000);
+            }
+
+            handleMessage(event) {
+                const data = event.data;
+                if (data.type === 'startTransfer') {
+                    const origin = this.lonLatToVector3(116, 40, this.R);
+                    
+                    const cities = [
+                        { lon: -74, lat: 40 },
+                        { lon: 0, lat: 51 },
+                        { lon: 139, lat: 35 },
+                        { lon: 151, lat: -33 },
+                        { lon: -46, lat: -23 },
+                        { lon: 37, lat: 55 },
+                        { lon: 31, lat: 30 },
+                        { lon: 77, lat: 28 }
+                    ];
+
+                    cities.forEach((city, i) => {
+                        setTimeout(() => {
+                            const target = this.lonLatToVector3(city.lon, city.lat, this.R);
+                            this.createFlyLine(origin, target);
+                        }, i * 250);
+                    });
+                }
+            }
+
+            onResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                this.controls.update();
+                this.earthGroup.rotation.y += 0.001;
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        // 初始化
+        const container = document.getElementById('container');
+        new GlobeScene(container);
+    </script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "name": "全球法布施",
+  "short_name": "全球法布施",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#FFFFFF",
+  "theme_color": "#667eea",
+  "description": "全球法布施文件传输应用",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "icons/Icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/Icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "unlimitedStorage"
+  ]
+}

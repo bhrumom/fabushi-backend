@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="全球法布施 - 让佛法传遍世界每个角落">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="全球法布施">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png" />
+
+  <title>全球法布施</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!-- 🚀 资源预连接 - 提前建立连接到关键域名 -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+
+  <!-- 🔤 预加载关键字体（子集化后仅~4.5MB） -->
+  <link rel="preload" href="assets/fonts/subset/NotoSansSC-Regular-subset.woff2" as="font" type="font/woff2"
+    crossorigin>
+  <link rel="preload" href="assets/fonts/subset/NotoSerifSC-Regular-subset.woff2" as="font" type="font/woff2"
+    crossorigin>
+
+  <!-- 🚀 预加载关键脚本 -->
+  <link rel="preload" href="flutter_bootstrap.js" as="script" fetchpriority="high">
+  <link rel="preload" href="main.dart.js" as="script" fetchpriority="high">
+
+  <!-- Flutter Angle for WebGL2 - 非关键，延迟加载 -->
+  <script src="https://cdn.jsdelivr.net/gh/Knightro63/flutter_angle/assets/gles_bindings.js" defer></script>
+
+  <!-- Three.js 延迟加载 - 仅在需要时加载 -->
+  <script src="lazy-three.js" defer></script>
+
+  <!-- sql.js for drift -->
+  <script>
+    // Configure sql.js BEFORE loading the library
+    window.initSqlJs = window.initSqlJs || function (config) {
+      config = config || {};
+      config.locateFile = config.locateFile || function (file) {
+        return 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/' + file;
+      };
+      return window._initSqlJs(config);
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.js" defer
+    onload="window._initSqlJs = window.initSqlJs; window.initSqlJs = function(config) { config = config || {}; config.locateFile = function(file) { return 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/' + file; }; return window._initSqlJs(config); };"></script>
+
+  <style>
+    /* 基础样式 */
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    #app-container {
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      transition: opacity 0.3s ease-in;
+    }
+
+    #app-container.loaded {
+      opacity: 1;
+    }
+
+    #zen-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+    }
+
+    /* 🎨 骨架屏样式 */
+    #loading-skeleton {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      z-index: 9999;
+      opacity: 1;
+      transition: opacity 0.5s ease-out;
+    }
+
+    #loading-skeleton.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* 地球骨架 */
+    .skeleton-globe {
+      width: 280px;
+      height: 280px;
+      border-radius: 50%;
+      background: linear-gradient(90deg,
+          rgba(255, 255, 255, 0.1) 25%,
+          rgba(255, 255, 255, 0.2) 50%,
+          rgba(255, 255, 255, 0.1) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 2s infinite;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3),
+        inset 0 0 60px rgba(255, 255, 255, 0.1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* 地球网格效果 */
+    .skeleton-globe::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      left: -50%;
+      width: 200%;
+      height: 200%;
+      background: repeating-linear-gradient(0deg,
+          transparent,
+          transparent 20px,
+          rgba(255, 255, 255, 0.05) 20px,
+          rgba(255, 255, 255, 0.05) 22px);
+      animation: rotate 20s linear infinite;
+    }
+
+    @keyframes shimmer {
+      0% {
+        background-position: 200% 0;
+      }
+
+      100% {
+        background-position: -200% 0;
+      }
+    }
+
+    @keyframes rotate {
+      from {
+        transform: rotate(0deg);
+      }
+
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* 加载文本 */
+    .loading-text {
+      margin-top: 40px;
+      color: rgba(255, 255, 255, 0.95);
+      font-size: 18px;
+      font-weight: 500;
+      text-align: center;
+      letter-spacing: 1px;
+    }
+
+    .loading-subtext {
+      margin-top: 12px;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 14px;
+      text-align: center;
+    }
+
+    /* 加载进度指示器 */
+    .loading-dots {
+      display: flex;
+      gap: 8px;
+      margin-top: 20px;
+    }
+
+    .loading-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.7);
+      animation: pulse 1.4s infinite ease-in-out;
+    }
+
+    .loading-dot:nth-child(1) {
+      animation-delay: 0s;
+    }
+
+    .loading-dot:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+
+    .loading-dot:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      80%,
+      100% {
+        transform: scale(0.8);
+        opacity: 0.5;
+      }
+
+      40% {
+        transform: scale(1.2);
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- 🎨 加载骨架屏 -->
+  <div id="loading-skeleton">
+    <div class="skeleton-globe"></div>
+    <div class="loading-text">全球法布施</div>
+    <div class="loading-subtext">正在加载...</div>
+    <div class="loading-dots">
+      <div class="loading-dot"></div>
+      <div class="loading-dot"></div>
+      <div class="loading-dot"></div>
+    </div>
+  </div>
+
+  <!-- 应用容器 -->
+  <canvas id="zen-canvas"></canvas>
+  <div id="app-container"></div>
+
+  <!-- 支付宝相关脚本 - 延迟加载 -->
+  <script type="module" src="alipay-config.js" defer></script>
+  <script type="module" src="auth-utils.js" defer></script>
+  <script type="module" src="alipay-utils.js" defer></script>
+  <script type="module" src="alipay-login-functions.js" defer></script>
+
+  <!-- Flutter 引导脚本 -->
+  <script src="flutter_bootstrap.js" async></script>
+
+  <!-- 🚀 Flutter 加载配置 - 自动选择最优渲染器 -->
+  <script>
+    window.addEventListener('load', function (ev) {
+      console.log('🚀 Starting Flutter app...');
+
+      _flutter.loader.load({
+        // Flutter 3.38+ 自动选择最优渲染器
+        // 首次加载通常使用 HTML 渲染器 (快速)
+        // 3D 场景自动切换到 CanvasKit (性能)
+        onEntrypointLoaded: async function (engineInitializer) {
+          console.log('✅ Flutter entrypoint loaded');
+          const appRunner = await engineInitializer.initializeEngine();
+          console.log('✅ Flutter engine initialized');
+          await appRunner.runApp();
+          console.log('✅ Flutter app started');
+
+          // 移除骨架屏
+          setTimeout(() => {
+            const skeleton = document.getElementById('loading-skeleton');
+            const appContainer = document.getElementById('app-container');
+
+            if (skeleton) {
+              skeleton.classList.add('fade-out');
+              setTimeout(() => skeleton.remove(), 500);
+            }
+
+            if (appContainer) {
+              appContainer.classList.add('loaded');
+            }
+
+            console.log('🎉 App fully loaded');
+          }, 300);
+
+          // 在空闲时预加载 CanvasKit (如果尚未加载)
+          if ('requestIdleCallback' in window) {
+            requestIdleCallback(() => {
+              console.log('🔮 Preloading CanvasKit in background...');
+              // 预加载 CanvasKit wasm 文件
+              const link = document.createElement('link');
+              link.rel = 'prefetch';
+              link.href = 'canvaskit/canvaskit.wasm';
+              document.head.appendChild(link);
+            }, { timeout: 3000 });
+          }
+
+          // 预加载 Three.js (如果用户可能访问 3D 页面)
+          window.preloadThreeJS && window.preloadThreeJS();
+        }
+      });
+    });
+
+    // 监听 Flutter 首帧渲染完成事件
+    window.addEventListener('flutter-first-frame', function () {
+      console.log('🖼️ Flutter first frame rendered');
+    });
+  </script>
+</body>
+
+</html>

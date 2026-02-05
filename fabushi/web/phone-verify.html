@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>手机验证</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+
+        .container {
+            text-align: center;
+            max-width: 350px;
+            width: 100%;
+        }
+
+        h3 {
+            margin-bottom: 15px;
+            font-weight: 500;
+            font-size: 18px;
+        }
+
+        p {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 20px;
+        }
+
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #FFE66D;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .error {
+            color: #ff6b6b;
+            margin-top: 15px;
+            font-size: 14px;
+            padding: 10px;
+            background: rgba(255, 107, 107, 0.1);
+            border-radius: 8px;
+        }
+
+        .success {
+            color: #4ade80;
+            font-size: 16px;
+        }
+
+        #recaptcha-container {
+            margin: 20px auto;
+            display: flex;
+            justify-content: center;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #FF6B6B 0%, #FFE66D 100%);
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 15px;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h3>🔐 手机号验证</h3>
+        <p id="status">正在加载验证组件...</p>
+
+        <div class="spinner" id="loading"></div>
+
+        <div id="recaptcha-container"></div>
+
+        <div class="error hidden" id="error"></div>
+
+        <button class="btn hidden" id="retryBtn" onclick="location.reload()">重试</button>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
+
+    <script>
+        // Firebase配置 (从firebase_options.dart获取)
+        const firebaseConfig = {
+            apiKey: "AIzaSyCsvE8XER-hGKOftkTO6B5qGHTfI5vG-ik",
+            authDomain: "quanqiubushi.firebaseapp.com",
+            projectId: "quanqiubushi",
+            storageBucket: "quanqiubushi.firebasestorage.app",
+            messagingSenderId: "700291601159",
+            appId: "1:700291601159:web:2749eebfa8b73ef9622ba2"
+        };
+
+        // 初始化Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+
+        // 从URL获取手机号
+        const urlParams = new URLSearchParams(window.location.search);
+        const phoneNumber = urlParams.get('phone');
+
+        let confirmationResult = null;
+
+        // 设置reCAPTCHA验证器
+        function setupRecaptcha() {
+            try {
+                window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+                    'size': 'normal',
+                    'callback': (response) => {
+                        // reCAPTCHA验证成功，发送验证码
+                        sendVerificationCode();
+                    },
+                    'expired-callback': () => {
+                        showError('验证已过期，请刷新页面重试');
+                    }
+                });
+
+                window.recaptchaVerifier.render().then(() => {
+                    document.getElementById('loading').classList.add('hidden');
+                    document.getElementById('status').textContent = '请完成人机验证';
+                });
+            } catch (e) {
+                showError('验证组件加载失败: ' + e.message);
+            }
+        }
+
+        // 发送验证码
+        function sendVerificationCode() {
+            if (!phoneNumber) {
+                showError('手机号无效');
+                return;
+            }
+
+            document.getElementById('status').textContent = '正在发送验证码...';
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('recaptcha-container').classList.add('hidden');
+
+            auth.signInWithPhoneNumber(phoneNumber, window.recaptchaVerifier)
+                .then((result) => {
+                    confirmationResult = result;
+                    document.getElementById('loading').classList.add('hidden');
+                    document.getElementById('status').textContent = '✅ 验证码已发送';
+                    document.getElementById('status').className = 'success';
+
+                    // 通知Flutter验证码已发送
+                    if (window.flutter_inappwebview) {
+                        window.flutter_inappwebview.callHandler('onCodeSent', {
+                            success: true,
+                            verificationId: result.verificationId
+                        });
+                    }
+                })
+                .catch((error) => {
+                    showError(getErrorMessage(error.code));
+                });
+        }
+
+        function getErrorMessage(code) {
+            const messages = {
+                'auth/invalid-phone-number': '无效的手机号格式',
+                'auth/too-many-requests': '请求过于频繁，请稍后再试',
+                'auth/quota-exceeded': '短信配额已用完',
+                'auth/captcha-check-failed': '验证失败，请重试',
+                'auth/missing-phone-number': '请输入手机号',
+            };
+            return messages[code] || '发送失败: ' + code;
+        }
+
+        function showError(message) {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('error').textContent = message;
+            document.getElementById('error').classList.remove('hidden');
+            document.getElementById('retryBtn').classList.remove('hidden');
+            document.getElementById('status').textContent = '发送失败';
+
+            // 通知Flutter发送失败
+            if (window.flutter_inappwebview) {
+                window.flutter_inappwebview.callHandler('onCodeSent', {
+                    success: false,
+                    error: message
+                });
+            }
+        }
+
+        // 页面加载完成后初始化
+        window.onload = function () {
+            if (!phoneNumber) {
+                showError('请提供手机号参数');
+                return;
+            }
+            setupRecaptcha();
+        };
+    </script>
+</body>
+
+</html>

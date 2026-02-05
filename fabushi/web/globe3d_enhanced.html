@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Globe</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; }
+        #container { width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, earth, controls, earthGroup;
+        const beams = [];
+        const R = 100;
+
+        function init() {
+            scene = new THREE.Scene();
+            
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.set(0, 0, 300);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setClearColor(0x000000, 1);
+            document.getElementById('container').appendChild(renderer.domElement);
+            
+            createLights();
+            createStarfield();
+            createEarth();
+            
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.5;
+            controls.minDistance = 150;
+            controls.maxDistance = 500;
+            
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('message', handleMessage);
+            
+            animate();
+        }
+
+        function createLights() {
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(200, 200, 200);
+            scene.add(directionalLight);
+            
+            const pointLight = new THREE.PointLight(0x4488ff, 0.5, 500);
+            pointLight.position.set(-100, 0, 100);
+            scene.add(pointLight);
+        }
+
+        function createStarfield() {
+            const starsGeometry = new THREE.BufferGeometry();
+            const starsMaterial = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: 1.5,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const starsVertices = [];
+            for (let i = 0; i < 2000; i++) {
+                const x = (Math.random() - 0.5) * 2000;
+                const y = (Math.random() - 0.5) * 2000;
+                const z = (Math.random() - 0.5) * 2000;
+                starsVertices.push(x, y, z);
+            }
+            
+            starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+            const stars = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(stars);
+        }
+
+        function createEarth() {
+            earthGroup = new THREE.Group();
+            
+            // 地球主体
+            const geometry = new THREE.SphereGeometry(R, 64, 64);
+            
+            // 使用渐变材质
+            const material = new THREE.MeshPhongMaterial({
+                color: 0x2233aa,
+                emissive: 0x112244,
+                shininess: 25,
+                transparent: true,
+                opacity: 0.95
+            });
+            
+            earth = new THREE.Mesh(geometry, material);
+            earthGroup.add(earth);
+            
+            // 添加大气层
+            const atmosphereGeometry = new THREE.SphereGeometry(R + 5, 64, 64);
+            const atmosphereMaterial = new THREE.MeshPhongMaterial({
+                color: 0x4488ff,
+                transparent: true,
+                opacity: 0.15,
+                side: THREE.BackSide
+            });
+            const atmosphere = new THREE.Mesh(atmosphereGeometry, atmosphereMaterial);
+            earthGroup.add(atmosphere);
+            
+            // 添加经纬线
+            createGridLines();
+            
+            // 添加光圈
+            createGlowRing();
+            
+            scene.add(earthGroup);
+        }
+
+        function createGridLines() {
+            const gridMaterial = new THREE.LineBasicMaterial({
+                color: 0x4488ff,
+                transparent: true,
+                opacity: 0.3
+            });
+            
+            // 纬线
+            for (let lat = -80; lat <= 80; lat += 20) {
+                const radius = R * Math.cos(lat * Math.PI / 180);
+                const y = R * Math.sin(lat * Math.PI / 180);
+                
+                const points = [];
+                for (let i = 0; i <= 64; i++) {
+                    const angle = (i / 64) * Math.PI * 2;
+                    points.push(new THREE.Vector3(
+                        radius * Math.cos(angle),
+                        y,
+                        radius * Math.sin(angle)
+                    ));
+                }
+                
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                const line = new THREE.Line(geometry, gridMaterial);
+                earthGroup.add(line);
+            }
+            
+            // 经线
+            for (let lon = 0; lon < 360; lon += 20) {
+                const points = [];
+                for (let i = 0; i <= 64; i++) {
+                    const lat = (i / 64) * Math.PI - Math.PI / 2;
+                    const angle = lon * Math.PI / 180;
+                    points.push(new THREE.Vector3(
+                        R * Math.cos(lat) * Math.cos(angle),
+                        R * Math.sin(lat),
+                        R * Math.cos(lat) * Math.sin(angle)
+                    ));
+                }
+                
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                const line = new THREE.Line(geometry, gridMaterial);
+                earthGroup.add(line);
+            }
+        }
+
+        function createGlowRing() {
+            const ringGeometry = new THREE.RingGeometry(R + 8, R + 12, 64);
+            const ringMaterial = new THREE.MeshBasicMaterial({
+                color: 0x4488ff,
+                transparent: true,
+                opacity: 0.2,
+                side: THREE.DoubleSide
+            });
+            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+            ring.rotation.x = Math.PI / 2;
+            earthGroup.add(ring);
+        }
+
+        function createBeam(from, to) {
+            const curve = new THREE.QuadraticBezierCurve3(
+                from,
+                new THREE.Vector3(
+                    (from.x + to.x) / 2,
+                    (from.y + to.y) / 2 + 80,
+                    (from.z + to.z) / 2
+                ),
+                to
+            );
+            
+            const points = curve.getPoints(50);
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            
+            // 七彩渐变
+            const colors = [];
+            const rainbowColors = [
+                new THREE.Color(0xff0000),
+                new THREE.Color(0xff7f00),
+                new THREE.Color(0xffff00),
+                new THREE.Color(0x00ff00),
+                new THREE.Color(0x00ffff),
+                new THREE.Color(0x0000ff),
+                new THREE.Color(0x8b00ff)
+            ];
+            
+            for (let i = 0; i < points.length; i++) {
+                const t = i / (points.length - 1);
+                const colorIndex = t * (rainbowColors.length - 1);
+                const color1 = rainbowColors[Math.floor(colorIndex)];
+                const color2 = rainbowColors[Math.ceil(colorIndex)];
+                const color = color1.clone().lerp(color2, colorIndex % 1);
+                colors.push(color.r, color.g, color.b);
+            }
+            
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            
+            const material = new THREE.LineBasicMaterial({
+                vertexColors: true,
+                transparent: true,
+                opacity: 0,
+                linewidth: 3
+            });
+            
+            const line = new THREE.Line(geometry, material);
+            scene.add(line);
+            
+            // 动画
+            const beam = { line, progress: 0, material };
+            beams.push(beam);
+            
+            const animate = () => {
+                if (beam.progress < 1) {
+                    beam.progress += 0.02;
+                    beam.material.opacity = Math.sin(beam.progress * Math.PI) * 0.8;
+                    requestAnimationFrame(animate);
+                } else {
+                    setTimeout(() => {
+                        scene.remove(line);
+                        const index = beams.indexOf(beam);
+                        if (index > -1) beams.splice(index, 1);
+                    }, 500);
+                }
+            };
+            animate();
+            
+            // 目标点光晕
+            const glowGeometry = new THREE.SphereGeometry(3, 16, 16);
+            const glowMaterial = new THREE.MeshBasicMaterial({
+                color: 0x00ffff,
+                transparent: true,
+                opacity: 0.8
+            });
+            const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+            glow.position.copy(to);
+            scene.add(glow);
+            
+            setTimeout(() => scene.remove(glow), 3000);
+        }
+
+        function lonLatToVector3(lon, lat, radius) {
+            const phi = (90 - lat) * (Math.PI / 180);
+            const theta = (lon + 180) * (Math.PI / 180);
+            
+            return new THREE.Vector3(
+                -(radius * Math.sin(phi) * Math.cos(theta)),
+                radius * Math.cos(phi),
+                radius * Math.sin(phi) * Math.sin(theta)
+            );
+        }
+
+        function handleMessage(event) {
+            const data = event.data;
+            if (data.type === 'startTransfer') {
+                const userPos = lonLatToVector3(116, 40, R); // 北京位置
+                
+                // 全球8个方向
+                const targets = [
+                    { lon: -74, lat: 40 },   // 纽约
+                    { lon: 0, lat: 51 },     // 伦敦
+                    { lon: 139, lat: 35 },   // 东京
+                    { lon: 151, lat: -33 },  // 悉尼
+                    { lon: -46, lat: -23 },  // 圣保罗
+                    { lon: 37, lat: 55 },    // 莫斯科
+                    { lon: 31, lat: 30 },    // 开罗
+                    { lon: 77, lat: 28 }     // 新德里
+                ];
+                
+                targets.forEach((target, i) => {
+                    setTimeout(() => {
+                        const targetPos = lonLatToVector3(target.lon, target.lat, R);
+                        createBeam(userPos, targetPos);
+                    }, i * 200);
+                });
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            earthGroup.rotation.y += 0.001;
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>

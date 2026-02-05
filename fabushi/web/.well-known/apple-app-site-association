@@ -1,0 +1,12 @@
+<![CDATA[{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "YOUR_TEAM_ID.com.ombhrum.fabushi",
+        "paths": [ "*" ]
+      }
+    ]
+  }
+}
+]]>

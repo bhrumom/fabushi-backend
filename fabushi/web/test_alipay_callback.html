@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>支付宝回调测试</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 0;
+    }
+    .container {
+      background: white;
+      padding: 40px;
+      border-radius: 15px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      text-align: center;
+      max-width: 600px;
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 20px;
+    }
+    .status {
+      font-size: 18px;
+      color: #666;
+      margin: 20px 0;
+      min-height: 30px;
+      padding: 10px;
+      border-radius: 5px;
+      background-color: #f9f9f9;
+    }
+    button {
+      background-color: #1677ff;
+      color: white;
+      border: none;
+      padding: 12px 30px;
+      font-size: 16px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+      margin: 10px;
+    }
+    button:hover {
+      background-color: #4096ff;
+    }
+    button:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #1677ff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-left: 10px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .success {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .error {
+      background-color: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .info {
+      background-color: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+    .result {
+      background-color: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      padding: 15px;
+      margin: 20px 0;
+      text-align: left;
+      font-family: monospace;
+      font-size: 14px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      margin: 10px 0;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      font-size: 16px;
+    }
+    .input-group {
+      text-align: left;
+      margin: 20px 0;
+    }
+    .input-group label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔧 支付宝回调测试</h1>
+    <div class="status" id="status">准备就绪</div>
+    
+    <div class="input-group">
+      <label for="authCode">授权码 (Auth Code):</label>
+      <input type="text" id="authCode" placeholder="输入支付宝授权码，例如: 92e3d70ae2c5400db5f782f384b7AX55" value="92e3d70ae2c5400db5f782f384b7AX55">
+    </div>
+    
+    <div class="input-group">
+      <label for="state">状态码 (State):</label>
+      <input type="text" id="state" placeholder="输入状态码（可选）" value="test_state_123">
+    </div>
+    
+    <button id="testBtn" onclick="testAlipayCallback()">
+      测试支付宝登录回调
+    </button>
+    
+    <button id="testOneClickBtn" onclick="testOneClickRegister()">
+      测试一键注册
+    </button>
+    
+    <button id="clearBtn" onclick="clearResults()">
+      清除结果
+    </button>
+    
+    <div id="result" class="result" style="display: none;"></div>
+    
+    <div style="margin-top: 20px; text-align: left;">
+      <h3>测试说明：</h3>
+      <ol>
+        <li>输入支付宝授权码（可以从终端日志中获取）</li>
+        <li>点击"测试支付宝登录回调"按钮测试登录功能</li>
+        <li>点击"测试一键注册"按钮测试一键注册功能</li>
+        <li>查看右侧结果区域获取详细的API响应</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    const WORKER_URL = 'https://fabushi-flutter-web.bhrumom.workers.dev';
+    let isLoading = false;
+
+    function updateStatus(message, type = 'info') {
+      const status = document.getElementById('status');
+      status.textContent = message;
+      status.className = `status ${type}`;
+    }
+
+    function showResult(data) {
+      const resultDiv = document.getElementById('result');
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = `<strong>API响应:</strong><br><pre>${JSON.stringify(data, null, 2)}</pre>`;
+    }
+
+    function setLoading(loading) {
+      isLoading = loading;
+      const buttons = document.querySelectorAll('button');
+      buttons.forEach(btn => {
+        if (btn.id !== 'clearBtn') {
+          btn.disabled = loading;
+          if (loading && btn.id === 'testBtn') {
+            btn.innerHTML = '测试中<span class="loading"></span>';
+          } else if (!loading && btn.id === 'testBtn') {
+            btn.innerHTML = '测试支付宝登录回调';
+          } else if (loading && btn.id === 'testOneClickBtn') {
+            btn.innerHTML = '测试中<span class="loading"></span>';
+          } else if (!loading && btn.id === 'testOneClickBtn') {
+            btn.innerHTML = '测试一键注册';
+          }
+        }
+      });
+    }
+
+    async function testAlipayCallback() {
+      if (isLoading) return;
+      
+      const authCode = document.getElementById('authCode').value.trim();
+      const state = document.getElementById('state').value.trim();
+      
+      if (!authCode) {
+        updateStatus('请输入授权码', 'error');
+        return;
+      }
+      
+      setLoading(true);
+      updateStatus('正在测试支付宝登录回调...', 'info');
+
+      try {
+        // 直接调用登录API
+        const response = await fetch(`${WORKER_URL}/api/auth/alipay/login`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            auth_code: authCode,
+            state: state || null
+          })
+        });
+
+        const data = await response.json();
+        
+        console.log('登录API响应:', data);
+        showResult(data);
+        
+        if (response.ok && data.success) {
+          updateStatus('登录成功！', 'success');
+        } else {
+          updateStatus(`登录失败: ${data.error || '未知错误'}`, 'error');
+        }
+        
+      } catch (error) {
+        console.error('测试失败:', error);
+        updateStatus(`测试失败: ${error.message}`, 'error');
+        showResult({ error: error.message });
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function testOneClickRegister() {
+      if (isLoading) return;
+      
+      const authCode = document.getElementById('authCode').value.trim();
+      const state = document.getElementById('state').value.trim();
+      
+      if (!authCode) {
+        updateStatus('请输入授权码', 'error');
+        return;
+      }
+      
+      setLoading(true);
+      updateStatus('正在测试支付宝一键注册流程...', 'info');
+
+      try {
+        // 第一步：尝试登录
+        updateStatus('第一步：尝试使用授权码登录...', 'info');
+        const loginResponse = await fetch(`${WORKER_URL}/api/auth/alipay/login`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            auth_code: authCode,
+            state: state || null
+          })
+        });
+
+        const loginData = await loginResponse.json();
+        console.log('登录尝试结果:', loginData);
+        
+        if (loginResponse.ok && loginData.success) {
+          // 登录成功，直接完成
+          updateStatus('登录成功！用户已存在。', 'success');
+          showResult(loginData);
+          return;
+        }
+        
+        if (loginData.needsRegistration) {
+          // 需要注册，进行一键注册
+          updateStatus('第二步：新用户需要注册，正在一键注册...', 'info');
+          
+          const alipayUser = loginData.alipayUser;
+          const registerResponse = await fetch(`${WORKER_URL}/api/auth/alipay/register`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              alipayUserId: alipayUser.user_id,
+              alipayNickname: alipayUser.nick_name,
+              alipayAvatar: alipayUser.avatar,
+              oneClick: true
+            })
+          });
+
+          const registerData = await registerResponse.json();
+          console.log('一键注册结果:', registerData);
+          
+          if (registerResponse.ok && registerData.success) {
+            updateStatus('一键注册成功！', 'success');
+            showResult(registerData);
+          } else {
+            updateStatus(`一键注册失败: ${registerData.message || registerData.error || '未知错误'}`, 'error');
+            showResult(registerData);
+          }
+        } else {
+          // 其他错误
+          updateStatus(`登录失败: ${loginData.error || '未知错误'}`, 'error');
+          showResult(loginData);
+        }
+        
+      } catch (error) {
+        console.error('测试失败:', error);
+        updateStatus(`测试失败: ${error.message}`, 'error');
+        showResult({ error: error.message });
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function clearResults() {
+      document.getElementById('result').style.display = 'none';
+      document.getElementById('result').innerHTML = '';
+      updateStatus('准备就绪', 'info');
+    }
+
+    // 页面加载时检查URL参数
+    window.onload = function() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const authCode = urlParams.get('auth_code');
+      const state = urlParams.get('state');
+      
+      if (authCode) {
+        document.getElementById('authCode').value = authCode;
+        updateStatus('检测到URL中的授权码，可以开始测试', 'info');
+      }
+      
+      if (state) {
+        document.getElementById('state').value = state;
+      }
+    };
+  </script>
+</body>
+</html>
