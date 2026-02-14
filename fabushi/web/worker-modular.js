@@ -56,8 +56,83 @@ export default {
       const response = await route(request, env, db);
       if (response) return response;
 
-      // 未匹配的路由，回退到原worker.js处理
-      return new Response('Not Found', { status: 404 });
+      // /support 支持页面路由
+      if (url.pathname === '/support' || url.pathname === '/support/') {
+        try {
+          // 尝试从静态资源提供
+          if (env.ASSETS) {
+            const supportRequest = new Request(new URL('/support/index.html', request.url), request);
+            const assetResponse = await env.ASSETS.fetch(supportRequest);
+            if (assetResponse.status === 200) {
+              const newResponse = new Response(assetResponse.body, {
+                status: 200,
+                headers: {
+                  'Content-Type': 'text/html; charset=utf-8',
+                  'Access-Control-Allow-Origin': '*',
+                  'Cache-Control': 'public, max-age=3600',
+                },
+              });
+              return newResponse;
+            }
+          }
+        } catch (e) {
+          console.error('Error serving support page from assets:', e);
+        }
+        // 回退：返回307重定向到静态文件
+        return Response.redirect(new URL('/support/index.html', request.url).href, 307);
+      }
+
+      // 静态文件服务
+      if (env.ASSETS) {
+        const url = new URL(request.url);
+        const pathname = url.pathname;
+
+        let assetResponse = await env.ASSETS.fetch(request);
+
+        // SPA fallback: 如果是 404 且不是 API 请求，也不是带扩展名的文件，或者是 /support 路径，尝试返回 index.html
+        if (assetResponse.status === 404 && !pathname.startsWith('/api/')) {
+          // 特殊处理 /support 路径，回退到 /support/index.html
+          if (pathname === '/support' || pathname === '/support/') {
+            const supportRequest = new Request(new URL('/support/index.html', request.url), request);
+            const supportResponse = await env.ASSETS.fetch(supportRequest);
+            if (supportResponse.status === 200) {
+              assetResponse = supportResponse;
+            }
+          }
+          // 普通 SPA 回退 (排除 /support/ 开头的其他路径，只处理根路径或未匹配路径)
+          else if (!/\.[^/]+$/.test(pathname) && !pathname.startsWith('/support/')) {
+            const spaRequest = new Request(new URL('/index.html', request.url), request);
+            assetResponse = await env.ASSETS.fetch(spaRequest);
+          }
+        }
+
+        // 添加CORS和版本头
+        const newResponse = new Response(
+          request.method === 'HEAD' ? null : assetResponse.body,
+          {
+            status: assetResponse.status,
+            statusText: assetResponse.statusText,
+            headers: assetResponse.headers
+          }
+        );
+
+        newResponse.headers.set('Access-Control-Allow-Origin', '*');
+
+        // 缓存策略
+        const noCacheList = ['/', '/index.html', '/support/', '/support/index.html', '/flutter_service_worker.js', '/main.dart.js'];
+        if (noCacheList.includes(pathname)) {
+          newResponse.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        } else if (/\.(js|css|png|jpg|jpeg|gif|svg|woff2?|json|wasm)$/i.test(pathname)) {
+          if (!newResponse.headers.has('Cache-Control')) {
+            newResponse.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        }
+
+        return newResponse;
+      }
+
+      // 最后的兜底
+      return new Response('Not Found', { status: 404, headers: { 'Access-Control-Allow-Origin': '*' } });
 
     } catch (error) {
       console.error('Worker error:', error);
