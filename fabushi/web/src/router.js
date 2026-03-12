@@ -18,6 +18,7 @@ import { handleOnlineJoin, handleOnlineHeartbeat, handleOnlineLeave, handleOnlin
 import { handleSyncRecord, handleGetRecords, handleGetStats, handleGetWeeklyStats, handleGetMonthlyStats, handleSetGoal, handleGetGoals, handleMeditationSettings } from './handlers/meditation.js';
 import { handleGetSyncData, handlePushSyncData, handleGetSyncState } from './handlers/sync.js';
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
+import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
 import { jsonResponse } from './utils/response.js';
 
 
@@ -148,6 +149,13 @@ export async function route(request, env, db, ctx) {
   if (pathname === '/migrate-builtin-complete' && method === 'POST') return await handleBuiltinMigration(request, env);
   if (pathname === '/api/builtin/search' && method === 'GET') return await handleFullTextSearch(request, env);
   if (pathname === '/api/builtin/categories' && method === 'GET') return await handleBuiltinCategories(request, env);
+
+  // 内容举报与屏蔽API
+  if (pathname === '/api/report' && method === 'POST') return await handleReport(request, env, db);
+  if (pathname === '/api/block-user' && method === 'POST') return await handleBlockUser(request, env, db);
+  if (pathname === '/api/admin/reports' && method === 'GET') return await handleGetReports(request, env, db);
+  if (pathname === '/api/admin/reports/review' && method === 'POST') return await handleReviewReport(request, env, db);
+  if (pathname === '/api/admin/blocks' && method === 'GET') return await handleGetBlocks(request, env, db);
 
   return null;
 }
