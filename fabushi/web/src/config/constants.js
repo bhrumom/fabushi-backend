@@ -35,6 +35,27 @@ export const REDEEM_CODE_TYPES = {
   'yearly': { name: '年度会员', days: 365, type: 'premium' }
 };
 
+export const APPLE_IAP_PRODUCTS = {
+  'com.ombhrum.fabushi.membership.monthly': {
+    name: '月度会员',
+    duration: 30 * 24 * 60 * 60 * 1000,
+    price: '21.00',
+    plan: 'monthly'
+  },
+  'com.ombhrum.fabushi.membership.quarterly': {
+    name: '季度会员',
+    duration: 90 * 24 * 60 * 60 * 1000,
+    price: '63.00',
+    plan: 'quarterly'
+  },
+  'com.ombhrum.fabushi.membership.yearly': {
+    name: '年度会员',
+    duration: 365 * 24 * 60 * 60 * 1000,
+    price: '252.00',
+    plan: 'yearly'
+  }
+};
+
 export const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
