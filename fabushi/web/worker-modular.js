@@ -82,6 +82,31 @@ export default {
         return Response.redirect(new URL('/support/index.html', request.url).href, 307);
       }
 
+      // /privacy 隐私政策页面路由
+      if (url.pathname === '/privacy' || url.pathname === '/privacy/') {
+        try {
+          if (env.ASSETS) {
+            const privacyRequest = new Request(new URL('/privacy.html', request.url), request);
+            const assetResponse = await env.ASSETS.fetch(privacyRequest);
+            if (assetResponse.status === 200) {
+              const newResponse = new Response(assetResponse.body, {
+                status: 200,
+                headers: {
+                  'Content-Type': 'text/html; charset=utf-8',
+                  'Access-Control-Allow-Origin': '*',
+                  'Cache-Control': 'public, max-age=3600',
+                },
+              });
+              return newResponse;
+            }
+          }
+        } catch (e) {
+          console.error('Error serving privacy page from assets:', e);
+        }
+        // 回退：返回307重定向到静态文件
+        return Response.redirect(new URL('/privacy.html', request.url).href, 307);
+      }
+
       // 静态文件服务
       if (env.ASSETS) {
         const url = new URL(request.url);
