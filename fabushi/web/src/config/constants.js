@@ -36,19 +36,19 @@ export const REDEEM_CODE_TYPES = {
 };
 
 export const APPLE_IAP_PRODUCTS = {
-  'com.ombhrum.fabushi.membership.monthly': {
+  'monthly': {
     name: '月度会员',
     duration: 30 * 24 * 60 * 60 * 1000,
     price: '21.00',
     plan: 'monthly'
   },
-  'com.ombhrum.fabushi.membership.quarterly': {
+  'Quarterly': {
     name: '季度会员',
     duration: 90 * 24 * 60 * 60 * 1000,
     price: '63.00',
     plan: 'quarterly'
   },
-  'com.ombhrum.fabushi.membership.yearly': {
+  'Annual': {
     name: '年度会员',
     duration: 365 * 24 * 60 * 60 * 1000,
     price: '252.00',

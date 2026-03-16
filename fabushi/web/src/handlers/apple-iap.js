@@ -63,6 +63,12 @@ function bufferToBase64Url(buffer) {
 async function generateAppleJWT(env) {
   const { APPLE_ISSUER_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY, APPLE_BUNDLE_ID } = env;
 
+  console.log('🍎 generateAppleJWT: 检查环境变量...');
+  console.log(`  APPLE_ISSUER_ID: ${APPLE_ISSUER_ID ? APPLE_ISSUER_ID.substring(0, 8) + '...' : '❌ 未设置'}`);
+  console.log(`  APPLE_KEY_ID: ${APPLE_KEY_ID ? APPLE_KEY_ID : '❌ 未设置'}`);
+  console.log(`  APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY ? `已设置 (长度: ${APPLE_PRIVATE_KEY.length})` : '❌ 未设置'}`);
+  console.log(`  APPLE_BUNDLE_ID: ${APPLE_BUNDLE_ID ? APPLE_BUNDLE_ID : '❌ 未设置'}`);
+
   if (!APPLE_ISSUER_ID || !APPLE_KEY_ID || !APPLE_PRIVATE_KEY || !APPLE_BUNDLE_ID) {
     throw new Error('Missing Apple IAP configuration in environment variables');
   }
@@ -82,11 +88,14 @@ async function generateAppleJWT(env) {
     bid: APPLE_BUNDLE_ID
   };
 
+  console.log('🍎 generateAppleJWT: JWT payload =', JSON.stringify(payload));
+
   const encodedHeader = bufferToBase64Url(new TextEncoder().encode(JSON.stringify(header)));
   const encodedPayload = bufferToBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
   const dataToSign = `${encodedHeader}.${encodedPayload}`;
 
   const privateKey = await importPrivateKey(APPLE_PRIVATE_KEY);
+  console.log('🍎 generateAppleJWT: 私钥导入成功');
   
   const signatureBuffer = await crypto.subtle.sign(
     { name: 'ECDSA', hash: { name: 'SHA-256' } },
@@ -95,6 +104,7 @@ async function generateAppleJWT(env) {
   );
 
   const signature = bufferToBase64Url(signatureBuffer);
+  console.log('🍎 generateAppleJWT: JWT 签名生成成功');
 
   return `${dataToSign}.${signature}`;
 }
@@ -128,9 +138,9 @@ function decodeAppStoreJWS(jwsToken) {
  * 请求 App Store Server API 获取交易信息
  */
 async function fetchTransactionInfo(transactionId, env) {
+  console.log(`🍎 fetchTransactionInfo: 开始验证交易 ${transactionId}`);
   const jwt = await generateAppleJWT(env);
   
-  // 按照苹果的建议，首先尝试 Production (除非你知道是 Sandbox 凭据)
   const prodUrl = `https://api.storekit.apple.com/inApps/v1/transactions/${transactionId}`;
   const sandboxUrl = `https://api.storekit-sandbox.itunes.apple.com/inApps/v1/transactions/${transactionId}`;
   
@@ -139,27 +149,35 @@ async function fetchTransactionInfo(transactionId, env) {
     'Accept': 'application/json'
   };
 
-  let response = await fetch(prodUrl, { method: 'GET', headers });
+  // 先尝试 Sandbox（Apple Production API 对 Sandbox 交易返回 401 而非 404，无法通过状态码区分）
+  // 如果 Sandbox 找不到（404），再尝试 Production
+  console.log(`🍎 fetchTransactionInfo: 先尝试 Sandbox URL: ${sandboxUrl}`);
+  let response = await fetch(sandboxUrl, { method: 'GET', headers });
+  console.log(`🍎 fetchTransactionInfo: Sandbox 响应状态: ${response.status}`);
   
-  // 如果 Production 返回 404 (TransactionNotFound)，则可能是 Sandbox 凭据
   if (response.status === 404) {
-    console.log(`Transaction ${transactionId} not found in Production, trying Sandbox...`);
-    response = await fetch(sandboxUrl, { method: 'GET', headers });
+    // Sandbox 没有这条交易，尝试 Production
+    console.log(`🍎 fetchTransactionInfo: Sandbox 未找到，尝试 Production: ${prodUrl}`);
+    response = await fetch(prodUrl, { method: 'GET', headers });
+    console.log(`🍎 fetchTransactionInfo: Production 响应状态: ${response.status}`);
   }
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error(`App Store Server API error: ${response.status} - ${errorBody}`);
+    console.error(`🍎 App Store Server API error: ${response.status} - ${errorBody}`);
+    console.error(`🍎 提示: 401 通常意味着 APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_PRIVATE_KEY 不正确，或密钥不是 App Store Server API 密钥`);
     throw new Error(`Apple API rejected the request with status ${response.status}`);
   }
 
   const responseData = await response.json();
+  console.log(`🍎 fetchTransactionInfo: 成功获取交易数据`);
   if (!responseData.signedTransactionInfo) {
     throw new Error('Missing signedTransactionInfo in Apple API response');
   }
 
   // 解码 JWS 获取详细的 transaction 数据
   const transactionInfo = decodeAppStoreJWS(responseData.signedTransactionInfo);
+  console.log(`🍎 fetchTransactionInfo: 交易详情 - productId: ${transactionInfo.productId}, bundleId: ${transactionInfo.bundleId}`);
   return transactionInfo;
 }
 
@@ -183,6 +201,7 @@ export async function handleVerifyAppleReceipt(request, env, db) {
   // 2. 解析请求参数
   const requestData = await request.json();
   const { transactionId, productId } = requestData;
+  console.log(`🍎 handleVerifyAppleReceipt: transactionId=${transactionId}, productId=${productId}, user=${tokenData.username}`);
 
   if (!transactionId || !productId) {
     return jsonResponse({ error: '参数不完整 (transactionId / productId required)' }, 400);
@@ -245,27 +264,34 @@ export async function handleVerifyAppleReceipt(request, env, db) {
     const now = new Date();
     let startDate = now;
     
+    // 检测是否为 Sandbox 环境（Sandbox transactionId 以 2000000 开头）
+    const isSandbox = transactionInfo.environment === 'Sandbox' || transactionId.startsWith('2000000') || transactionId.startsWith('2000001');
+    console.log(`🍎 环境检测: ${isSandbox ? 'Sandbox' : 'Production'}, transactionId=${transactionId}`);
+    
     // 如果用户已有剩余付费会员，则从原有到期日叠加时间
-    if (user.membership_type === 'paid' && user.membership_expires_at) {
-        const currentExp = new Date(user.membership_expires_at);
-        if (currentExp > now) {
-            startDate = currentExp;
-        }
+    const currentExp = (user.membership_type === 'paid' && user.membership_expires_at) 
+        ? new Date(user.membership_expires_at) : null;
+    
+    if (currentExp && currentExp > now) {
+        startDate = currentExp;
+        console.log(`🍎 用户已有会员到期日: ${currentExp.toISOString()}，从此日期开始叠加`);
     }
     
-    // V2 响应中如果有 expiresDate，那是真实的结束时间。
-    // 如果没有，这只是普通内购，我们自己算结束时间。
-    let endDate;
-    if (transactionInfo.expiresDate) {
-        endDate = new Date(transactionInfo.expiresDate);
-    } else {
-        // 如果我们用买断型的非消耗品模式来充值会员：
-        endDate = new Date(startDate.getTime() + planInfo.duration);
-    }
+    // 始终使用 planInfo.duration 来计算会员时长（从 startDate 叠加）
+    // 不使用 Apple 的 expiresDate，因为 Sandbox 环境的订阅时间极短（月=5分钟），
+    // 会覆盖用户已有的长期会员
+    const endDate = new Date(startDate.getTime() + planInfo.duration);
+    console.log(`🍎 会员计算: startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, plan=${plan}`);
     
-    // 确保我们不落后于 Apple 这个交易记录里写的时间
-    if (endDate < now) {
-        return jsonResponse({ error: '该订阅凭据已过期失效' }, 403);
+    // 安全检查：endDate 绝不能比用户当前的到期日更早（保护用户权益）
+    if (currentExp && endDate < currentExp) {
+        console.warn(`🍎 ⚠️ 计算的 endDate(${endDate.toISOString()}) < 当前到期日(${currentExp.toISOString()})，跳过更新`);
+        return jsonResponse({
+            success: true,
+            message: '交易验证成功（会员时间未变更，当前会员时长更长）',
+            membershipType: 'paid',
+            expiresAt: currentExp.toISOString()
+        });
     }
 
     // 更新用户表

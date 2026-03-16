@@ -110,7 +110,7 @@ export class DatabaseService {
   // 购买记录
   async addPurchaseHistory(data) {
     await this.db.prepare(`
-      INSERT INTO purchase_history (username, order_id, plan, amount, currency, status, payment_method, purchased_at, valid_from, valid_to)
+      INSERT INTO purchase_history (user_id, order_id, plan, amount, currency, status, payment_method, purchased_at, valid_from, valid_to)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       data.username, data.orderId, data.plan, data.amount, data.currency,
