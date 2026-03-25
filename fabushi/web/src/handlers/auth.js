@@ -265,3 +265,155 @@ export async function handleFirebasePhoneLogin(request, env, db) {
     return jsonResponse({ error: 'Firebase手机登录失败: ' + error.message }, 500);
   }
 }
+
+// Apple登录/注册
+export async function handleAppleLogin(request, env, db) {
+  try {
+    const { identityToken, authorizationCode, email, givenName, familyName } = await request.json();
+
+    if (!identityToken || !authorizationCode) {
+      return jsonResponse({ error: '缺少必要参数 (identityToken, authorizationCode)' }, 400);
+    }
+
+    // 解码 Apple identityToken (JWT) 获取 sub (Apple User ID)
+    // Apple identityToken 是一个标准 JWT，其 payload 包含 sub 字段
+    let appleUserId;
+    let appleEmail;
+    try {
+      const parts = identityToken.split('.');
+      if (parts.length !== 3) {
+        return jsonResponse({ error: 'identityToken 格式错误' }, 400);
+      }
+      // Base64URL decode payload
+      const payloadB64 = parts[1];
+      const base64 = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = base64.length % 4 === 2 ? '==' : base64.length % 4 === 3 ? '=' : '';
+      const payloadStr = atob(base64 + pad);
+      const payload = JSON.parse(payloadStr);
+
+      appleUserId = payload.sub; // Apple User ID (唯一且稳定)
+      appleEmail = payload.email || email; // Apple可能在token中提供email
+
+      if (!appleUserId) {
+        return jsonResponse({ error: 'identityToken 中缺少 sub 字段' }, 400);
+      }
+
+      // 检查 token 是否过期
+      const now = Math.floor(Date.now() / 1000);
+      if (payload.exp && payload.exp < now) {
+        return jsonResponse({ error: 'identityToken 已过期' }, 401);
+      }
+
+      console.log(`🍎 Apple登录: sub=${appleUserId}, email=${appleEmail}`);
+    } catch (e) {
+      console.error('解析 Apple identityToken 失败:', e);
+      return jsonResponse({ error: '解析 identityToken 失败: ' + e.message }, 400);
+    }
+
+    // 查找已有用户
+    let user = await db.getUserByAppleId(appleUserId);
+
+    let token;
+    let username;
+
+    if (user) {
+      // 已存在用户，直接登录
+      username = user.username;
+      token = await generateToken(username, env);
+
+      // 如果用户提供了新的 email/name 且之前没有，则更新
+      const updates = {};
+      if (appleEmail && !user.email) {
+        updates.email = appleEmail;
+      }
+      if ((givenName || familyName) && !user.nickname) {
+        const fullName = [givenName, familyName].filter(Boolean).join(' ');
+        if (fullName) updates.nickname = fullName;
+      }
+      if (Object.keys(updates).length > 0) {
+        updates.updated_at = new Date().toISOString();
+        await db.updateUser(username, updates);
+      }
+
+      return jsonResponse({
+        success: true,
+        token,
+        username,
+        isNewUser: false,
+        user: {
+          username: user.username,
+          email: user.email || appleEmail || '',
+          membership: {
+            type: user.membership_type || 'trial',
+            expiresAt: user.membership_expires_at
+          }
+        }
+      });
+    } else {
+      // 新用户注册
+      username = `apple_${Date.now().toString(36)}`;
+      const userEmail = appleEmail || `${appleUserId.substring(0, 16)}@apple.user`;
+      const fullName = [givenName, familyName].filter(Boolean).join(' ');
+      const trialEndDate = calculateTrialEndDate();
+
+      // 先检查 email 是否已存在（用户可能通过其他方式注册过）
+      const existingEmailUser = await db.db.prepare('SELECT * FROM users WHERE email = ?').bind(userEmail).first();
+
+      if (existingEmailUser) {
+        // email 已存在，将 Apple ID 关联到现有账号
+        username = existingEmailUser.username;
+        const updates = { apple_user_id: appleUserId, updated_at: new Date().toISOString() };
+        if (fullName && !existingEmailUser.nickname) updates.nickname = fullName;
+        await db.updateUser(username, updates);
+
+        token = await generateToken(username, env);
+
+        return jsonResponse({
+          success: true,
+          token,
+          username,
+          isNewUser: false,
+          user: {
+            username: existingEmailUser.username,
+            email: existingEmailUser.email,
+            membership: {
+              type: existingEmailUser.membership_type || 'trial',
+              expiresAt: existingEmailUser.membership_expires_at
+            }
+          }
+        });
+      }
+
+      // 创建 Apple 用户 (无密码)
+      await db.createAppleUser({
+        username,
+        email: userEmail,
+        appleUserId,
+        nickname: fullName || null,
+        membershipType: 'trial',
+        membershipExpiresAt: trialEndDate.toISOString(),
+        createdAt: new Date().toISOString()
+      });
+
+      token = await generateToken(username, env);
+
+      return jsonResponse({
+        success: true,
+        token,
+        username,
+        isNewUser: true,
+        user: {
+          username,
+          email: userEmail,
+          membership: {
+            type: 'trial',
+            expiresAt: trialEndDate.toISOString()
+          }
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Apple登录失败:', error);
+    return jsonResponse({ error: 'Apple登录失败: ' + error.message }, 500);
+  }
+}

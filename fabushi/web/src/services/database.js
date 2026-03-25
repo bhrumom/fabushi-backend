@@ -66,6 +66,22 @@ export class DatabaseService {
     ).run();
   }
 
+  // 根据 Apple User ID 查询用户
+  async getUserByAppleId(appleUserId) {
+    return await this.db.prepare('SELECT * FROM users WHERE apple_user_id = ?').bind(appleUserId).first();
+  }
+
+  // 创建 Apple 用户 (无密码)
+  async createAppleUser(userData) {
+    await this.db.prepare(`
+      INSERT INTO users (username, email, apple_user_id, nickname, password_hash, salt, iterations, algo, email_verified, membership_type, membership_expires_at, created_at)
+      VALUES (?, ?, ?, ?, '', '', 0, '', 1, ?, ?, ?)
+    `).bind(
+      userData.username, userData.email, userData.appleUserId, userData.nickname,
+      userData.membershipType, userData.membershipExpiresAt, userData.createdAt
+    ).run();
+  }
+
   // 订单操作
   async createOrder(orderData) {
     await this.db.prepare(`
