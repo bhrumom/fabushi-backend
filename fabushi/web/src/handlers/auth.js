@@ -417,3 +417,35 @@ export async function handleAppleLogin(request, env, db) {
     return jsonResponse({ error: 'Apple登录失败: ' + error.message }, 500);
   }
 }
+
+// 注销账户
+export async function handleDeleteAccount(request, env, db) {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return jsonResponse({ error: '未提供认证信息' }, 401);
+    }
+
+    const token = authHeader.substring(7);
+    const tokenData = await verifyToken(token, env);
+    if (!tokenData) {
+      return jsonResponse({ error: '认证失效，请重新登录' }, 401);
+    }
+
+    const user = await db.getUser(tokenData.username);
+    if (!user) {
+      return jsonResponse({ error: '用户不存在' }, 404);
+    }
+
+    if (db.deleteUser) {
+      await db.deleteUser(tokenData.username);
+    } else {
+      await db.prepare('DELETE FROM users WHERE username = ?').bind(tokenData.username).run();
+    }
+
+    return jsonResponse({ success: true, message: '账户已注销' }, 200);
+  } catch (error) {
+    console.error('注销账户失败:', error);
+    return jsonResponse({ error: '服务器错误: ' + error.message }, 500);
+  }
+}

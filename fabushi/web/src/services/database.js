@@ -45,6 +45,18 @@ export class DatabaseService {
     await this.db.prepare(`UPDATE users SET ${fields}, updated_at = ? WHERE username = ?`).bind(...values, new Date().toISOString(), username).run();
   }
 
+  async deleteUser(username) {
+    const user = await this.getUser(username);
+    if (!user) return;
+    
+    if (user.email) {
+      await this.db.prepare('DELETE FROM email_username_mapping WHERE email = ?').bind(user.email).run();
+    }
+    // TODO: 如果有其他的绑定表（如第三方登录绑定），也建议在此处级联删除
+    // 例如苹果、支付宝相关的映射数据。目前以删除主表为主。
+    await this.db.prepare('DELETE FROM users WHERE username = ?').bind(username).run();
+  }
+
   // 根据手机号查询用户
   async getUserByPhone(phoneNumber) {
     return await this.db.prepare('SELECT * FROM users WHERE phone_number = ?').bind(phoneNumber).first();

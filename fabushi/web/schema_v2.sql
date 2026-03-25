@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS users (
   phone_number TEXT UNIQUE,
   firebase_uid TEXT UNIQUE,
   
+  apple_user_id TEXT UNIQUE,
+  
   -- 用户资料
   nickname TEXT,
   avatar TEXT,
@@ -93,6 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_users_alipay_user_id ON users(alipay_user_id);
 CREATE INDEX IF NOT EXISTS idx_users_wechat_openid ON users(wechat_openid);
 CREATE INDEX IF NOT EXISTS idx_users_phone_number ON users(phone_number);
 CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid);
+CREATE INDEX IF NOT EXISTS idx_users_apple_user_id ON users(apple_user_id);
 CREATE INDEX IF NOT EXISTS idx_users_sync_version ON users(sync_version);
 
 -- 邮箱用户名映射（快速查找）
