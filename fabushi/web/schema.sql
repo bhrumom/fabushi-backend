@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS users (
   last_transfer_at TEXT,
   nickname TEXT,
   avatar TEXT,
+  main_practice_title TEXT,
+  main_practice_file_path TEXT,
+  main_practice_selected_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT
 );

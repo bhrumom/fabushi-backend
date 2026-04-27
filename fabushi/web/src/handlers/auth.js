@@ -111,6 +111,11 @@ export async function handleGetUserInfo(request, env, db) {
     email: user.email,
     nickname: user.nickname,
     avatar: user.avatar,
+    mainPractice: user.main_practice_title ? {
+      title: user.main_practice_title,
+      filePath: user.main_practice_file_path,
+      selectedAt: user.main_practice_selected_at
+    } : null,
     createdAt: user.created_at,
     emailVerified: user.email_verified === 1,
     membership: {
@@ -134,7 +139,7 @@ export async function handleUpdateProfile(request, env, db) {
       return jsonResponse({ error: '认证失败' }, 401);
     }
 
-    const { nickname, avatar } = await request.json();
+    const { nickname, avatar, mainPractice, mainPracticeTitle, mainPracticeFilePath } = await request.json();
 
     // 构建更新语句
     const updates = [];
@@ -148,6 +153,19 @@ export async function handleUpdateProfile(request, env, db) {
     if (avatar !== undefined) {
       updates.push('avatar = ?');
       values.push(avatar);
+    }
+
+    const practiceTitle = mainPractice?.title ?? mainPracticeTitle;
+    const practiceFilePath = mainPractice?.filePath ?? mainPracticeFilePath;
+    const practiceSelectedAt = mainPractice?.selectedAt ?? new Date().toISOString();
+
+    if (practiceTitle !== undefined) {
+      updates.push('main_practice_title = ?');
+      values.push(practiceTitle);
+      updates.push('main_practice_file_path = ?');
+      values.push(practiceFilePath ?? null);
+      updates.push('main_practice_selected_at = ?');
+      values.push(practiceTitle ? practiceSelectedAt : null);
     }
 
     if (updates.length === 0) {

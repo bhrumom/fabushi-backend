@@ -34,6 +34,11 @@ export async function handleCheckAdminStatus(request, env, db) {
     username: user.username,
     nickname: user.nickname || null,
     avatar: user.avatar || null,
+    mainPractice: user.main_practice_title ? {
+      title: user.main_practice_title,
+      filePath: user.main_practice_file_path,
+      selectedAt: user.main_practice_selected_at
+    } : null,
     membershipType: user.membership_type || 'expired',
     membershipExpiresAt: user.membership_expires_at
   });

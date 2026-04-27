@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS users (
   nickname TEXT,
   avatar TEXT,
   bio TEXT,
+  main_practice_title TEXT,
+  main_practice_file_path TEXT,
+  main_practice_selected_at TEXT,
   
   -- 会员信息
   membership_type TEXT DEFAULT 'expired',  -- 'trial', 'paid', 'expired'
