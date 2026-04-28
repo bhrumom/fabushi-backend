@@ -1,8 +1,51 @@
 import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
 
-// 获取排行榜
+// 获取全球布施数据量排行榜
 export async function handleGetLeaderboard(request, env, db) {
+  try {
+    const url = new URL(request.url);
+    const requestedLimit = parseInt(url.searchParams.get('limit') || '100');
+    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 100;
+
+    // 尝试从缓存获取
+    try {
+      const cached = await env.USERS_KV.get('leaderboard:cache');
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp < 5 * 60 * 1000) {
+          return jsonResponse({ leaderboard: data.slice(0, limit), cached: true, type: 'global' });
+        }
+      }
+    } catch (cacheError) {
+      console.error('缓存读取失败:', cacheError);
+    }
+
+    const leaderboard = await db.getLeaderboard(limit);
+
+    // 尝试缓存结果
+    try {
+      await env.USERS_KV.put('leaderboard:cache', JSON.stringify({
+        data: leaderboard,
+        timestamp: Date.now()
+      }), { expirationTtl: 600 });
+    } catch (cacheError) {
+      console.error('缓存写入失败:', cacheError);
+    }
+
+    return jsonResponse({ leaderboard: leaderboard || [], type: 'global' });
+  } catch (error) {
+    console.error('获取排行榜失败:', error);
+    return jsonResponse({
+      error: '获取排行榜失败',
+      message: error.message,
+      leaderboard: []
+    }, 200); // 返回200但带有错误信息和空数组
+  }
+}
+
+// 获取禅室修行排行榜
+export async function handleGetPracticeLeaderboard(request, env, db) {
   try {
     const url = new URL(request.url);
     const requestedLimit = parseInt(url.searchParams.get('limit') || '100');
@@ -76,9 +119,9 @@ export async function handleGetLeaderboard(request, env, db) {
 
     return jsonResponse({ leaderboard: leaderboard || [], type: 'practice' });
   } catch (error) {
-    console.error('获取排行榜失败:', error);
+    console.error('获取修行排行榜失败:', error);
     return jsonResponse({ 
-      error: '获取排行榜失败',
+      error: '获取修行排行榜失败',
       message: error.message,
       leaderboard: [] 
     }, 200); // 返回200但带有错误信息和空数组
