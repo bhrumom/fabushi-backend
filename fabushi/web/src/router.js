@@ -11,7 +11,7 @@ import { handleMigrateKvToD1 } from './handlers/migration.js';
 import { handleCheckAdminStatus, handleListRedeemCodes, handleDeleteRedeemCode, handleGetAdminPrice } from './handlers/admin.js';
 import { handleGetAssetsList, handleR2List, handleR2Proxy } from './handlers/assets.js';
 import { handleSearch, handleGetTextContent, handleGetCategories } from './handlers/search.js';
-import { handleGetLeaderboard, handleUpdateTransferData } from './handlers/leaderboard.js';
+import { handleGetLeaderboard, handleGetLeaderboardRecords, handleUpdateTransferData } from './handlers/leaderboard.js';
 import { handleToggleLike, handleGetLikeCount, handleBatchGetLikeCounts, handleGetMyLikes, handleGetReceivedLikeCount } from './handlers/likes.js';
 import { handleToggleFavorite, handleGetMyFavorites, handleBatchCheckFavorites } from './handlers/favorites.js';
 import { handleBatchGetContentStats } from './handlers/content-stats.js';
@@ -108,6 +108,7 @@ export async function route(request, env, db, ctx) {
 
   // 排行榜API
   if (pathname === '/api/leaderboard' && method === 'GET') return await handleGetLeaderboard(request, env, db);
+  if (pathname === '/api/leaderboard/records' && method === 'GET') return await handleGetLeaderboardRecords(request, env, db);
   if (pathname === '/api/leaderboard/update' && method === 'POST') return await handleUpdateTransferData(request, env, db);
 
   // 点赞API
@@ -163,4 +164,3 @@ export async function route(request, env, db, ctx) {
 
   return null;
 }
-

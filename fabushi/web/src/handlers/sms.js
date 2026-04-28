@@ -145,10 +145,13 @@ export async function handleSmsLogin(request, env, db) {
             user: {
                 username: user.username,
                 email: user.email,
+                nickname: user.nickname || null,
+                avatar: user.avatar || user.alipay_avatar || user.wechat_headimgurl || null,
                 phoneNumber: user.phone_number,
+                firebaseUid: user.firebase_uid || null,
                 membership: {
                     type: user.membership_type || 'trial',
-                    expiresAt: user.membership_expires_at || user.free_trial_end_date
+                    expiresAt: user.membership_expires_at || user.free_trial_end_date || null
                 }
             }
         }), { status: 200 });

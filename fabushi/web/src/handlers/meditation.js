@@ -61,7 +61,7 @@ export async function handleSyncRecord(request, env, db) {
     `).bind(auth.username, auth.username, auth.username, auth.username, auth.username).first();
         const nextVersion = versionResult?.next_version || 1;
 
-        await db.prepare(`
+        const insertResult = await db.prepare(`
       INSERT INTO meditation_records (username, sutra_name, sutra_source, duration, chant_count, record_date, is_manual, notes, created_at, sync_version)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(auth.username, sutra, sutraSource, duration, chantCount, date, isManual ? 1 : 0, notes, now, nextVersion).run();
@@ -75,7 +75,16 @@ export async function handleSyncRecord(request, env, db) {
       WHERE username = ? AND sutra_name = ? AND status = 'active'
     `).bind(chantCount, now, nextVersion + 1, auth.username, sutra).run();
 
-        return jsonResponse({ success: true, message: '修行记录已同步' });
+        await Promise.allSettled([
+            env.USERS_KV?.delete('leaderboard:cache'),
+            env.USERS_KV?.delete('leaderboard:practice:v2')
+        ]);
+
+        return jsonResponse({
+            success: true,
+            message: '修行记录已同步',
+            recordId: insertResult.meta?.last_row_id || null
+        });
     } catch (e) {
         console.error('同步修行记录失败:', e);
         return jsonResponse({ success: false, error: '同步失败: ' + e.message }, 500);

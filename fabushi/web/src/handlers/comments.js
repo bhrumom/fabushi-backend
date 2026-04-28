@@ -23,14 +23,14 @@ export async function handleGetComments(request, env, db) {
         u.username, u.nickname, u.avatar
       FROM comments c
       LEFT JOIN users u ON c.username = u.username
-      WHERE c.content_id = ?
+      WHERE c.content_id = ? AND (c.tag IS NULL OR c.tag != 'practice')
       ORDER BY c.created_at DESC
       LIMIT ? OFFSET ?
     `).bind(contentId, pageSize, offset).all();
 
         // 获取总评论数
         const totalResult = await db.db.prepare(`
-      SELECT COUNT(*) as count FROM comments WHERE content_id = ?
+      SELECT COUNT(*) as count FROM comments WHERE content_id = ? AND (tag IS NULL OR tag != 'practice')
     `).bind(contentId).first();
 
         return jsonResponse({
@@ -274,7 +274,7 @@ export async function handleGetPostDetail(request, env, db) {
         u.username, u.nickname, u.avatar
       FROM comments c
       LEFT JOIN users u ON c.username = u.username
-      WHERE c.id = ? AND c.tag IS NOT NULL
+      WHERE c.id = ? AND c.tag IS NOT NULL AND c.tag != 'practice'
     `).bind(postId).first();
 
         if (!post) {
@@ -305,7 +305,7 @@ export async function handleBatchGetCommentCounts(request, env, db) {
         const results = await db.db.prepare(`
             SELECT content_id, COUNT(*) as comment_count
             FROM comments
-            WHERE content_id IN (${placeholders})
+            WHERE content_id IN (${placeholders}) AND (tag IS NULL OR tag != 'practice')
             GROUP BY content_id
         `).bind(...limitedIds).all();
 

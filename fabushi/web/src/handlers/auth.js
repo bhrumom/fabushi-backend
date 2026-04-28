@@ -2,6 +2,31 @@ import { jsonResponse } from '../utils/response.js';
 import { createPasswordHash, verifyPassword, generateToken, verifyToken } from '../../auth-utils.js';
 import { calculateTrialEndDate } from '../../stripe-config.js';
 
+function serializeUser(user) {
+  return {
+    username: user.username,
+    email: user.email || '',
+    nickname: user.nickname || null,
+    avatar: user.avatar || user.alipay_avatar || user.wechat_headimgurl || null,
+    phoneNumber: user.phone_number || null,
+    firebaseUid: user.firebase_uid || null,
+    alipayUserId: user.alipay_user_id || null,
+    alipayNickname: user.alipay_nickname || null,
+    alipayAvatar: user.alipay_avatar || null,
+    mainPractice: user.main_practice_title ? {
+      title: user.main_practice_title,
+      filePath: user.main_practice_file_path,
+      selectedAt: user.main_practice_selected_at
+    } : null,
+    createdAt: user.created_at,
+    emailVerified: user.email_verified === 1,
+    membership: {
+      type: user.membership_type || 'expired',
+      expiresAt: user.membership_expires_at || user.free_trial_end_date || null
+    }
+  };
+}
+
 // 注册
 export async function handleRegister(request, env, db) {
   const { username, email, password, verificationCode } = await request.json();
@@ -106,23 +131,7 @@ export async function handleGetUserInfo(request, env, db) {
     return jsonResponse({ error: '用户不存在' }, 404);
   }
 
-  return jsonResponse({
-    username: user.username,
-    email: user.email,
-    nickname: user.nickname,
-    avatar: user.avatar,
-    mainPractice: user.main_practice_title ? {
-      title: user.main_practice_title,
-      filePath: user.main_practice_file_path,
-      selectedAt: user.main_practice_selected_at
-    } : null,
-    createdAt: user.created_at,
-    emailVerified: user.email_verified === 1,
-    membership: {
-      type: user.membership_type,
-      expiresAt: user.membership_expires_at
-    }
-  });
+  return jsonResponse(serializeUser(user));
 }
 
 // 更新个人资料
@@ -146,13 +155,18 @@ export async function handleUpdateProfile(request, env, db) {
     const values = [];
 
     if (nickname !== undefined) {
+      const normalizedNickname = String(nickname).trim();
+      if (!normalizedNickname) {
+        return jsonResponse({ error: '昵称不能为空' }, 400);
+      }
       updates.push('nickname = ?');
-      values.push(nickname);
+      values.push(normalizedNickname);
     }
 
     if (avatar !== undefined) {
       updates.push('avatar = ?');
-      values.push(avatar);
+      const normalizedAvatar = avatar == null ? null : String(avatar).trim();
+      values.push(normalizedAvatar || null);
     }
 
     const practiceTitle = mainPractice?.title ?? mainPracticeTitle;
@@ -185,7 +199,11 @@ export async function handleUpdateProfile(request, env, db) {
       WHERE username = ?
     `).bind(...values).run();
 
-    return jsonResponse({ message: '个人资料更新成功' });
+    const updatedUser = await db.getUser(tokenData.username);
+    return jsonResponse({
+      message: '个人资料更新成功',
+      user: updatedUser ? serializeUser(updatedUser) : null
+    });
   } catch (error) {
     console.error('更新个人资料失败:', error);
     return jsonResponse({ error: '更新个人资料失败' }, 500);
@@ -218,11 +236,12 @@ export async function handleFirebasePhoneLogin(request, env, db) {
 
     if (user) {
       // 已存在用户，更新firebase信息并登录
-      if (!user.firebase_uid) {
+      if (user.firebase_uid !== firebaseUid || user.phone_number !== phoneNumber) {
         await db.prepare(`
           UPDATE users SET firebase_uid = ?, phone_number = ?, updated_at = ?
           WHERE username = ?
         `).bind(firebaseUid, phoneNumber, new Date().toISOString(), user.username).run();
+        user = await db.getUser(user.username);
       }
 
       username = user.username;
@@ -233,15 +252,7 @@ export async function handleFirebasePhoneLogin(request, env, db) {
         token,
         username,
         isNewUser: false,
-        user: {
-          username: user.username,
-          email: user.email || '',
-          phoneNumber: phoneNumber,
-          membership: {
-            type: user.membership_type || 'trial',
-            expiresAt: user.membership_expires_at
-          }
-        }
+        user: serializeUser(user)
       });
     } else {
       // 新用户注册
@@ -262,19 +273,18 @@ export async function handleFirebasePhoneLogin(request, env, db) {
 
       token = await generateToken(username, env);
 
+      const createdUser = await db.getUser(username);
+
       return jsonResponse({
         success: true,
         token,
         username,
         isNewUser: true,
-        user: {
+        user: createdUser ? serializeUser(createdUser) : {
           username,
           email,
           phoneNumber,
-          membership: {
-            type: 'trial',
-            expiresAt: trialEndDate.toISOString()
-          }
+          membership: { type: 'trial', expiresAt: trialEndDate.toISOString() }
         }
       });
     }

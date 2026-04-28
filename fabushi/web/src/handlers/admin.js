@@ -33,14 +33,19 @@ export async function handleCheckAdminStatus(request, env, db) {
     email: user.email,
     username: user.username,
     nickname: user.nickname || null,
-    avatar: user.avatar || null,
+    avatar: user.avatar || user.alipay_avatar || user.wechat_headimgurl || null,
+    phoneNumber: user.phone_number || null,
+    firebaseUid: user.firebase_uid || null,
+    alipayUserId: user.alipay_user_id || null,
+    alipayNickname: user.alipay_nickname || null,
+    alipayAvatar: user.alipay_avatar || null,
     mainPractice: user.main_practice_title ? {
       title: user.main_practice_title,
       filePath: user.main_practice_file_path,
       selectedAt: user.main_practice_selected_at
     } : null,
     membershipType: user.membership_type || 'expired',
-    membershipExpiresAt: user.membership_expires_at
+    membershipExpiresAt: user.membership_expires_at || user.free_trial_end_date || null
   });
 }
 
