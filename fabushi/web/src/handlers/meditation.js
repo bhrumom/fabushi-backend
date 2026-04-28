@@ -46,19 +46,34 @@ export async function handleSyncRecord(request, env, db) {
 
         const now = new Date().toISOString();
         const date = recordDate || now.split('T')[0];
+        const versionResult = await db.prepare(`
+      SELECT COALESCE(MAX(sync_version), 0) + 1 as next_version FROM (
+        SELECT MAX(sync_version) as sync_version FROM content_likes WHERE username = ?
+        UNION ALL
+        SELECT MAX(sync_version) as sync_version FROM comments WHERE username = ?
+        UNION ALL
+        SELECT MAX(sync_version) as sync_version FROM meditation_records WHERE username = ?
+        UNION ALL
+        SELECT MAX(sync_version) as sync_version FROM meditation_goals WHERE username = ?
+        UNION ALL
+        SELECT MAX(sync_version) as sync_version FROM user_follows WHERE follower_username = ?
+      )
+    `).bind(auth.username, auth.username, auth.username, auth.username, auth.username).first();
+        const nextVersion = versionResult?.next_version || 1;
 
         await db.prepare(`
-      INSERT INTO meditation_records (username, sutra_name, sutra_source, duration, chant_count, record_date, is_manual, notes, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(auth.username, sutra, sutraSource, duration, chantCount, date, isManual ? 1 : 0, notes, now).run();
+      INSERT INTO meditation_records (username, sutra_name, sutra_source, duration, chant_count, record_date, is_manual, notes, created_at, sync_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(auth.username, sutra, sutraSource, duration, chantCount, date, isManual ? 1 : 0, notes, now, nextVersion).run();
 
         // 更新发愿目标进度
         await db.prepare(`
       UPDATE meditation_goals
       SET current_count = current_count + ?,
-          updated_at = ?
+          updated_at = ?,
+          sync_version = ?
       WHERE username = ? AND sutra_name = ? AND status = 'active'
-    `).bind(chantCount, now, auth.username, sutra).run();
+    `).bind(chantCount, now, nextVersion + 1, auth.username, sutra).run();
 
         return jsonResponse({ success: true, message: '修行记录已同步' });
     } catch (e) {
@@ -76,8 +91,10 @@ export async function handleGetRecords(request, env, db) {
 
     try {
         const url = new URL(request.url);
-        const limit = parseInt(url.searchParams.get('limit') || '50');
-        const offset = parseInt(url.searchParams.get('offset') || '0');
+        const requestedLimit = parseInt(url.searchParams.get('limit') || '50');
+        const requestedOffset = parseInt(url.searchParams.get('offset') || '0');
+        const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 50;
+        const offset = Number.isFinite(requestedOffset) ? Math.max(requestedOffset, 0) : 0;
         const sutra = url.searchParams.get('sutra');
 
         let query = `
@@ -92,16 +109,30 @@ export async function handleGetRecords(request, env, db) {
             params.push(sutra);
         }
 
+        let countQuery = `
+      SELECT COUNT(*) as total
+      FROM meditation_records
+      WHERE username = ?
+    `;
+        const countParams = [auth.username];
+        if (sutra) {
+            countQuery += ` AND sutra_name = ?`;
+            countParams.push(sutra);
+        }
+
         query += ` ORDER BY record_date DESC, created_at DESC LIMIT ? OFFSET ?`;
         params.push(limit, offset);
 
-        const result = await db.prepare(query).bind(...params).all();
+        const [result, totalResult] = await Promise.all([
+            db.prepare(query).bind(...params).all(),
+            db.prepare(countQuery).bind(...countParams).first()
+        ]);
 
         return jsonResponse({
             success: true,
             data: {
                 records: result.results || [],
-                total: result.results?.length || 0
+                total: totalResult?.total || 0
             }
         });
     } catch (e) {
