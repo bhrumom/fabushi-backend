@@ -48,7 +48,9 @@ export async function handleGetSyncData(request, env, db) {
 
             // 修行记录
             db.prepare(`
-                SELECT id, sutra_name, sutra_source, duration, chant_count, record_date, is_manual, notes, created_at, sync_version
+                SELECT id, sutra_name, sutra_source, duration, chant_count, record_date,
+                       local_time, timezone_offset_minutes, start_time, end_time,
+                       is_manual, notes, created_at, sync_version
                 FROM meditation_records 
                 WHERE username = ? AND sync_version > ?
                 ORDER BY sync_version ASC
@@ -227,9 +229,28 @@ async function handleInsert(db, username, table, data, now) {
 
         case 'meditation_records':
             await db.prepare(`
-                INSERT INTO meditation_records (username, sutra_name, sutra_source, duration, chant_count, record_date, is_manual, notes, created_at, sync_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).bind(username, data.sutra_name, data.sutra_source || 'custom', data.duration || 0, data.chant_count || 0, data.record_date, data.is_manual || 0, data.notes, now, nextVersion).run();
+                INSERT INTO meditation_records (
+                    username, sutra_name, sutra_source, duration, chant_count, record_date,
+                    local_time, timezone_offset_minutes, start_time, end_time,
+                    is_manual, notes, created_at, sync_version
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+                username,
+                data.sutra_name,
+                data.sutra_source || 'custom',
+                data.duration || 0,
+                data.chant_count || 0,
+                data.record_date,
+                data.local_time || data.localTime || null,
+                data.timezone_offset_minutes || data.timezoneOffsetMinutes || null,
+                data.start_time || data.startTime || null,
+                data.end_time || data.endTime || null,
+                data.is_manual || 0,
+                data.notes,
+                now,
+                nextVersion
+            ).run();
             break;
 
         case 'meditation_goals':
@@ -281,9 +302,18 @@ async function handleUpdate(db, username, table, data, clientVersion) {
         case 'meditation_records':
             await db.prepare(`
                 UPDATE meditation_records 
-                SET duration = ?, chant_count = ?, notes = ?, sync_version = ?
+                SET duration = ?, chant_count = ?, local_time = ?, timezone_offset_minutes = ?, notes = ?, sync_version = ?
                 WHERE id = ? AND username = ?
-            `).bind(data.duration, data.chant_count, data.notes, nextVersion, data.id, username).run();
+            `).bind(
+                data.duration,
+                data.chant_count,
+                data.local_time || data.localTime || null,
+                data.timezone_offset_minutes || data.timezoneOffsetMinutes || null,
+                data.notes,
+                nextVersion,
+                data.id,
+                username
+            ).run();
             break;
     }
 

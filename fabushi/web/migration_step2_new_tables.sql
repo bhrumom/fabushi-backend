@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS meditation_records (
   duration INTEGER DEFAULT 0,
   chant_count INTEGER DEFAULT 0,
   record_date TEXT NOT NULL,
+  local_time TEXT,
+  timezone_offset_minutes INTEGER,
+  start_time TEXT,
+  end_time TEXT,
   is_manual INTEGER DEFAULT 0,
   notes TEXT,
   sync_version INTEGER DEFAULT 1,
@@ -101,6 +105,40 @@ CREATE TABLE IF NOT EXISTS meditation_settings (
 
 CREATE INDEX IF NOT EXISTS idx_meditation_records_username ON meditation_records(username);
 CREATE INDEX IF NOT EXISTS idx_meditation_goals_username ON meditation_goals(username);
+
+CREATE TABLE IF NOT EXISTS meditation_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  owner_username TEXT NOT NULL,
+  require_approval INTEGER DEFAULT 0,
+  daily_goal_minutes INTEGER DEFAULT 30,
+  cumulative_miss_limit INTEGER DEFAULT 7,
+  consecutive_miss_limit INTEGER DEFAULT 3,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS meditation_group_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  role TEXT DEFAULT 'member',
+  status TEXT DEFAULT 'pending',
+  joined_at TEXT,
+  updated_at TEXT,
+  cumulative_missed_days INTEGER DEFAULT 0,
+  consecutive_missed_days INTEGER DEFAULT 0,
+  warning_message TEXT,
+  removed_at TEXT,
+  removal_reason TEXT,
+  UNIQUE(group_id, username)
+);
+
+CREATE INDEX IF NOT EXISTS idx_meditation_groups_owner ON meditation_groups(owner_username);
+CREATE INDEX IF NOT EXISTS idx_meditation_group_members_group ON meditation_group_members(group_id);
+CREATE INDEX IF NOT EXISTS idx_meditation_group_members_username ON meditation_group_members(username);
+CREATE INDEX IF NOT EXISTS idx_meditation_group_members_status ON meditation_group_members(status);
 
 -- =============================================================================
 -- 数据迁移：复制 user_id 到 username 列

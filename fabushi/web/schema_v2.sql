@@ -13,6 +13,8 @@
 -- DROP TABLE IF EXISTS sync_log;
 -- DROP TABLE IF EXISTS notifications;
 -- DROP TABLE IF EXISTS user_follows;
+-- DROP TABLE IF EXISTS meditation_group_members;
+-- DROP TABLE IF EXISTS meditation_groups;
 -- DROP TABLE IF EXISTS meditation_settings;
 -- DROP TABLE IF EXISTS meditation_goals;
 -- DROP TABLE IF EXISTS meditation_records;
@@ -304,6 +306,10 @@ CREATE TABLE IF NOT EXISTS meditation_records (
   duration INTEGER DEFAULT 0,  -- 分钟
   chant_count INTEGER DEFAULT 0,  -- 遍数
   record_date TEXT NOT NULL,  -- YYYY-MM-DD
+  local_time TEXT,  -- HH:mm，本地时分
+  timezone_offset_minutes INTEGER,  -- 本地时区偏移（分钟）
+  start_time TEXT,
+  end_time TEXT,
   is_manual INTEGER DEFAULT 0,  -- 0-实时, 1-补录
   notes TEXT,
   
@@ -342,6 +348,46 @@ CREATE TABLE IF NOT EXISTS meditation_goals (
 CREATE INDEX IF NOT EXISTS idx_meditation_goals_username ON meditation_goals(username);
 CREATE INDEX IF NOT EXISTS idx_meditation_goals_status ON meditation_goals(status);
 CREATE INDEX IF NOT EXISTS idx_meditation_goals_sync_version ON meditation_goals(sync_version);
+
+-- 共修小组
+CREATE TABLE IF NOT EXISTS meditation_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  owner_username TEXT NOT NULL,
+  require_approval INTEGER DEFAULT 0,
+  daily_goal_minutes INTEGER DEFAULT 30,
+  cumulative_miss_limit INTEGER DEFAULT 7,
+  consecutive_miss_limit INTEGER DEFAULT 3,
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_meditation_groups_owner ON meditation_groups(owner_username);
+CREATE INDEX IF NOT EXISTS idx_meditation_groups_name ON meditation_groups(name);
+
+CREATE TABLE IF NOT EXISTS meditation_group_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  role TEXT DEFAULT 'member',  -- 'owner', 'member'
+  status TEXT DEFAULT 'pending',  -- 'pending', 'active', 'removed', 'rejected'
+  joined_at TEXT,
+  updated_at TEXT,
+  cumulative_missed_days INTEGER DEFAULT 0,
+  consecutive_missed_days INTEGER DEFAULT 0,
+  warning_message TEXT,
+  removed_at TEXT,
+  removal_reason TEXT,
+  UNIQUE(group_id, username),
+  FOREIGN KEY (group_id) REFERENCES meditation_groups(id) ON DELETE CASCADE,
+  FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_meditation_group_members_group ON meditation_group_members(group_id);
+CREATE INDEX IF NOT EXISTS idx_meditation_group_members_username ON meditation_group_members(username);
+CREATE INDEX IF NOT EXISTS idx_meditation_group_members_status ON meditation_group_members(status);
 
 -- 修行设置表
 CREATE TABLE IF NOT EXISTS meditation_settings (

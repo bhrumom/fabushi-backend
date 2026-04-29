@@ -29,6 +29,183 @@ async function authenticateUser(request, db) {
     }
 }
 
+function asInt(value, fallback = 0) {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatDate(date) {
+    return date.toISOString().split('T')[0];
+}
+
+function parseLocalTime(value, fallbackDate = new Date()) {
+    if (typeof value === 'string' && /^\d{2}:\d{2}$/.test(value)) {
+        return value;
+    }
+
+    const hour = String(fallbackDate.getHours()).padStart(2, '0');
+    const minute = String(fallbackDate.getMinutes()).padStart(2, '0');
+    return `${hour}:${minute}`;
+}
+
+function addDays(date, days) {
+    const next = new Date(date);
+    next.setDate(next.getDate() + days);
+    return next;
+}
+
+function daysBetween(startDate, endDate) {
+    const start = new Date(`${startDate}T00:00:00Z`);
+    const end = new Date(`${endDate}T00:00:00Z`);
+    return Math.max(0, Math.floor((end - start) / 86400000) + 1);
+}
+
+async function refreshGroupsForUser(db, username) {
+    const memberships = await db.prepare(`
+      SELECT m.group_id
+      FROM meditation_group_members m
+      JOIN meditation_groups g ON g.id = m.group_id
+      WHERE m.username = ? AND m.status = 'active'
+    `).bind(username).all();
+
+    for (const membership of memberships.results || []) {
+        await evaluateGroupMembers(db, membership.group_id, username);
+    }
+}
+
+async function evaluateGroupMembers(db, groupId, onlyUsername = null) {
+    const group = await db.prepare(`
+      SELECT id, daily_goal_minutes, cumulative_miss_limit, consecutive_miss_limit
+      FROM meditation_groups
+      WHERE id = ?
+    `).bind(groupId).first();
+
+    if (!group || !group.daily_goal_minutes || group.daily_goal_minutes <= 0) {
+        return;
+    }
+
+    const today = formatDate(new Date());
+    const yesterday = formatDate(addDays(new Date(), -1));
+    let memberQuery = `
+      SELECT id, username, joined_at
+      FROM meditation_group_members
+      WHERE group_id = ? AND status = 'active'
+    `;
+    const memberParams = [groupId];
+    if (onlyUsername) {
+        memberQuery += ` AND username = ?`;
+        memberParams.push(onlyUsername);
+    }
+
+    const members = await db.prepare(memberQuery).bind(...memberParams).all();
+    for (const member of members.results || []) {
+        const joinedDate = (member.joined_at || today).split('T')[0];
+        const trackedStart = joinedDate;
+        const trackedDays = joinedDate > yesterday ? 0 : daysBetween(trackedStart, yesterday);
+
+        let cumulativeMissed = 0;
+        let consecutiveMissed = 0;
+        let trailingMissed = 0;
+
+        if (trackedDays > 0) {
+            const result = await db.prepare(`
+        SELECT record_date, SUM(COALESCE(duration, 0)) as duration
+        FROM meditation_records
+        WHERE username = ? AND record_date >= ? AND record_date <= ?
+        GROUP BY record_date
+      `).bind(member.username, trackedStart, yesterday).all();
+
+            const durationByDate = new Map(
+                (result.results || []).map(row => [row.record_date, row.duration || 0])
+            );
+
+            for (let i = 0; i < trackedDays; i++) {
+                const date = formatDate(addDays(new Date(`${trackedStart}T00:00:00Z`), i));
+                if ((durationByDate.get(date) || 0) < group.daily_goal_minutes) {
+                    cumulativeMissed++;
+                    trailingMissed++;
+                } else {
+                    trailingMissed = 0;
+                }
+            }
+            consecutiveMissed = trailingMissed;
+        }
+
+        const todayDurationRow = await db.prepare(`
+      SELECT SUM(COALESCE(duration, 0)) as duration
+      FROM meditation_records
+      WHERE username = ? AND record_date = ?
+    `).bind(member.username, today).first();
+        const todayComplete = (todayDurationRow?.duration || 0) >= group.daily_goal_minutes;
+        if (todayComplete) {
+            consecutiveMissed = 0;
+        }
+
+        const cumulativeLimit = group.cumulative_miss_limit || 0;
+        const consecutiveLimit = group.consecutive_miss_limit || 0;
+        const shouldRemove =
+            (cumulativeLimit > 0 && cumulativeMissed >= cumulativeLimit) ||
+            (consecutiveLimit > 0 && consecutiveMissed >= consecutiveLimit);
+
+        if (shouldRemove) {
+            const reason = cumulativeLimit > 0 && cumulativeMissed >= cumulativeLimit
+                ? `累计未达标 ${cumulativeMissed} 天`
+                : `连续未达标 ${consecutiveMissed} 天`;
+            await db.prepare(`
+        UPDATE meditation_group_members
+        SET status = 'removed',
+            cumulative_missed_days = ?,
+            consecutive_missed_days = ?,
+            warning_message = NULL,
+            removed_at = ?,
+            removal_reason = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).bind(cumulativeMissed, consecutiveMissed, new Date().toISOString(), reason, new Date().toISOString(), member.id).run();
+            continue;
+        }
+
+        let warningMessage = null;
+        if (!todayComplete) {
+            if (consecutiveLimit > 1 && consecutiveMissed >= consecutiveLimit - 1) {
+                warningMessage = `连续未达标已接近清退规则，今日完成 ${group.daily_goal_minutes} 分钟后恢复`;
+            } else if (cumulativeLimit > 1 && cumulativeMissed >= cumulativeLimit - 1) {
+                warningMessage = `累计未达标已接近清退规则，今日完成 ${group.daily_goal_minutes} 分钟后恢复`;
+            }
+        }
+
+        await db.prepare(`
+      UPDATE meditation_group_members
+      SET cumulative_missed_days = ?,
+          consecutive_missed_days = ?,
+          warning_message = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).bind(cumulativeMissed, consecutiveMissed, warningMessage, new Date().toISOString(), member.id).run();
+    }
+}
+
+function mapGroupRow(row) {
+    return {
+        id: row.id,
+        name: row.name,
+        description: row.description || '',
+        ownerUsername: row.owner_username,
+        ownerName: row.owner_nickname || row.owner_username,
+        requireApproval: row.require_approval === 1 || row.require_approval === true,
+        dailyGoalMinutes: row.daily_goal_minutes || 0,
+        cumulativeMissLimit: row.cumulative_miss_limit || 0,
+        consecutiveMissLimit: row.consecutive_miss_limit || 0,
+        memberCount: row.member_count || row.memberCount || 0,
+        totalDuration: row.total_duration || row.totalDuration || 0,
+        todayDuration: row.today_duration || row.todayDuration || 0,
+        myStatus: row.my_status || null,
+        myRole: row.my_role || null,
+        myWarningMessage: row.my_warning_message || null,
+        createdAt: row.created_at || null
+    };
+}
+
 // 同步修行记录 POST /api/meditation/record
 export async function handleSyncRecord(request, env, db) {
     const auth = await authenticateUser(request, db);
@@ -38,7 +215,19 @@ export async function handleSyncRecord(request, env, db) {
 
     try {
         const body = await request.json();
-        const { sutra, sutraSource = 'custom', duration = 0, chantCount = 0, notes = '', isManual = false, recordDate } = body;
+        const {
+            sutra,
+            sutraSource = 'custom',
+            duration = 0,
+            chantCount = 0,
+            notes = '',
+            isManual = false,
+            recordDate,
+            localTime,
+            timezoneOffsetMinutes = null,
+            startTime = null,
+            endTime = null
+        } = body;
 
         if (!sutra) {
             return jsonResponse({ success: false, error: '功课名称不能为空' }, 400);
@@ -46,6 +235,7 @@ export async function handleSyncRecord(request, env, db) {
 
         const now = new Date().toISOString();
         const date = recordDate || now.split('T')[0];
+        const localClock = parseLocalTime(localTime, new Date());
         const versionResult = await db.prepare(`
       SELECT COALESCE(MAX(sync_version), 0) + 1 as next_version FROM (
         SELECT MAX(sync_version) as sync_version FROM content_likes WHERE username = ?
@@ -62,9 +252,28 @@ export async function handleSyncRecord(request, env, db) {
         const nextVersion = versionResult?.next_version || 1;
 
         const insertResult = await db.prepare(`
-      INSERT INTO meditation_records (username, sutra_name, sutra_source, duration, chant_count, record_date, is_manual, notes, created_at, sync_version)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(auth.username, sutra, sutraSource, duration, chantCount, date, isManual ? 1 : 0, notes, now, nextVersion).run();
+      INSERT INTO meditation_records (
+        username, sutra_name, sutra_source, duration, chant_count, record_date,
+        local_time, timezone_offset_minutes, start_time, end_time,
+        is_manual, notes, created_at, sync_version
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+            auth.username,
+            sutra,
+            sutraSource,
+            duration,
+            chantCount,
+            date,
+            localClock,
+            timezoneOffsetMinutes,
+            startTime,
+            endTime,
+            isManual ? 1 : 0,
+            notes,
+            now,
+            nextVersion
+        ).run();
 
         // 更新发愿目标进度
         await db.prepare(`
@@ -77,8 +286,11 @@ export async function handleSyncRecord(request, env, db) {
 
         await Promise.allSettled([
             env.USERS_KV?.delete('leaderboard:cache'),
-            env.USERS_KV?.delete('leaderboard:practice:v2')
+            env.USERS_KV?.delete('leaderboard:practice:v2'),
+            env.USERS_KV?.delete('leaderboard:practice:v3')
         ]);
+
+        await refreshGroupsForUser(db, auth.username);
 
         return jsonResponse({
             success: true,
@@ -107,7 +319,9 @@ export async function handleGetRecords(request, env, db) {
         const sutra = url.searchParams.get('sutra');
 
         let query = `
-      SELECT id, sutra_name, sutra_source, duration, chant_count, record_date, is_manual, notes, created_at
+      SELECT id, sutra_name, sutra_source, duration, chant_count, record_date,
+             local_time, timezone_offset_minutes, start_time, end_time,
+             is_manual, notes, created_at
       FROM meditation_records
       WHERE username = ?
     `;
@@ -147,6 +361,326 @@ export async function handleGetRecords(request, env, db) {
     } catch (e) {
         console.error('获取修行记录失败:', e);
         return jsonResponse({ success: false, error: '获取记录失败' }, 500);
+    }
+}
+
+// 搜索/查看共修小组 GET /api/meditation/groups
+export async function handleGetMeditationGroups(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        await refreshGroupsForUser(db, auth.username);
+
+        const url = new URL(request.url);
+        const query = (url.searchParams.get('query') || '').trim();
+        const requestedLimit = parseInt(url.searchParams.get('limit') || '30');
+        const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 50) : 30;
+        const today = formatDate(new Date());
+        const params = [today, auth.username];
+        let whereClause = '';
+
+        if (query) {
+            whereClause = `WHERE g.name LIKE ? OR g.description LIKE ?`;
+            params.push(`%${query}%`, `%${query}%`);
+        }
+
+        params.push(limit);
+
+        const result = await db.prepare(`
+      SELECT
+        g.*,
+        owner.nickname as owner_nickname,
+        my.status as my_status,
+        my.role as my_role,
+        my.warning_message as my_warning_message,
+        (
+          SELECT COUNT(*)
+          FROM meditation_group_members m
+          WHERE m.group_id = g.id AND m.status = 'active'
+        ) as member_count,
+        (
+          SELECT COALESCE(SUM(COALESCE(r.duration, 0)), 0)
+          FROM meditation_group_members m
+          LEFT JOIN meditation_records r ON r.username = m.username
+          WHERE m.group_id = g.id AND m.status = 'active'
+        ) as total_duration,
+        (
+          SELECT COALESCE(SUM(COALESCE(r.duration, 0)), 0)
+          FROM meditation_group_members m
+          LEFT JOIN meditation_records r ON r.username = m.username AND r.record_date = ?
+          WHERE m.group_id = g.id AND m.status = 'active'
+        ) as today_duration
+      FROM meditation_groups g
+      LEFT JOIN users owner ON owner.username = g.owner_username
+      LEFT JOIN meditation_group_members my ON my.group_id = g.id AND my.username = ?
+      ${whereClause}
+      ORDER BY
+        CASE WHEN my.status = 'active' THEN 0 WHEN my.status = 'pending' THEN 1 ELSE 2 END,
+        member_count DESC,
+        g.created_at DESC
+      LIMIT ?
+    `).bind(...params).all();
+
+        return jsonResponse({
+            success: true,
+            data: {
+                groups: (result.results || []).map(mapGroupRow)
+            }
+        });
+    } catch (e) {
+        console.error('获取共修小组失败:', e);
+        return jsonResponse({ success: false, error: '获取共修小组失败' }, 500);
+    }
+}
+
+// 创建共修小组 POST /api/meditation/groups
+export async function handleCreateMeditationGroup(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        const body = await request.json();
+        const name = (body.name || '').toString().trim();
+        if (!name) {
+            return jsonResponse({ success: false, error: '小组名称不能为空' }, 400);
+        }
+
+        const now = new Date().toISOString();
+        const dailyGoalMinutes = Math.max(0, asInt(body.dailyGoalMinutes, 30));
+        const cumulativeMissLimit = Math.max(0, asInt(body.cumulativeMissLimit, 7));
+        const consecutiveMissLimit = Math.max(0, asInt(body.consecutiveMissLimit, 3));
+
+        const insert = await db.prepare(`
+      INSERT INTO meditation_groups (
+        name, description, owner_username, require_approval, daily_goal_minutes,
+        cumulative_miss_limit, consecutive_miss_limit, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+            name,
+            (body.description || '').toString().trim(),
+            auth.username,
+            body.requireApproval ? 1 : 0,
+            dailyGoalMinutes,
+            cumulativeMissLimit,
+            consecutiveMissLimit,
+            now,
+            now
+        ).run();
+
+        const groupId = insert.meta?.last_row_id;
+        await db.prepare(`
+      INSERT INTO meditation_group_members (group_id, username, role, status, joined_at, updated_at)
+      VALUES (?, ?, 'owner', 'active', ?, ?)
+    `).bind(groupId, auth.username, now, now).run();
+
+        return jsonResponse({ success: true, data: { groupId } });
+    } catch (e) {
+        console.error('创建共修小组失败:', e);
+        return jsonResponse({ success: false, error: '创建共修小组失败' }, 500);
+    }
+}
+
+// 加入共修小组 POST /api/meditation/groups/join
+export async function handleJoinMeditationGroup(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        const body = await request.json();
+        const groupId = asInt(body.groupId);
+        if (!groupId) {
+            return jsonResponse({ success: false, error: 'groupId required' }, 400);
+        }
+
+        const group = await db.prepare(`
+      SELECT id, require_approval, owner_username
+      FROM meditation_groups
+      WHERE id = ?
+    `).bind(groupId).first();
+        if (!group) {
+            return jsonResponse({ success: false, error: '小组不存在' }, 404);
+        }
+
+        const now = new Date().toISOString();
+        const role = group.owner_username === auth.username ? 'owner' : 'member';
+        const status = role === 'owner' || group.require_approval !== 1 ? 'active' : 'pending';
+
+        await db.prepare(`
+      INSERT INTO meditation_group_members (group_id, username, role, status, joined_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(group_id, username) DO UPDATE SET
+        status = excluded.status,
+        role = CASE WHEN meditation_group_members.role = 'owner' THEN 'owner' ELSE excluded.role END,
+        warning_message = NULL,
+        removal_reason = NULL,
+        removed_at = NULL,
+        updated_at = excluded.updated_at
+    `).bind(groupId, auth.username, role, status, now, now).run();
+
+        return jsonResponse({
+            success: true,
+            data: {
+                status,
+                message: status === 'pending' ? '已提交加入申请，等待同意' : '已加入共修小组'
+            }
+        });
+    } catch (e) {
+        console.error('加入共修小组失败:', e);
+        return jsonResponse({ success: false, error: '加入共修小组失败' }, 500);
+    }
+}
+
+// 共修小组详情 GET /api/meditation/groups/detail?groupId=1
+export async function handleGetMeditationGroupDetail(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        const url = new URL(request.url);
+        const groupId = asInt(url.searchParams.get('groupId'));
+        if (!groupId) {
+            return jsonResponse({ success: false, error: 'groupId required' }, 400);
+        }
+
+        await evaluateGroupMembers(db, groupId);
+
+        const today = formatDate(new Date());
+        const groupRow = await db.prepare(`
+      SELECT
+        g.*,
+        owner.nickname as owner_nickname,
+        my.status as my_status,
+        my.role as my_role,
+        my.warning_message as my_warning_message,
+        (
+          SELECT COUNT(*)
+          FROM meditation_group_members m
+          WHERE m.group_id = g.id AND m.status = 'active'
+        ) as member_count,
+        (
+          SELECT COALESCE(SUM(COALESCE(r.duration, 0)), 0)
+          FROM meditation_group_members m
+          LEFT JOIN meditation_records r ON r.username = m.username
+          WHERE m.group_id = g.id AND m.status = 'active'
+        ) as total_duration,
+        (
+          SELECT COALESCE(SUM(COALESCE(r.duration, 0)), 0)
+          FROM meditation_group_members m
+          LEFT JOIN meditation_records r ON r.username = m.username AND r.record_date = ?
+          WHERE m.group_id = g.id AND m.status = 'active'
+        ) as today_duration
+      FROM meditation_groups g
+      LEFT JOIN users owner ON owner.username = g.owner_username
+      LEFT JOIN meditation_group_members my ON my.group_id = g.id AND my.username = ?
+      WHERE g.id = ?
+    `).bind(today, auth.username, groupId).first();
+
+        if (!groupRow) {
+            return jsonResponse({ success: false, error: '小组不存在' }, 404);
+        }
+
+        const membersResult = await db.prepare(`
+      SELECT
+        m.username,
+        COALESCE(u.nickname, m.username) as displayName,
+        COALESCE(u.avatar, u.alipay_avatar, u.wechat_headimgurl) as avatar,
+        m.role,
+        m.cumulative_missed_days,
+        m.consecutive_missed_days,
+        m.warning_message,
+        COALESCE(SUM(COALESCE(r.duration, 0)), 0) as totalDuration,
+        COALESCE(SUM(CASE WHEN r.record_date = ? THEN COALESCE(r.duration, 0) ELSE 0 END), 0) as todayDuration,
+        COUNT(DISTINCT r.record_date) as activeDays
+      FROM meditation_group_members m
+      LEFT JOIN users u ON u.username = m.username
+      LEFT JOIN meditation_records r ON r.username = m.username
+      WHERE m.group_id = ? AND m.status = 'active'
+      GROUP BY m.username
+      ORDER BY totalDuration DESC, todayDuration DESC, activeDays DESC
+      LIMIT 100
+    `).bind(today, groupId).all();
+
+        const pendingResult = groupRow.my_role === 'owner'
+            ? await db.prepare(`
+        SELECT m.username, COALESCE(u.nickname, m.username) as displayName, COALESCE(u.avatar, u.alipay_avatar, u.wechat_headimgurl) as avatar, m.updated_at
+        FROM meditation_group_members m
+        LEFT JOIN users u ON u.username = m.username
+        WHERE m.group_id = ? AND m.status = 'pending'
+        ORDER BY m.updated_at ASC
+      `).bind(groupId).all()
+            : { results: [] };
+
+        return jsonResponse({
+            success: true,
+            data: {
+                group: mapGroupRow(groupRow),
+                members: (membersResult.results || []).map((member, index) => ({
+                    username: member.username,
+                    displayName: member.displayName,
+                    avatar: member.avatar || null,
+                    role: member.role,
+                    cumulativeMissedDays: member.cumulative_missed_days || 0,
+                    consecutiveMissedDays: member.consecutive_missed_days || 0,
+                    warningMessage: member.warning_message || null,
+                    totalDuration: member.totalDuration || 0,
+                    todayDuration: member.todayDuration || 0,
+                    activeDays: member.activeDays || 0,
+                    rank: index + 1
+                })),
+                pendingMembers: pendingResult.results || []
+            }
+        });
+    } catch (e) {
+        console.error('获取共修小组详情失败:', e);
+        return jsonResponse({ success: false, error: '获取共修小组详情失败' }, 500);
+    }
+}
+
+// 审核加入申请 POST /api/meditation/groups/review
+export async function handleReviewMeditationGroupJoin(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        const body = await request.json();
+        const groupId = asInt(body.groupId);
+        const username = (body.username || '').toString();
+        const approve = body.approve === true;
+        if (!groupId || !username) {
+            return jsonResponse({ success: false, error: '参数不完整' }, 400);
+        }
+
+        const owner = await db.prepare(`
+      SELECT role
+      FROM meditation_group_members
+      WHERE group_id = ? AND username = ? AND status = 'active'
+    `).bind(groupId, auth.username).first();
+        if (!owner || owner.role !== 'owner') {
+            return jsonResponse({ success: false, error: '只有小组创建者可以审核' }, 403);
+        }
+
+        await db.prepare(`
+      UPDATE meditation_group_members
+      SET status = ?, joined_at = CASE WHEN ? = 'active' THEN ? ELSE joined_at END, updated_at = ?
+      WHERE group_id = ? AND username = ? AND status = 'pending'
+    `).bind(approve ? 'active' : 'rejected', approve ? 'active' : 'rejected', new Date().toISOString(), new Date().toISOString(), groupId, username).run();
+
+        return jsonResponse({ success: true });
+    } catch (e) {
+        console.error('审核共修申请失败:', e);
+        return jsonResponse({ success: false, error: '审核失败' }, 500);
     }
 }
 

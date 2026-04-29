@@ -53,7 +53,7 @@ export async function handleGetPracticeLeaderboard(request, env, db) {
 
     // 尝试从缓存获取
     try {
-      const cached = await env.USERS_KV.get('leaderboard:practice:v2');
+      const cached = await env.USERS_KV.get('leaderboard:practice:v3');
       if (cached) {
         const { data, timestamp } = JSON.parse(cached);
         if (Date.now() - timestamp < 5 * 60 * 1000) {
@@ -88,7 +88,7 @@ export async function handleGetPracticeLeaderboard(request, env, db) {
       FROM meditation_records mr
       LEFT JOIN users u ON mr.username = u.username
       GROUP BY mr.username
-      ORDER BY totalCount DESC, totalDuration DESC, latestPracticeAt DESC
+      ORDER BY totalDuration DESC, totalRecords DESC, latestPracticeAt DESC
       LIMIT ?
     `).bind(limit).all();
 
@@ -109,7 +109,7 @@ export async function handleGetPracticeLeaderboard(request, env, db) {
     
     // 尝试缓存结果
     try {
-      await env.USERS_KV.put('leaderboard:practice:v2', JSON.stringify({
+      await env.USERS_KV.put('leaderboard:practice:v3', JSON.stringify({
         data: leaderboard,
         timestamp: Date.now()
       }), { expirationTtl: 600 });
@@ -141,7 +141,9 @@ export async function handleGetLeaderboardRecords(request, env, db) {
     }
 
     const result = await db.prepare(`
-      SELECT id, sutra_name, sutra_source, duration, chant_count, record_date, is_manual, created_at
+      SELECT id, sutra_name, sutra_source, duration, chant_count, record_date,
+             local_time, timezone_offset_minutes, start_time, end_time,
+             is_manual, created_at
       FROM meditation_records
       WHERE username = ?
       ORDER BY record_date DESC, created_at DESC
@@ -177,6 +179,7 @@ export async function handleUpdateTransferData(request, env, db) {
   await db.updateTransferData(tokenData.username, bytes);
   await env.USERS_KV.delete('leaderboard:cache');
   await env.USERS_KV.delete('leaderboard:practice:v2');
+  await env.USERS_KV.delete('leaderboard:practice:v3');
 
   return jsonResponse({ 
     message: '传输数据已更新',

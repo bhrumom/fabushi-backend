@@ -16,7 +16,7 @@ import { handleToggleLike, handleGetLikeCount, handleBatchGetLikeCounts, handleG
 import { handleToggleFavorite, handleGetMyFavorites, handleBatchCheckFavorites } from './handlers/favorites.js';
 import { handleBatchGetContentStats } from './handlers/content-stats.js';
 import { handleOnlineJoin, handleOnlineHeartbeat, handleOnlineLeave, handleOnlineCount } from './handlers/online.js';
-import { handleSyncRecord, handleGetRecords, handleGetStats, handleGetWeeklyStats, handleGetMonthlyStats, handleSetGoal, handleGetGoals, handleMeditationSettings } from './handlers/meditation.js';
+import { handleSyncRecord, handleGetRecords, handleGetStats, handleGetWeeklyStats, handleGetMonthlyStats, handleSetGoal, handleGetGoals, handleMeditationSettings, handleGetMeditationGroups, handleCreateMeditationGroup, handleJoinMeditationGroup, handleGetMeditationGroupDetail, handleReviewMeditationGroupJoin } from './handlers/meditation.js';
 import { handleGetSyncData, handlePushSyncData, handleGetSyncState } from './handlers/sync.js';
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
 import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
@@ -143,6 +143,11 @@ export async function route(request, env, db, ctx) {
   if (pathname === '/api/meditation/goal' && method === 'POST') return await handleSetGoal(request, env, db);
   if (pathname === '/api/meditation/goal' && method === 'GET') return await handleGetGoals(request, env, db);
   if (pathname === '/api/meditation/settings' && (method === 'GET' || method === 'POST')) return await handleMeditationSettings(request, env, db);
+  if (pathname === '/api/meditation/groups' && method === 'GET') return await handleGetMeditationGroups(request, env, db);
+  if (pathname === '/api/meditation/groups' && method === 'POST') return await handleCreateMeditationGroup(request, env, db);
+  if (pathname === '/api/meditation/groups/join' && method === 'POST') return await handleJoinMeditationGroup(request, env, db);
+  if (pathname === '/api/meditation/groups/detail' && method === 'GET') return await handleGetMeditationGroupDetail(request, env, db);
+  if (pathname === '/api/meditation/groups/review' && method === 'POST') return await handleReviewMeditationGroupJoin(request, env, db);
 
   // 同步API（增量同步）
   if (pathname === '/api/sync' && method === 'GET') return await handleGetSyncData(request, env, db);
