@@ -18,6 +18,7 @@ import { handleBatchGetContentStats } from './handlers/content-stats.js';
 import { handleOnlineJoin, handleOnlineHeartbeat, handleOnlineLeave, handleOnlineCount } from './handlers/online.js';
 import { handleSyncRecord, handleGetRecords, handleGetStats, handleGetWeeklyStats, handleGetMonthlyStats, handleSetGoal, handleGetGoals, handleMeditationSettings, handleGetMeditationGroups, handleCreateMeditationGroup, handleJoinMeditationGroup, handleGetMeditationGroupDetail, handleReviewMeditationGroupJoin } from './handlers/meditation.js';
 import { handleGetSyncData, handlePushSyncData, handleGetSyncState } from './handlers/sync.js';
+import { handleToggleFollow, handleGetFollowList, handleGetFollowSummary, handleGetPracticePrivacy, handleUpdatePracticePrivacy } from './handlers/social.js';
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
 import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
 import { jsonResponse } from './utils/response.js';
@@ -112,6 +113,13 @@ export async function route(request, env, db, ctx) {
   if (pathname === '/api/leaderboard/practice/records' && method === 'GET') return await handleGetLeaderboardRecords(request, env, db);
   if (pathname === '/api/leaderboard/records' && method === 'GET') return await handleGetLeaderboardRecords(request, env, db);
   if (pathname === '/api/leaderboard/update' && method === 'POST') return await handleUpdateTransferData(request, env, db);
+
+  // 社交关系与隐私API
+  if (pathname === '/api/social/follow/toggle' && method === 'POST') return await handleToggleFollow(request, env, db);
+  if (pathname === '/api/social/follows' && method === 'GET') return await handleGetFollowList(request, env, db);
+  if (pathname === '/api/social/follow-summary' && method === 'GET') return await handleGetFollowSummary(request, env, db);
+  if (pathname === '/api/social/practice-privacy' && method === 'GET') return await handleGetPracticePrivacy(request, env, db);
+  if (pathname === '/api/social/practice-privacy' && method === 'POST') return await handleUpdatePracticePrivacy(request, env, db);
 
   // 点赞API
   if (pathname === '/api/likes/toggle' && method === 'POST') return await handleToggleLike(request, env, db);
