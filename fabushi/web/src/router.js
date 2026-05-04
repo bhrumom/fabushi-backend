@@ -21,8 +21,8 @@ import { handleGetSyncData, handlePushSyncData, handleGetSyncState } from './han
 import { handleToggleFollow, handleGetFollowList, handleGetFollowSummary, handleGetPracticePrivacy, handleUpdatePracticePrivacy } from './handlers/social.js';
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
 import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
+import { handleSubmitFeedback } from './handlers/feedback.js';
 import { jsonResponse } from './utils/response.js';
-
 
 export async function route(request, env, db, ctx) {
   const url = new URL(request.url);
@@ -86,6 +86,9 @@ export async function route(request, env, db, ctx) {
 
   // 会员API
   if (pathname === '/api/stripe/membership-status' && method === 'GET') return await handleCheckMembershipStatus(request, env, db);
+
+  // 反馈API
+  if (pathname === '/api/feedback' && method === 'POST') return await handleSubmitFeedback(request, env, db);
 
   // 兑换码API
   if (pathname === '/api/admin/create-redeem-code' && method === 'POST') return await handleCreateRedeemCode(request, env, db);
