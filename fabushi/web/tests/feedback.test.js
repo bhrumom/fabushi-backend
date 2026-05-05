@@ -73,12 +73,18 @@ test('handleSubmitFeedback creates a GitHub issue for valid feedback', async () 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title: '收藏后提示不明显',
-        description: '建议收藏成功后给一个更明确的提示。',
+        title: 'SharedPreferences 初始化失败',
+        description: '安卓打开应用后立刻白屏，点击重试也不行。',
         contact: 'user@example.com',
-        page: 'settings',
+        page: 'startup_failure_dialog',
         platform: 'android',
         appVersion: '1.0.0+16',
+        category: 'startup_crash',
+        autoCollected: true,
+        diagnostics: {
+          stage: 'app_wrapper_initialize',
+          error: 'PlatformException(channel-error, Unable to establish connection on channel...)',
+        },
       }),
     });
 
@@ -97,8 +103,10 @@ test('handleSubmitFeedback creates a GitHub issue for valid feedback', async () 
     assert.equal(calls.length, 2);
 
     const issueRequestBody = JSON.parse(calls[1].init.body);
-    assert.match(issueRequestBody.title, /^\[反馈\]/);
-    assert.match(issueRequestBody.body, /收藏成功/);
+    assert.match(issueRequestBody.title, /^\[崩溃反馈\]/);
+    assert.match(issueRequestBody.body, /自动采集诊断信息/);
+    assert.match(issueRequestBody.body, /SharedPreferences/);
+    assert.match(issueRequestBody.body, /app_wrapper_initialize/);
   } finally {
     global.fetch = originalFetch;
   }

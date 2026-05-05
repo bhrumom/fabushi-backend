@@ -12,6 +12,31 @@ function normalizeText(value, { maxLength = 1000 } = {}) {
   return value.trim().replace(/\r\n/g, '\n').substring(0, maxLength);
 }
 
+function normalizeDiagnostics(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  try {
+    const json = JSON.stringify(value);
+    if (!json) {
+      return null;
+    }
+
+    if (json.length <= 12000) {
+      return JSON.parse(json);
+    }
+
+    return {
+      truncated: true,
+      preview: json.substring(0, 12000),
+    };
+  } catch (error) {
+    console.warn('无法序列化诊断信息，将忽略该字段:', error);
+    return null;
+  }
+}
+
 async function resolveReporter(request, env, db) {
   const authHeader = request.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
@@ -42,6 +67,17 @@ async function resolveReporter(request, env, db) {
 }
 
 function buildIssueBody({ feedback, reporter }) {
+  const diagnosticsSection = feedback.diagnostics
+    ? [
+        '### 自动采集诊断信息',
+        '',
+        '```json',
+        JSON.stringify(feedback.diagnostics, null, 2),
+        '```',
+        '',
+      ]
+    : [];
+
   const lines = [
     '## 用户反馈',
     '',
@@ -49,6 +85,8 @@ function buildIssueBody({ feedback, reporter }) {
     `- 页面入口: ${feedback.page || 'unknown'}`,
     `- 平台: ${feedback.platform || 'unknown'}`,
     `- App 版本: ${feedback.appVersion || 'unknown'}`,
+    `- 分类: ${feedback.category || 'general'}`,
+    `- 自动采集: ${feedback.autoCollected ? '是' : '否'}`,
     `- 联系方式: ${feedback.contact || '未提供'}`,
     `- 提交时间: ${new Date().toISOString()}`,
     `- 登录用户: ${reporter?.username || 'anonymous'}`,
@@ -59,6 +97,7 @@ function buildIssueBody({ feedback, reporter }) {
     '',
     feedback.description,
     '',
+    ...diagnosticsSection,
     '---',
     '',
     '_This issue was created automatically from the in-app feedback form._',
@@ -109,6 +148,10 @@ async function ensureFeedbackLabel(env) {
   throw new Error(`ensure_label_failed:${response.status}:${errorText}`);
 }
 
+function issueTitlePrefix(feedback) {
+  return feedback.category === 'startup_crash' ? '[崩溃反馈]' : '[反馈]';
+}
+
 async function createFeedbackIssue(env, feedback, reporter) {
   const owner = env.GITHUB_FEEDBACK_REPO_OWNER || DEFAULT_REPO_OWNER;
   const repo = env.GITHUB_FEEDBACK_REPO_NAME || DEFAULT_REPO_NAME;
@@ -117,7 +160,7 @@ async function createFeedbackIssue(env, feedback, reporter) {
   const response = await githubRequest(env, `/repos/${owner}/${repo}/issues`, {
     method: 'POST',
     body: JSON.stringify({
-      title: `[反馈] ${feedback.title}`,
+      title: `${issueTitlePrefix(feedback)} ${feedback.title}`,
       body: buildIssueBody({ feedback, reporter }),
       labels: [label],
     }),
@@ -148,6 +191,9 @@ export async function handleSubmitFeedback(request, env, db) {
       page: normalizeText(body.page, { maxLength: 80 }),
       platform: normalizeText(body.platform, { maxLength: 80 }),
       appVersion: normalizeText(body.appVersion, { maxLength: 80 }),
+      category: normalizeText(body.category, { maxLength: 80 }),
+      autoCollected: body.autoCollected === true,
+      diagnostics: normalizeDiagnostics(body.diagnostics),
     };
 
     if (!feedback.title) {
