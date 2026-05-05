@@ -32,6 +32,73 @@ function serializeUser(user) {
   };
 }
 
+async function safeRun(db, sql, ...params) {
+  try {
+    await db.prepare(sql).bind(...params).run();
+  } catch (error) {
+    console.warn('账户删除引用清理跳过:', error?.message || error);
+  }
+}
+
+async function runInTransaction(db, action) {
+  await db.prepare('BEGIN TRANSACTION').run();
+  try {
+    const result = await action();
+    await db.prepare('COMMIT').run();
+    return result;
+  } catch (error) {
+    try {
+      await db.prepare('ROLLBACK').run();
+    } catch (rollbackError) {
+      console.warn('账户删除事务回滚失败:', rollbackError?.message || rollbackError);
+    }
+    throw error;
+  }
+}
+
+async function deleteUserArtifacts(db, username, email) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const deletions = [
+    ['DELETE FROM meditation_group_members WHERE group_id IN (SELECT id FROM meditation_groups WHERE owner_username = ?)', username],
+    ['DELETE FROM meditation_groups WHERE owner_username = ?', username],
+    ['DELETE FROM meditation_group_members WHERE username = ?', username],
+    ['DELETE FROM meditation_records WHERE username = ?', username],
+    ['DELETE FROM meditation_goals WHERE username = ?', username],
+    ['DELETE FROM meditation_settings WHERE username = ?', username],
+    ['DELETE FROM user_practice_privacy WHERE username = ?', username],
+    ['DELETE FROM user_follows WHERE follower_username = ? OR following_username = ?', username, username],
+    ['DELETE FROM notifications WHERE username = ? OR related_username = ?', username, username],
+    ['DELETE FROM sync_log WHERE username = ?', username],
+    ['DELETE FROM user_sync_state WHERE username = ?', username],
+    ['DELETE FROM comments WHERE user_id = ? OR username = ?', username, username],
+    ['DELETE FROM likes WHERE username = ?', username],
+    ['DELETE FROM favorites WHERE username = ?', username],
+    ['DELETE FROM content_likes WHERE user_id = ? OR username = ?', username, username],
+    ['DELETE FROM content_favorites WHERE username = ?', username],
+    ['DELETE FROM content_reports WHERE reporter_user_id = ?', username],
+    ['DELETE FROM user_blocks WHERE blocked_user_id = ?', username],
+    ['DELETE FROM email_username_mapping WHERE username = ?', username],
+  ];
+
+  if (normalizedEmail) {
+    deletions.push(['DELETE FROM email_username_mapping WHERE email = ?', normalizedEmail]);
+  }
+
+  for (const [sql, ...params] of deletions) {
+    await safeRun(db, sql, ...params);
+  }
+}
+
+async function clearLeaderboardCaches(env) {
+  await Promise.allSettled([
+    env.USERS_KV?.delete('leaderboard:cache'),
+    env.USERS_KV?.delete('leaderboard:cache:v2'),
+    env.USERS_KV?.delete('leaderboard:practice:v2'),
+    env.USERS_KV?.delete('leaderboard:practice:v3'),
+    env.USERS_KV?.delete('leaderboard:practice:v4')
+  ]);
+}
+
 // 注册
 export async function handleRegister(request, env, db) {
   const { username, email, password, verificationCode } = await request.json();
@@ -285,11 +352,17 @@ export async function handleDeleteAccount(request, env, db) {
       return jsonResponse({ error: '用户不存在' }, 404);
     }
 
-    if (db.deleteUser) {
-      await db.deleteUser(tokenData.username);
-    } else {
-      await db.prepare('DELETE FROM users WHERE username = ?').bind(tokenData.username).run();
-    }
+    await runInTransaction(db, async () => {
+      await deleteUserArtifacts(db, tokenData.username, user.email);
+
+      if (db.deleteUser) {
+        await db.deleteUser(tokenData.username);
+      } else {
+        await db.prepare('DELETE FROM users WHERE username = ?').bind(tokenData.username).run();
+      }
+    });
+
+    await clearLeaderboardCaches(env);
 
     return jsonResponse({ success: true, message: '账户已注销' }, 200);
   } catch (error) {

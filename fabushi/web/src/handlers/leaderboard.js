@@ -193,7 +193,7 @@ export async function handleGetPracticeLeaderboard(request, env, db) {
           LIMIT 1
         ) as latestSutra
       FROM meditation_records mr
-      LEFT JOIN users u ON mr.username = u.username
+      JOIN users u ON mr.username = u.username
       LEFT JOIN user_practice_privacy pp ON pp.username = mr.username
       GROUP BY mr.username
       ORDER BY SUM(COALESCE(mr.duration, 0)) DESC, totalRecords DESC, latestPracticeAt DESC
