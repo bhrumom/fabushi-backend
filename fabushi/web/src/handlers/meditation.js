@@ -60,7 +60,70 @@ function daysBetween(startDate, endDate) {
     return Math.max(0, Math.floor((end - start) / 86400000) + 1);
 }
 
+async function ensureOwnerMembershipActive(db, groupId, ownerUsername = null) {
+    const resolvedOwnerUsername = ownerUsername || (await db.prepare(`
+      SELECT owner_username
+      FROM meditation_groups
+      WHERE id = ?
+    `).bind(groupId).first())?.owner_username;
+
+    if (!resolvedOwnerUsername) {
+        return null;
+    }
+
+    const now = new Date().toISOString();
+    const ownerMembership = await db.prepare(`
+      SELECT id, status, role
+      FROM meditation_group_members
+      WHERE group_id = ? AND username = ?
+    `).bind(groupId, resolvedOwnerUsername).first();
+
+    if (!ownerMembership) {
+        await db.prepare(`
+      INSERT INTO meditation_group_members (
+        group_id, username, role, status,
+        cumulative_missed_days, consecutive_missed_days,
+        warning_message, removal_reason, removed_at,
+        joined_at, updated_at
+      )
+      VALUES (?, ?, 'owner', 'active', 0, 0, NULL, NULL, NULL, ?, ?)
+    `).bind(groupId, resolvedOwnerUsername, now, now).run();
+        return resolvedOwnerUsername;
+    }
+
+    if (ownerMembership.role !== 'owner' || ownerMembership.status !== 'active') {
+        await db.prepare(`
+      UPDATE meditation_group_members
+      SET role = 'owner',
+          status = 'active',
+          cumulative_missed_days = 0,
+          consecutive_missed_days = 0,
+          warning_message = NULL,
+          removal_reason = NULL,
+          removed_at = NULL,
+          updated_at = ?
+      WHERE id = ?
+    `).bind(now, ownerMembership.id).run();
+    }
+
+    return resolvedOwnerUsername;
+}
+
+async function restoreOwnerMemberships(db, username) {
+    const ownedGroups = await db.prepare(`
+      SELECT id
+      FROM meditation_groups
+      WHERE owner_username = ?
+    `).bind(username).all();
+
+    for (const group of ownedGroups.results || []) {
+        await ensureOwnerMembershipActive(db, group.id, username);
+    }
+}
+
 async function refreshGroupsForUser(db, username) {
+    await restoreOwnerMemberships(db, username);
+
     const memberships = await db.prepare(`
       SELECT m.group_id
       FROM meditation_group_members m
@@ -75,7 +138,7 @@ async function refreshGroupsForUser(db, username) {
 
 async function evaluateGroupMembers(db, groupId, onlyUsername = null) {
     const group = await db.prepare(`
-      SELECT id, daily_goal_minutes, cumulative_miss_limit, consecutive_miss_limit
+      SELECT id, owner_username, daily_goal_minutes, cumulative_miss_limit, consecutive_miss_limit
       FROM meditation_groups
       WHERE id = ?
     `).bind(groupId).first();
@@ -84,12 +147,14 @@ async function evaluateGroupMembers(db, groupId, onlyUsername = null) {
         return;
     }
 
+    await ensureOwnerMembershipActive(db, groupId, group.owner_username);
+
     const today = formatDate(new Date());
     const yesterday = formatDate(addDays(new Date(), -1));
     let memberQuery = `
-      SELECT id, username, joined_at
+      SELECT id, username, joined_at, role
       FROM meditation_group_members
-      WHERE group_id = ? AND status = 'active'
+      WHERE group_id = ? AND status = 'active' AND role != 'owner'
     `;
     const memberParams = [groupId];
     if (onlyUsername) {
@@ -552,6 +617,7 @@ export async function handleGetMeditationGroupDetail(request, env, db) {
             return jsonResponse({ success: false, error: 'groupId required' }, 400);
         }
 
+        await restoreOwnerMemberships(db, auth.username);
         await evaluateGroupMembers(db, groupId);
 
         const today = formatDate(new Date());
@@ -610,7 +676,7 @@ export async function handleGetMeditationGroupDetail(request, env, db) {
       LIMIT 100
     `).bind(today, groupId).all();
 
-        const pendingResult = groupRow.my_role === 'owner'
+        const pendingResult = groupRow.owner_username === auth.username
             ? await db.prepare(`
         SELECT m.username, COALESCE(u.nickname, m.username) as displayName, COALESCE(u.avatar, u.alipay_avatar, u.wechat_headimgurl) as avatar, m.updated_at
         FROM meditation_group_members m
@@ -662,14 +728,19 @@ export async function handleReviewMeditationGroupJoin(request, env, db) {
             return jsonResponse({ success: false, error: '参数不完整' }, 400);
         }
 
-        const owner = await db.prepare(`
-      SELECT role
-      FROM meditation_group_members
-      WHERE group_id = ? AND username = ? AND status = 'active'
-    `).bind(groupId, auth.username).first();
-        if (!owner || owner.role !== 'owner') {
+        const group = await db.prepare(`
+      SELECT owner_username
+      FROM meditation_groups
+      WHERE id = ?
+    `).bind(groupId).first();
+        if (!group) {
+            return jsonResponse({ success: false, error: '小组不存在' }, 404);
+        }
+        if (group.owner_username !== auth.username) {
             return jsonResponse({ success: false, error: '只有小组创建者可以审核' }, 403);
         }
+
+        await ensureOwnerMembershipActive(db, groupId, auth.username);
 
         await db.prepare(`
       UPDATE meditation_group_members
