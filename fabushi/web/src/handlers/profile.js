@@ -114,6 +114,7 @@ async function updateUsernameReferences(db, oldUsername, newUsername) {
     ['UPDATE meditation_groups SET owner_username = ? WHERE owner_username = ?', newUsername, oldUsername],
     ['UPDATE user_follows SET follower_username = ? WHERE follower_username = ?', newUsername, oldUsername],
     ['UPDATE user_follows SET following_username = ? WHERE following_username = ?', newUsername, oldUsername],
+    ['UPDATE user_practice_privacy SET username = ? WHERE username = ?', newUsername, oldUsername],
     ['UPDATE notifications SET username = ? WHERE username = ?', newUsername, oldUsername],
     ['UPDATE notifications SET related_username = ? WHERE related_username = ?', newUsername, oldUsername],
     ['UPDATE sync_log SET username = ? WHERE username = ?', newUsername, oldUsername],
@@ -122,8 +123,11 @@ async function updateUsernameReferences(db, oldUsername, newUsername) {
     ['UPDATE comments SET username = ? WHERE username = ?', newUsername, oldUsername],
     ['UPDATE likes SET username = ? WHERE username = ?', newUsername, oldUsername],
     ['UPDATE favorites SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE content_likes SET user_id = ? WHERE user_id = ?', newUsername, oldUsername],
     ['UPDATE content_likes SET username = ? WHERE username = ?', newUsername, oldUsername],
-    ['UPDATE content_favorites SET username = ? WHERE username = ?', newUsername, oldUsername]
+    ['UPDATE content_favorites SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE content_reports SET reporter_user_id = ? WHERE reporter_user_id = ?', newUsername, oldUsername],
+    ['UPDATE user_blocks SET blocked_user_id = ? WHERE blocked_user_id = ?', newUsername, oldUsername]
   ];
 
   for (const [sql, ...params] of updates) {

@@ -174,4 +174,19 @@ test('handleUpdateProfile migrates username changes without direct in-place user
     sql.startsWith('UPDATE users SET') && sql.includes('username = ?')
   );
   assert.equal(directUsernameUpdate, undefined);
+
+  const expectedReferenceUpdates = [
+    'UPDATE comments SET user_id = ? WHERE user_id = ?',
+    'UPDATE content_likes SET user_id = ? WHERE user_id = ?',
+    'UPDATE user_practice_privacy SET username = ? WHERE username = ?',
+    'UPDATE content_reports SET reporter_user_id = ? WHERE reporter_user_id = ?',
+    'UPDATE user_blocks SET blocked_user_id = ? WHERE blocked_user_id = ?'
+  ];
+
+  for (const expectedSql of expectedReferenceUpdates) {
+    assert.ok(
+      db.statements.some(({ sql }) => sql === expectedSql),
+      `missing migration statement: ${expectedSql}`
+    );
+  }
 });
