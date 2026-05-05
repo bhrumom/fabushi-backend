@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  handleGetMeditationGroups,
   handleGetMeditationGroupDetail,
   handleReviewMeditationGroupJoin,
 } from '../src/handlers/meditation.js';
@@ -49,6 +50,9 @@ function createDbMock() {
                   my_status: member?.status ?? null,
                   my_role: member?.role ?? null,
                   my_warning_message: member?.warning_message ?? null,
+                  pending_count: Array.from(members.values()).filter(
+                    (entry) => entry.group_id === groupId && entry.status === 'pending',
+                  ).length,
                   member_count: Array.from(members.values()).filter(
                     (entry) => entry.group_id === groupId && entry.status === 'active',
                   ).length,
@@ -64,6 +68,48 @@ function createDbMock() {
               return null;
             },
             async all() {
+              if (normalizedSql.includes('FROM meditation_groups g LEFT JOIN users owner ON owner.username = g.owner_username LEFT JOIN meditation_group_members my ON my.group_id = g.id AND my.username = ?')) {
+                const [today, username, ...rest] = params;
+                void today;
+                const limit = rest.at(-1);
+                const searchTerms = rest.slice(0, -1).filter((value) => typeof value === 'string');
+                const groupIdSearch = rest
+                  .slice(0, -1)
+                  .find((value) => typeof value === 'number');
+                const trimmedQuery = searchTerms[0]?.replaceAll('%', '').trim().toLowerCase() ?? '';
+                const rows = Array.from(groups.values()).filter((group) => {
+                  if (groupIdSearch && group.id === groupIdSearch) return true;
+                  if (!trimmedQuery) return true;
+                  return [
+                    group.name,
+                    group.description,
+                    group.owner_username,
+                    group.owner_nickname || '',
+                  ].some((field) => field.toLowerCase().includes(trimmedQuery));
+                }).slice(0, limit);
+
+                return {
+                  results: rows.map((group) => {
+                    const member = members.get(keyFor(group.id, username));
+                    return {
+                      ...group,
+                      owner_nickname: group.owner_nickname || null,
+                      my_status: member?.status ?? null,
+                      my_role: member?.role ?? null,
+                      my_warning_message: member?.warning_message ?? null,
+                      pending_count: Array.from(members.values()).filter(
+                        (entry) => entry.group_id === group.id && entry.status === 'pending',
+                      ).length,
+                      member_count: Array.from(members.values()).filter(
+                        (entry) => entry.group_id === group.id && entry.status === 'active',
+                      ).length,
+                      total_duration: 0,
+                      today_duration: 0,
+                    };
+                  }),
+                };
+              }
+
               if (normalizedSql.startsWith('SELECT id FROM meditation_groups WHERE owner_username = ?')) {
                 return {
                   results: Array.from(groups.values())
@@ -311,4 +357,103 @@ test('group owner can still approve join requests after owner membership is rest
   assert.equal(payload.success, true);
   assert.equal(members.get(keyFor(11, 'owner2')).status, 'active');
   assert.equal(members.get(keyFor(11, 'applicant')).status, 'active');
+});
+
+test('group list supports owner search and exposes pending approvals to the owner', async () => {
+  const { db, groups, members, keyFor } = createDbMock();
+  groups.set(21, {
+    id: 21,
+    owner_username: 'group-owner',
+    owner_nickname: '禅修发起人',
+    name: '晨光共修',
+    description: '每天一起完成早课',
+    require_approval: 1,
+    daily_goal_minutes: 20,
+    cumulative_miss_limit: 5,
+    consecutive_miss_limit: 2,
+    created_at: '2026-05-05T00:00:00Z',
+  });
+  members.set(keyFor(21, 'group-owner'), {
+    id: 9,
+    group_id: 21,
+    username: 'group-owner',
+    role: 'owner',
+    status: 'active',
+    joined_at: '2026-05-01T00:00:00Z',
+    updated_at: '2026-05-05T00:00:00Z',
+  });
+  members.set(keyFor(21, 'pending-a'), {
+    id: 10,
+    group_id: 21,
+    username: 'pending-a',
+    role: 'member',
+    status: 'pending',
+    joined_at: '2026-05-05T00:00:00Z',
+    updated_at: '2026-05-05T00:00:00Z',
+  });
+  members.set(keyFor(21, 'pending-b'), {
+    id: 11,
+    group_id: 21,
+    username: 'pending-b',
+    role: 'member',
+    status: 'pending',
+    joined_at: '2026-05-05T00:00:00Z',
+    updated_at: '2026-05-05T00:00:00Z',
+  });
+
+  const response = await handleGetMeditationGroups(
+    new Request('https://flutter.ombhrum.com/api/meditation/groups?query=%E7%A6%85%E4%BF%AE%E5%8F%91%E8%B5%B7%E4%BA%BA', {
+      headers: { Authorization: authHeader('group-owner') },
+    }),
+    {},
+    db,
+  );
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.success, true);
+  assert.equal(payload.data.groups.length, 1);
+  assert.equal(payload.data.groups[0].ownerName, '禅修发起人');
+  assert.equal(payload.data.groups[0].pendingCount, 2);
+  assert.equal(payload.data.groups[0].myRole, 'owner');
+});
+
+test('group list also supports searching by visible group id token', async () => {
+  const { db, groups, members, keyFor } = createDbMock();
+  groups.set(35, {
+    id: 35,
+    owner_username: 'owner-35',
+    owner_nickname: '晚课组织者',
+    name: '莲灯晚课',
+    description: '晚间共修',
+    require_approval: 1,
+    daily_goal_minutes: 25,
+    cumulative_miss_limit: 5,
+    consecutive_miss_limit: 2,
+    created_at: '2026-05-05T00:00:00Z',
+  });
+  members.set(keyFor(35, 'searcher'), {
+    id: 12,
+    group_id: 35,
+    username: 'searcher',
+    role: 'member',
+    status: 'removed',
+    joined_at: '2026-05-01T00:00:00Z',
+    updated_at: '2026-05-05T00:00:00Z',
+  });
+
+  const response = await handleGetMeditationGroups(
+    new Request('https://flutter.ombhrum.com/api/meditation/groups?query=%2335', {
+      headers: { Authorization: authHeader('searcher') },
+    }),
+    {},
+    db,
+  );
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.success, true);
+  assert.equal(payload.data.groups.length, 1);
+  assert.equal(payload.data.groups[0].id, 35);
+  assert.equal(payload.data.groups[0].name, '莲灯晚课');
 });

@@ -262,12 +262,28 @@ function mapGroupRow(row) {
         cumulativeMissLimit: row.cumulative_miss_limit || 0,
         consecutiveMissLimit: row.consecutive_miss_limit || 0,
         memberCount: row.member_count || row.memberCount || 0,
+        pendingCount: row.pending_count || row.pendingCount || 0,
         totalDuration: row.total_duration || row.totalDuration || 0,
         todayDuration: row.today_duration || row.todayDuration || 0,
         myStatus: row.my_status || null,
         myRole: row.my_role || null,
         myWarningMessage: row.my_warning_message || null,
         createdAt: row.created_at || null
+    };
+}
+
+function parseGroupSearchQuery(query) {
+    const raw = (query || '').trim();
+    if (!raw) {
+        return { text: '', groupId: null };
+    }
+
+    const normalized = raw.startsWith('#') ? raw.slice(1).trim() : raw;
+    const numericId = /^\d+$/.test(normalized) ? asInt(normalized) : null;
+
+    return {
+        text: raw,
+        groupId: numericId && numericId > 0 ? numericId : null
     };
 }
 
@@ -440,16 +456,25 @@ export async function handleGetMeditationGroups(request, env, db) {
         await refreshGroupsForUser(db, auth.username);
 
         const url = new URL(request.url);
-        const query = (url.searchParams.get('query') || '').trim();
+        const search = parseGroupSearchQuery(url.searchParams.get('query') || '');
         const requestedLimit = parseInt(url.searchParams.get('limit') || '30');
         const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 50) : 30;
         const today = formatDate(new Date());
         const params = [today, auth.username];
         let whereClause = '';
 
-        if (query) {
-            whereClause = `WHERE g.name LIKE ? OR g.description LIKE ?`;
-            params.push(`%${query}%`, `%${query}%`);
+        if (search.text) {
+            whereClause = `
+        WHERE g.name LIKE ?
+           OR g.description LIKE ?
+           OR g.owner_username LIKE ?
+           OR COALESCE(owner.nickname, '') LIKE ?
+      `;
+            params.push(`%${search.text}%`, `%${search.text}%`, `%${search.text}%`, `%${search.text}%`);
+            if (search.groupId) {
+                whereClause += ` OR g.id = ?`;
+                params.push(search.groupId);
+            }
         }
 
         params.push(limit);
@@ -461,6 +486,11 @@ export async function handleGetMeditationGroups(request, env, db) {
         my.status as my_status,
         my.role as my_role,
         my.warning_message as my_warning_message,
+        (
+          SELECT COUNT(*)
+          FROM meditation_group_members m
+          WHERE m.group_id = g.id AND m.status = 'pending'
+        ) as pending_count,
         (
           SELECT COUNT(*)
           FROM meditation_group_members m
