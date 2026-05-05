@@ -46,7 +46,7 @@ function serializeUser(user) {
   return {
     username: user.username,
     email: user.email || '',
-    nickname: user.username,
+    nickname: user.nickname || user.username,
     avatar: user.avatar || user.alipay_avatar || user.wechat_headimgurl || null,
     phoneNumber: user.phone_number || null,
     firebaseUid: user.firebase_uid || null,

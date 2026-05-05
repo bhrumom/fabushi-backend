@@ -32,7 +32,7 @@ export async function handleCheckAdminStatus(request, env, db) {
     isAdmin: isAdmin(user.email),
     email: user.email,
     username: user.username,
-    nickname: user.username,
+    nickname: user.nickname || user.username,
     avatar: user.avatar || user.alipay_avatar || user.wechat_headimgurl || null,
     phoneNumber: user.phone_number || null,
     firebaseUid: user.firebase_uid || null,

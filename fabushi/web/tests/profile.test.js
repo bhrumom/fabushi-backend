@@ -160,6 +160,7 @@ test('handleUpdateProfile migrates username changes without direct in-place user
   const payload = await response.json();
   assert.equal(payload.success, true);
   assert.equal(payload.user.username, 'newname');
+  assert.equal(payload.user.nickname, 'newname');
   assert.ok(payload.token);
 
   assert.equal(db.users.has('oldname'), false);
