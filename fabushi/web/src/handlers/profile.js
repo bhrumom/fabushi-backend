@@ -97,13 +97,38 @@ async function safeRun(db, sql, ...params) {
 }
 
 async function updateUsernameReferences(db, oldUsername, newUsername) {
-  await safeRun(db, 'UPDATE email_username_mapping SET username = ? WHERE username = ?', newUsername, oldUsername);
-  await safeRun(db, 'UPDATE alipay_bindings SET username = ? WHERE username = ?', newUsername, oldUsername);
-  await safeRun(db, 'UPDATE purchase_history SET user_id = ? WHERE user_id = ?', newUsername, oldUsername);
-  await safeRun(db, 'UPDATE redeem_history SET username = ? WHERE username = ?', newUsername, oldUsername);
-  await safeRun(db, 'UPDATE meditation_records SET username = ? WHERE username = ?', newUsername, oldUsername);
-  await safeRun(db, 'UPDATE likes SET username = ? WHERE username = ?', newUsername, oldUsername);
-  await safeRun(db, 'UPDATE favorites SET username = ? WHERE username = ?', newUsername, oldUsername);
+  const updates = [
+    ['UPDATE email_username_mapping SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE alipay_bindings SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE orders SET user_id = ? WHERE user_id = ?', newUsername, oldUsername],
+    ['UPDATE orders SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE purchase_history SET user_id = ? WHERE user_id = ?', newUsername, oldUsername],
+    ['UPDATE purchase_history SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE redeem_history SET user_id = ? WHERE user_id = ?', newUsername, oldUsername],
+    ['UPDATE redeem_history SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE memberships SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE meditation_records SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE meditation_goals SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE meditation_settings SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE meditation_group_members SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE meditation_groups SET owner_username = ? WHERE owner_username = ?', newUsername, oldUsername],
+    ['UPDATE user_follows SET follower_username = ? WHERE follower_username = ?', newUsername, oldUsername],
+    ['UPDATE user_follows SET following_username = ? WHERE following_username = ?', newUsername, oldUsername],
+    ['UPDATE notifications SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE notifications SET related_username = ? WHERE related_username = ?', newUsername, oldUsername],
+    ['UPDATE sync_log SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE user_sync_state SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE comments SET user_id = ? WHERE user_id = ?', newUsername, oldUsername],
+    ['UPDATE comments SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE likes SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE favorites SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE content_likes SET username = ? WHERE username = ?', newUsername, oldUsername],
+    ['UPDATE content_favorites SET username = ? WHERE username = ?', newUsername, oldUsername]
+  ];
+
+  for (const [sql, ...params] of updates) {
+    await safeRun(db, sql, ...params);
+  }
 }
 
 async function applyEmailMapping(db, oldEmail, newEmail, username) {
@@ -160,6 +185,183 @@ async function uploadAvatarObject(request, env, username, imageBase64, fileName,
   return avatarUrlFor(request, key);
 }
 
+function migrationPlaceholderEmail(username) {
+  const normalized = String(username || 'user').replace(/[^a-zA-Z0-9._-]/g, '-');
+  return `${normalized}__rename__${Date.now()}@local.invalid`;
+}
+
+function getFinalProfileState(user, {
+  targetUsername,
+  newEmail,
+  newPhone,
+  finalAvatar,
+  passwordCreds,
+  practiceTitle,
+  practiceFilePath,
+  practiceSelectedAt,
+  updatedAt
+}) {
+  const email = newEmail !== undefined ? newEmail : normalizeOptionalString(user.email);
+  const phone = newPhone !== undefined ? newPhone : normalizeOptionalString(user.phone_number);
+  const practiceChanged = practiceTitle !== undefined;
+
+  return {
+    username: targetUsername,
+    email,
+    password_hash: passwordCreds?.passwordHash ?? user.password_hash ?? null,
+    salt: passwordCreds?.salt ?? user.salt ?? null,
+    iterations: passwordCreds?.iterations ?? user.iterations ?? null,
+    algo: passwordCreds?.algo ?? user.algo ?? null,
+    email_verified: newEmail !== undefined
+      ? (email ? 1 : 0)
+      : (user.email_verified ?? 0),
+    alipay_user_id: normalizeOptionalString(user.alipay_user_id),
+    alipay_nickname: normalizeOptionalString(user.alipay_nickname),
+    alipay_avatar: normalizeOptionalString(user.alipay_avatar),
+    alipay_bound_at: normalizeOptionalString(user.alipay_bound_at),
+    wechat_openid: normalizeOptionalString(user.wechat_openid),
+    wechat_nickname: normalizeOptionalString(user.wechat_nickname),
+    wechat_headimgurl: normalizeOptionalString(user.wechat_headimgurl),
+    wechat_bound_at: normalizeOptionalString(user.wechat_bound_at),
+    phone_number: phone,
+    firebase_uid: normalizeOptionalString(user.firebase_uid),
+    apple_user_id: normalizeOptionalString(user.apple_user_id),
+    nickname: targetUsername,
+    avatar: finalAvatar !== undefined ? finalAvatar : normalizeOptionalString(user.avatar),
+    bio: normalizeOptionalString(user.bio),
+    main_practice_title: practiceChanged
+      ? (practiceTitle ?? null)
+      : normalizeOptionalString(user.main_practice_title),
+    main_practice_file_path: practiceChanged
+      ? (practiceTitle ? practiceFilePath ?? null : null)
+      : normalizeOptionalString(user.main_practice_file_path),
+    main_practice_selected_at: practiceChanged
+      ? (practiceTitle ? practiceSelectedAt : null)
+      : normalizeOptionalString(user.main_practice_selected_at),
+    membership_type: user.membership_type || 'expired',
+    membership_expires_at: normalizeOptionalString(user.membership_expires_at),
+    free_trial_end_date: normalizeOptionalString(user.free_trial_end_date),
+    stripe_customer_id: normalizeOptionalString(user.stripe_customer_id),
+    subscription_id: normalizeOptionalString(user.subscription_id),
+    total_transferred_bytes: user.total_transferred_bytes ?? 0,
+    last_transfer_at: normalizeOptionalString(user.last_transfer_at),
+    sync_version: user.sync_version ?? 1,
+    extra_data: normalizeOptionalString(user.extra_data),
+    created_at: user.created_at,
+    updated_at: updatedAt
+  };
+}
+
+async function runInTransaction(db, action) {
+  await db.prepare('BEGIN TRANSACTION').run();
+  try {
+    const result = await action();
+    await db.prepare('COMMIT').run();
+    return result;
+  } catch (error) {
+    try {
+      await db.prepare('ROLLBACK').run();
+    } catch (rollbackError) {
+      console.warn('回滚资料更新事务失败:', rollbackError?.message || rollbackError);
+    }
+    throw error;
+  }
+}
+
+async function migrateUsernameChange(db, user, {
+  oldUsername,
+  targetUsername,
+  newEmail,
+  newPhone,
+  finalAvatar,
+  passwordCreds,
+  practiceTitle,
+  practiceFilePath,
+  practiceSelectedAt,
+  updatedAt
+}) {
+  const finalState = getFinalProfileState(user, {
+    targetUsername,
+    newEmail,
+    newPhone,
+    finalAvatar,
+    passwordCreds,
+    practiceTitle,
+    practiceFilePath,
+    practiceSelectedAt,
+    updatedAt
+  });
+
+  await runInTransaction(db, async () => {
+    await db.prepare(`
+      UPDATE users
+      SET email = ?, phone_number = NULL, firebase_uid = NULL, apple_user_id = NULL,
+          alipay_user_id = NULL, wechat_openid = NULL, updated_at = ?
+      WHERE username = ?
+    `).bind(
+      migrationPlaceholderEmail(oldUsername),
+      updatedAt,
+      oldUsername
+    ).run();
+
+    await db.prepare(`
+      INSERT INTO users (
+        username, email, password_hash, salt, iterations, algo, email_verified,
+        alipay_user_id, alipay_nickname, alipay_avatar, alipay_bound_at,
+        wechat_openid, wechat_nickname, wechat_headimgurl, wechat_bound_at,
+        phone_number, firebase_uid, apple_user_id,
+        nickname, avatar, bio,
+        main_practice_title, main_practice_file_path, main_practice_selected_at,
+        membership_type, membership_expires_at, free_trial_end_date,
+        stripe_customer_id, subscription_id,
+        total_transferred_bytes, last_transfer_at,
+        sync_version, extra_data,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      finalState.username,
+      finalState.email,
+      finalState.password_hash,
+      finalState.salt,
+      finalState.iterations,
+      finalState.algo,
+      finalState.email_verified,
+      finalState.alipay_user_id,
+      finalState.alipay_nickname,
+      finalState.alipay_avatar,
+      finalState.alipay_bound_at,
+      finalState.wechat_openid,
+      finalState.wechat_nickname,
+      finalState.wechat_headimgurl,
+      finalState.wechat_bound_at,
+      finalState.phone_number,
+      finalState.firebase_uid,
+      finalState.apple_user_id,
+      finalState.nickname,
+      finalState.avatar,
+      finalState.bio,
+      finalState.main_practice_title,
+      finalState.main_practice_file_path,
+      finalState.main_practice_selected_at,
+      finalState.membership_type,
+      finalState.membership_expires_at,
+      finalState.free_trial_end_date,
+      finalState.stripe_customer_id,
+      finalState.subscription_id,
+      finalState.total_transferred_bytes,
+      finalState.last_transfer_at,
+      finalState.sync_version,
+      finalState.extra_data,
+      finalState.created_at,
+      finalState.updated_at
+    ).run();
+
+    await updateUsernameReferences(db, oldUsername, targetUsername);
+    await applyEmailMapping(db, user.email, finalState.email, targetUsername);
+    await db.prepare('DELETE FROM users WHERE username = ?').bind(oldUsername).run();
+  });
+}
+
 export async function handleUploadAvatar(request, env, db) {
   try {
     const auth = await authenticate(request, env, db);
@@ -207,68 +409,49 @@ export async function handleUpdateProfile(request, env, db) {
 
     const oldUsername = auth.user.username;
     const targetUsername = newUsername || oldUsername;
+    const usernameChanged = targetUsername !== oldUsername;
     const updates = [];
     const values = [];
-    let usernameChanged = false;
+    const updatedAt = new Date().toISOString();
 
     if (newUsername !== undefined && newUsername !== oldUsername) {
       const existingUser = await db.getUser(newUsername);
       if (existingUser) {
         return jsonResponse({ error: '用户名已存在' }, 400);
       }
-      updates.push('username = ?');
-      values.push(newUsername);
-      updates.push('nickname = ?');
-      values.push(newUsername);
-      usernameChanged = true;
-    } else if (newUsername !== undefined) {
-      updates.push('nickname = ?');
-      values.push(newUsername);
     }
 
-    if (newEmail !== undefined) {
-      if (newEmail) {
-        const existingEmailUser = await db.getUserByEmail(newEmail);
-        if (existingEmailUser && existingEmailUser.username !== oldUsername) {
-          return jsonResponse({ error: '该邮箱已被其他账号使用' }, 400);
-        }
+    if (newEmail !== undefined && newEmail) {
+      const existingEmailUser = await db.getUserByEmail(newEmail);
+      if (existingEmailUser && existingEmailUser.username !== oldUsername) {
+        return jsonResponse({ error: '该邮箱已被其他账号使用' }, 400);
       }
-      updates.push('email = ?');
-      values.push(newEmail || '');
-      updates.push('email_verified = ?');
-      values.push(newEmail ? 1 : 0);
     }
 
-    if (newPhone !== undefined) {
-      if (newPhone) {
-        const existingPhoneUser = await db.getUserByPhone(newPhone);
-        if (existingPhoneUser && existingPhoneUser.username !== oldUsername) {
-          return jsonResponse({ error: '该手机号已被其他账号使用' }, 400);
-        }
+    if (newPhone !== undefined && newPhone) {
+      const existingPhoneUser = await db.getUserByPhone(newPhone);
+      if (existingPhoneUser && existingPhoneUser.username !== oldUsername) {
+        return jsonResponse({ error: '该手机号已被其他账号使用' }, 400);
       }
-      updates.push('phone_number = ?');
-      values.push(newPhone);
     }
 
+    let finalAvatar;
     if (body.avatar !== undefined) {
-      const avatar = normalizeOptionalString(body.avatar);
-      updates.push('avatar = ?');
-      values.push(avatar);
+      finalAvatar = normalizeOptionalString(body.avatar);
     }
 
     if (body.avatarData?.imageBase64) {
-      const avatarUrl = await uploadAvatarObject(
+      finalAvatar = await uploadAvatarObject(
         request,
         env,
-        oldUsername,
+        targetUsername,
         body.avatarData.imageBase64,
         body.avatarData.fileName,
         body.avatarData.contentType
       );
-      updates.push('avatar = ?');
-      values.push(avatarUrl);
     }
 
+    let passwordCreds;
     if (body.password !== undefined && String(body.password).length > 0) {
       const hasPassword = Boolean(auth.user.password_hash && auth.user.salt);
       if (hasPassword) {
@@ -278,15 +461,41 @@ export async function handleUpdateProfile(request, env, db) {
       if (password.length < 6 || password.length > 128) {
         return jsonResponse({ error: '密码长度需为 6-128 位' }, 400);
       }
-      const creds = await createPasswordHash(password);
-      updates.push('password_hash = ?', 'salt = ?', 'iterations = ?', 'algo = ?');
-      values.push(creds.passwordHash, creds.salt, creds.iterations, creds.algo);
+      passwordCreds = await createPasswordHash(password);
     }
 
     const mainPractice = body.mainPractice;
     const practiceTitle = mainPractice?.title ?? body.mainPracticeTitle;
     const practiceFilePath = mainPractice?.filePath ?? body.mainPracticeFilePath;
-    const practiceSelectedAt = mainPractice?.selectedAt ?? new Date().toISOString();
+    const practiceSelectedAt = mainPractice?.selectedAt ?? updatedAt;
+
+    if (!usernameChanged && newUsername !== undefined) {
+      updates.push('nickname = ?');
+      values.push(newUsername);
+    }
+
+    if (newEmail !== undefined) {
+      updates.push('email = ?');
+      values.push(newEmail || '');
+      updates.push('email_verified = ?');
+      values.push(newEmail ? 1 : 0);
+    }
+
+    if (newPhone !== undefined) {
+      updates.push('phone_number = ?');
+      values.push(newPhone);
+    }
+
+    if (finalAvatar !== undefined) {
+      updates.push('avatar = ?');
+      values.push(finalAvatar);
+    }
+
+    if (passwordCreds) {
+      updates.push('password_hash = ?', 'salt = ?', 'iterations = ?', 'algo = ?');
+      values.push(passwordCreds.passwordHash, passwordCreds.salt, passwordCreds.iterations, passwordCreds.algo);
+    }
+
     if (practiceTitle !== undefined) {
       updates.push('main_practice_title = ?');
       values.push(practiceTitle);
@@ -296,24 +505,33 @@ export async function handleUpdateProfile(request, env, db) {
       values.push(practiceTitle ? practiceSelectedAt : null);
     }
 
-    if (updates.length === 0) {
+    if (!usernameChanged && updates.length === 0) {
       return jsonResponse({ message: '没有需要更新的字段', user: serializeUser(auth.user) });
     }
 
-    updates.push('updated_at = ?');
-    values.push(new Date().toISOString());
-    values.push(oldUsername);
-
-    await db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE username = ?`).bind(...values).run();
-
-    if (newEmail !== undefined) {
-      await applyEmailMapping(db, auth.user.email, newEmail, targetUsername);
-    } else if (usernameChanged && auth.user.email) {
-      await applyEmailMapping(db, auth.user.email, auth.user.email.toLowerCase(), targetUsername);
-    }
-
     if (usernameChanged) {
-      await updateUsernameReferences(db, oldUsername, targetUsername);
+      await migrateUsernameChange(db, auth.user, {
+        oldUsername,
+        targetUsername,
+        newEmail,
+        newPhone,
+        finalAvatar,
+        passwordCreds,
+        practiceTitle,
+        practiceFilePath,
+        practiceSelectedAt,
+        updatedAt
+      });
+    } else {
+      updates.push('updated_at = ?');
+      values.push(updatedAt);
+      values.push(oldUsername);
+
+      await db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE username = ?`).bind(...values).run();
+
+      if (newEmail !== undefined) {
+        await applyEmailMapping(db, auth.user.email, newEmail, targetUsername);
+      }
     }
 
     const updatedUser = await db.getUser(targetUsername);
