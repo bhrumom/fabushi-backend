@@ -110,168 +110,170 @@ function createDbMock(options = {}) {
   return db;
 }
 
-test('handleUpdateProfile migrates username changes without direct in-place username update', async () => {
-  const db = createDbMock();
-  db.users.set('oldname', {
-    username: 'oldname',
-    email: 'old@example.com',
-    password_hash: '',
-    salt: '',
-    iterations: 0,
-    algo: '',
-    email_verified: 1,
-    alipay_user_id: null,
-    alipay_nickname: null,
-    alipay_avatar: null,
-    alipay_bound_at: null,
-    wechat_openid: null,
-    wechat_nickname: null,
-    wechat_headimgurl: null,
-    wechat_bound_at: null,
-    phone_number: '+8613800138000',
-    firebase_uid: 'firebase-uid-1',
-    apple_user_id: null,
-    nickname: 'oldname',
-    avatar: 'https://example.com/avatar.png',
-    bio: null,
-    main_practice_title: '心经',
-    main_practice_file_path: '/sutras/xinjing.md',
-    main_practice_selected_at: '2026-05-01T00:00:00Z',
-    membership_type: 'trial',
-    membership_expires_at: null,
-    free_trial_end_date: '2026-05-31T00:00:00Z',
-    stripe_customer_id: null,
-    subscription_id: null,
-    total_transferred_bytes: 123,
-    last_transfer_at: '2026-05-04T00:00:00Z',
-    sync_version: 7,
-    extra_data: null,
-    created_at: '2026-05-01T00:00:00Z',
-    updated_at: '2026-05-04T00:00:00Z'
-  });
-  db.emailMapping.set('old@example.com', 'oldname');
-
-  const env = { JWT_SECRET: 'test-secret' };
-  const token = await generateToken('oldname', env);
-  const request = new Request('https://flutter.ombhrum.com/api/auth/update-profile', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      username: 'newname',
+test.describe('handleUpdateProfile transaction regressions', { concurrency: false }, () => {
+  test('handleUpdateProfile migrates username changes without direct in-place username update', async () => {
+    const db = createDbMock();
+    db.users.set('oldname', {
+      username: 'oldname',
       email: 'old@example.com',
-      phoneNumber: '+8613800138000'
-    })
-  });
+      password_hash: '',
+      salt: '',
+      iterations: 0,
+      algo: '',
+      email_verified: 1,
+      alipay_user_id: null,
+      alipay_nickname: null,
+      alipay_avatar: null,
+      alipay_bound_at: null,
+      wechat_openid: null,
+      wechat_nickname: null,
+      wechat_headimgurl: null,
+      wechat_bound_at: null,
+      phone_number: '+8613800138000',
+      firebase_uid: 'firebase-uid-1',
+      apple_user_id: null,
+      nickname: 'oldname',
+      avatar: 'https://example.com/avatar.png',
+      bio: null,
+      main_practice_title: '心经',
+      main_practice_file_path: '/sutras/xinjing.md',
+      main_practice_selected_at: '2026-05-01T00:00:00Z',
+      membership_type: 'trial',
+      membership_expires_at: null,
+      free_trial_end_date: '2026-05-31T00:00:00Z',
+      stripe_customer_id: null,
+      subscription_id: null,
+      total_transferred_bytes: 123,
+      last_transfer_at: '2026-05-04T00:00:00Z',
+      sync_version: 7,
+      extra_data: null,
+      created_at: '2026-05-01T00:00:00Z',
+      updated_at: '2026-05-04T00:00:00Z'
+    });
+    db.emailMapping.set('old@example.com', 'oldname');
 
-  const response = await handleUpdateProfile(request, env, db);
-  assert.equal(response.status, 200);
+    const env = { JWT_SECRET: 'test-secret' };
+    const token = await generateToken('oldname', env);
+    const request = new Request('https://flutter.ombhrum.com/api/auth/update-profile', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        username: 'newname',
+        email: 'old@example.com',
+        phoneNumber: '+8613800138000'
+      })
+    });
 
-  const payload = await response.json();
-  assert.equal(payload.success, true);
-  assert.equal(payload.user.username, 'newname');
-  assert.equal(payload.user.nickname, 'newname');
-  assert.ok(payload.token);
+    const response = await handleUpdateProfile(request, env, db);
+    assert.equal(response.status, 200);
 
-  assert.equal(db.users.has('oldname'), false);
-  assert.equal(db.users.has('newname'), true);
-  assert.equal(db.users.get('newname').email, 'old@example.com');
-  assert.equal(db.users.get('newname').phone_number, '+8613800138000');
-  assert.equal(db.users.get('newname').firebase_uid, 'firebase-uid-1');
-  assert.equal(db.emailMapping.get('old@example.com'), 'newname');
+    const payload = await response.json();
+    assert.equal(payload.success, true);
+    assert.equal(payload.user.username, 'newname');
+    assert.equal(payload.user.nickname, 'newname');
+    assert.ok(payload.token);
 
-  const directUsernameUpdate = db.statements.find(({ sql }) =>
-    sql.startsWith('UPDATE users SET') && sql.includes('username = ?')
-  );
-  assert.equal(directUsernameUpdate, undefined);
+    assert.equal(db.users.has('oldname'), false);
+    assert.equal(db.users.has('newname'), true);
+    assert.equal(db.users.get('newname').email, 'old@example.com');
+    assert.equal(db.users.get('newname').phone_number, '+8613800138000');
+    assert.equal(db.users.get('newname').firebase_uid, 'firebase-uid-1');
+    assert.equal(db.emailMapping.get('old@example.com'), 'newname');
 
-  const expectedReferenceUpdates = [
-    'UPDATE comments SET user_id = ? WHERE user_id = ?',
-    'UPDATE content_likes SET user_id = ? WHERE user_id = ?',
-    'UPDATE user_practice_privacy SET username = ? WHERE username = ?',
-    'UPDATE content_reports SET reporter_user_id = ? WHERE reporter_user_id = ?',
-    'UPDATE user_blocks SET blocked_user_id = ? WHERE blocked_user_id = ?'
-  ];
-
-  for (const expectedSql of expectedReferenceUpdates) {
-    assert.ok(
-      db.statements.some(({ sql }) => sql === expectedSql),
-      `missing migration statement: ${expectedSql}`
+    const directUsernameUpdate = db.statements.find(({ sql }) =>
+      sql.startsWith('UPDATE users SET') && sql.includes('username = ?')
     );
-  }
-});
+    assert.equal(directUsernameUpdate, undefined);
 
-test('handleUpdateProfile prefers native storage transactions when available', async () => {
-  const db = createDbMock({ nativeTransaction: true });
-  db.users.set('nativeold', {
-    username: 'nativeold',
-    email: 'native@example.com',
-    password_hash: '',
-    salt: '',
-    iterations: 0,
-    algo: '',
-    email_verified: 1,
-    alipay_user_id: null,
-    alipay_nickname: null,
-    alipay_avatar: null,
-    alipay_bound_at: null,
-    wechat_openid: null,
-    wechat_nickname: null,
-    wechat_headimgurl: null,
-    wechat_bound_at: null,
-    phone_number: '+8613800138111',
-    firebase_uid: 'firebase-native-uid',
-    apple_user_id: null,
-    nickname: 'nativeold',
-    avatar: null,
-    bio: null,
-    main_practice_title: null,
-    main_practice_file_path: null,
-    main_practice_selected_at: null,
-    membership_type: 'trial',
-    membership_expires_at: null,
-    free_trial_end_date: '2026-05-31T00:00:00Z',
-    stripe_customer_id: null,
-    subscription_id: null,
-    total_transferred_bytes: 0,
-    last_transfer_at: null,
-    sync_version: 1,
-    extra_data: null,
-    created_at: '2026-05-01T00:00:00Z',
-    updated_at: '2026-05-04T00:00:00Z'
+    const expectedReferenceUpdates = [
+      'UPDATE comments SET user_id = ? WHERE user_id = ?',
+      'UPDATE content_likes SET user_id = ? WHERE user_id = ?',
+      'UPDATE user_practice_privacy SET username = ? WHERE username = ?',
+      'UPDATE content_reports SET reporter_user_id = ? WHERE reporter_user_id = ?',
+      'UPDATE user_blocks SET blocked_user_id = ? WHERE blocked_user_id = ?'
+    ];
+
+    for (const expectedSql of expectedReferenceUpdates) {
+      assert.ok(
+        db.statements.some(({ sql }) => sql === expectedSql),
+        `missing migration statement: ${expectedSql}`
+      );
+    }
   });
-  db.emailMapping.set('native@example.com', 'nativeold');
 
-  const env = { JWT_SECRET: 'test-secret' };
-  const token = await generateToken('nativeold', env);
-  const request = new Request('https://flutter.ombhrum.com/api/auth/update-profile', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      username: 'nativenew',
+  test('handleUpdateProfile prefers native storage transactions when available', async () => {
+    const db = createDbMock({ nativeTransaction: true });
+    db.users.set('nativeold', {
+      username: 'nativeold',
       email: 'native@example.com',
-      phoneNumber: '+8613800138111'
-    })
+      password_hash: '',
+      salt: '',
+      iterations: 0,
+      algo: '',
+      email_verified: 1,
+      alipay_user_id: null,
+      alipay_nickname: null,
+      alipay_avatar: null,
+      alipay_bound_at: null,
+      wechat_openid: null,
+      wechat_nickname: null,
+      wechat_headimgurl: null,
+      wechat_bound_at: null,
+      phone_number: '+8613800138111',
+      firebase_uid: 'firebase-native-uid',
+      apple_user_id: null,
+      nickname: 'nativeold',
+      avatar: null,
+      bio: null,
+      main_practice_title: null,
+      main_practice_file_path: null,
+      main_practice_selected_at: null,
+      membership_type: 'trial',
+      membership_expires_at: null,
+      free_trial_end_date: '2026-05-31T00:00:00Z',
+      stripe_customer_id: null,
+      subscription_id: null,
+      total_transferred_bytes: 0,
+      last_transfer_at: null,
+      sync_version: 1,
+      extra_data: null,
+      created_at: '2026-05-01T00:00:00Z',
+      updated_at: '2026-05-04T00:00:00Z'
+    });
+    db.emailMapping.set('native@example.com', 'nativeold');
+
+    const env = { JWT_SECRET: 'test-secret' };
+    const token = await generateToken('nativeold', env);
+    const request = new Request('https://flutter.ombhrum.com/api/auth/update-profile', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        username: 'nativenew',
+        email: 'native@example.com',
+        phoneNumber: '+8613800138111'
+      })
+    });
+
+    const response = await handleUpdateProfile(request, env, db);
+    assert.equal(response.status, 200);
+
+    const payload = await response.json();
+    assert.equal(payload.success, true);
+    assert.equal(payload.user.username, 'nativenew');
+    assert.ok(payload.token);
+    assert.equal(db.users.has('nativeold'), false);
+    assert.equal(db.users.has('nativenew'), true);
+    assert.equal(db.emailMapping.get('native@example.com'), 'nativenew');
+    assert.ok(db.statements.some(({ sql }) => sql === '__native_transaction__'));
+    assert.equal(
+      db.statements.some(({ sql }) => /^BEGIN TRANSACTION|^COMMIT|^ROLLBACK/.test(sql.trimStart())),
+      false
+    );
   });
-
-  const response = await handleUpdateProfile(request, env, db);
-  assert.equal(response.status, 200);
-
-  const payload = await response.json();
-  assert.equal(payload.success, true);
-  assert.equal(payload.user.username, 'nativenew');
-  assert.ok(payload.token);
-  assert.equal(db.users.has('nativeold'), false);
-  assert.equal(db.users.has('nativenew'), true);
-  assert.equal(db.emailMapping.get('native@example.com'), 'nativenew');
-  assert.ok(db.statements.some(({ sql }) => sql === '__native_transaction__'));
-  assert.equal(
-    db.statements.some(({ sql }) => /^BEGIN TRANSACTION|^COMMIT|^ROLLBACK/.test(sql.trimStart())),
-    false
-  );
 });
