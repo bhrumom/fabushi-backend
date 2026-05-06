@@ -1,11 +1,8 @@
 -- Managed D1 migration for co-practice groups.
--- This keeps the production/staging deploy workflow in sync with the
--- meditation group endpoints shipped in the Worker.
-
-ALTER TABLE meditation_records ADD COLUMN local_time TEXT;
-ALTER TABLE meditation_records ADD COLUMN timezone_offset_minutes INTEGER;
-ALTER TABLE meditation_records ADD COLUMN start_time TEXT;
-ALTER TABLE meditation_records ADD COLUMN end_time TEXT;
+-- The meditation_records local-time columns already live in schema_v2.sql and
+-- the legacy one-off migration file. Keep the release-managed migration limited
+-- to table and index creation so CD can run safely on databases where those
+-- columns already exist.
 
 CREATE TABLE IF NOT EXISTS meditation_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
