@@ -2,6 +2,10 @@
 export class DatabaseService {
   constructor(db) {
     this.db = db;
+    this.state = db?.state;
+    if (typeof db?.transaction === 'function') {
+      this.transaction = db.transaction.bind(db);
+    }
   }
 
   // 直接暴露 prepare 方法，允许处理器直接调用 db.prepare()
