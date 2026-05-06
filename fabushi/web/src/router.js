@@ -16,7 +16,7 @@ import { handleToggleLike, handleGetLikeCount, handleBatchGetLikeCounts, handleG
 import { handleToggleFavorite, handleGetMyFavorites, handleBatchCheckFavorites } from './handlers/favorites.js';
 import { handleBatchGetContentStats } from './handlers/content-stats.js';
 import { handleOnlineJoin, handleOnlineHeartbeat, handleOnlineLeave, handleOnlineCount } from './handlers/online.js';
-import { handleSyncRecord, handleGetRecords, handleGetStats, handleGetWeeklyStats, handleGetMonthlyStats, handleSetGoal, handleGetGoals, handleMeditationSettings, handleGetMeditationGroups, handleCreateMeditationGroup, handleJoinMeditationGroup, handleGetMeditationGroupDetail, handleReviewMeditationGroupJoin } from './handlers/meditation.js';
+import { handleSyncRecord, handleGetRecords, handleUpdateRecord, handleDeleteRecord, handleGetStats, handleGetWeeklyStats, handleGetMonthlyStats, handleSetGoal, handleGetGoals, handleMeditationSettings, handleGetMeditationGroups, handleCreateMeditationGroup, handleJoinMeditationGroup, handleGetMeditationGroupDetail, handleReviewMeditationGroupJoin } from './handlers/meditation.js';
 import { handleGetSyncData, handlePushSyncData, handleGetSyncState } from './handlers/sync.js';
 import { handleToggleFollow, handleGetFollowList, handleGetFollowSummary, handleGetPracticePrivacy, handleUpdatePracticePrivacy } from './handlers/social.js';
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
@@ -148,6 +148,8 @@ export async function route(request, env, db, ctx) {
   // 修行记录API
   if (pathname === '/api/meditation/record' && method === 'POST') return await handleSyncRecord(request, env, db);
   if (pathname === '/api/meditation/records' && method === 'GET') return await handleGetRecords(request, env, db);
+  if (pathname === '/api/meditation/records' && method === 'PUT') return await handleUpdateRecord(request, env, db);
+  if (pathname === '/api/meditation/records' && method === 'DELETE') return await handleDeleteRecord(request, env, db);
   if (pathname === '/api/meditation/stats' && method === 'GET') return await handleGetStats(request, env, db);
   if (pathname === '/api/meditation/weekly' && method === 'GET') return await handleGetWeeklyStats(request, env, db);
   if (pathname === '/api/meditation/monthly' && method === 'GET') return await handleGetMonthlyStats(request, env, db);

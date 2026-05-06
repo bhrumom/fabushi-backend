@@ -60,6 +60,56 @@ function daysBetween(startDate, endDate) {
     return Math.max(0, Math.floor((end - start) / 86400000) + 1);
 }
 
+async function getNextSyncVersion(db, username) {
+    const versionResult = await db.prepare(`
+      SELECT COALESCE(MAX(sync_version), 0) + 1 as next_version FROM (
+        SELECT MAX(sync_version) as sync_version FROM content_likes WHERE username = ?
+        UNION ALL
+        SELECT MAX(sync_version) as sync_version FROM comments WHERE username = ?
+        UNION ALL
+        SELECT MAX(sync_version) as sync_version FROM meditation_records WHERE username = ?
+        UNION ALL
+        SELECT MAX(sync_version) as sync_version FROM meditation_goals WHERE username = ?
+        UNION ALL
+        SELECT MAX(sync_version) as sync_version FROM user_follows WHERE follower_username = ?
+      )
+    `).bind(username, username, username, username, username).first();
+
+    return versionResult?.next_version || 1;
+}
+
+async function clearPracticeCaches(env) {
+    await Promise.allSettled([
+        env.USERS_KV?.delete('leaderboard:cache'),
+        env.USERS_KV?.delete('leaderboard:cache:v2'),
+        env.USERS_KV?.delete('leaderboard:practice:v2'),
+        env.USERS_KV?.delete('leaderboard:practice:v3'),
+        env.USERS_KV?.delete('leaderboard:practice:v4')
+    ]);
+}
+
+async function updateGoalProgress(db, username, sutraName, delta, syncVersion, now) {
+    if (!sutraName || !delta) {
+        return;
+    }
+
+    await db.prepare(`
+      UPDATE meditation_goals
+      SET current_count = CASE
+            WHEN current_count + ? < 0 THEN 0
+            ELSE current_count + ?
+          END,
+          updated_at = ?,
+          sync_version = ?
+      WHERE username = ? AND sutra_name = ? AND status = 'active'
+    `).bind(delta, delta, now, syncVersion, username, sutraName).run();
+}
+
+function resolveRecordId(request, body = null) {
+    const url = new URL(request.url);
+    return asInt(url.searchParams.get('id') || body?.id);
+}
+
 async function ensureOwnerMembershipActive(db, groupId, ownerUsername = null) {
     const resolvedOwnerUsername = ownerUsername || (await db.prepare(`
       SELECT owner_username
@@ -317,20 +367,7 @@ export async function handleSyncRecord(request, env, db) {
         const now = new Date().toISOString();
         const date = recordDate || now.split('T')[0];
         const localClock = parseLocalTime(localTime, new Date());
-        const versionResult = await db.prepare(`
-      SELECT COALESCE(MAX(sync_version), 0) + 1 as next_version FROM (
-        SELECT MAX(sync_version) as sync_version FROM content_likes WHERE username = ?
-        UNION ALL
-        SELECT MAX(sync_version) as sync_version FROM comments WHERE username = ?
-        UNION ALL
-        SELECT MAX(sync_version) as sync_version FROM meditation_records WHERE username = ?
-        UNION ALL
-        SELECT MAX(sync_version) as sync_version FROM meditation_goals WHERE username = ?
-        UNION ALL
-        SELECT MAX(sync_version) as sync_version FROM user_follows WHERE follower_username = ?
-      )
-    `).bind(auth.username, auth.username, auth.username, auth.username, auth.username).first();
-        const nextVersion = versionResult?.next_version || 1;
+        const nextVersion = await getNextSyncVersion(db, auth.username);
 
         const insertResult = await db.prepare(`
       INSERT INTO meditation_records (
@@ -365,12 +402,7 @@ export async function handleSyncRecord(request, env, db) {
       WHERE username = ? AND sutra_name = ? AND status = 'active'
     `).bind(chantCount, now, nextVersion + 1, auth.username, sutra).run();
 
-        await Promise.allSettled([
-            env.USERS_KV?.delete('leaderboard:cache'),
-            env.USERS_KV?.delete('leaderboard:practice:v2'),
-            env.USERS_KV?.delete('leaderboard:practice:v3')
-        ]);
-
+        await clearPracticeCaches(env);
         await refreshGroupsForUser(db, auth.username);
 
         return jsonResponse({
@@ -442,6 +474,175 @@ export async function handleGetRecords(request, env, db) {
     } catch (e) {
         console.error('获取修行记录失败:', e);
         return jsonResponse({ success: false, error: '获取记录失败' }, 500);
+    }
+}
+
+// 更新修行记录 PUT /api/meditation/records?id=123
+export async function handleUpdateRecord(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        const body = await request.json();
+        const recordId = resolveRecordId(request, body);
+        if (!recordId) {
+            return jsonResponse({ success: false, error: 'recordId required' }, 400);
+        }
+
+        const existing = await db.prepare(`
+      SELECT id, sutra_name, sutra_source, duration, chant_count, record_date,
+             local_time, timezone_offset_minutes, start_time, end_time,
+             is_manual, notes
+      FROM meditation_records
+      WHERE id = ? AND username = ?
+    `).bind(recordId, auth.username).first();
+
+        if (!existing) {
+            return jsonResponse({ success: false, error: '记录不存在' }, 404);
+        }
+
+        const now = new Date().toISOString();
+        const resolvedSutra = (body.sutra ?? existing.sutra_name ?? '').toString().trim();
+        if (!resolvedSutra) {
+            return jsonResponse({ success: false, error: '功课名称不能为空' }, 400);
+        }
+
+        const resolvedSutraSource = (body.sutraSource ?? existing.sutra_source ?? 'custom').toString();
+        const resolvedDuration = Math.max(0, asInt(body.duration, existing.duration || 0));
+        const resolvedChantCount = Math.max(0, asInt(body.chantCount, existing.chant_count || 0));
+        const resolvedRecordDate = (body.recordDate || existing.record_date || formatDate(new Date())).toString();
+        const resolvedLocalTime = parseLocalTime(body.localTime || existing.local_time, new Date());
+        const resolvedTimezoneOffsetMinutes = body.timezoneOffsetMinutes ?? existing.timezone_offset_minutes ?? null;
+        const resolvedStartTime = body.startTime ?? existing.start_time ?? null;
+        const resolvedEndTime = body.endTime ?? existing.end_time ?? null;
+        const resolvedIsManual = body.isManual === undefined
+            ? (existing.is_manual === 1 || existing.is_manual === true)
+            : body.isManual === true;
+        const resolvedNotes = (body.notes ?? existing.notes ?? '').toString();
+        const nextVersion = await getNextSyncVersion(db, auth.username);
+
+        await db.prepare(`
+      UPDATE meditation_records
+      SET sutra_name = ?,
+          sutra_source = ?,
+          duration = ?,
+          chant_count = ?,
+          record_date = ?,
+          local_time = ?,
+          timezone_offset_minutes = ?,
+          start_time = ?,
+          end_time = ?,
+          is_manual = ?,
+          notes = ?,
+          sync_version = ?
+      WHERE id = ? AND username = ?
+    `).bind(
+            resolvedSutra,
+            resolvedSutraSource,
+            resolvedDuration,
+            resolvedChantCount,
+            resolvedRecordDate,
+            resolvedLocalTime,
+            resolvedTimezoneOffsetMinutes,
+            resolvedStartTime,
+            resolvedEndTime,
+            resolvedIsManual ? 1 : 0,
+            resolvedNotes,
+            nextVersion,
+            recordId,
+            auth.username
+        ).run();
+
+        let goalVersion = nextVersion + 1;
+        if (existing.sutra_name === resolvedSutra) {
+            const delta = resolvedChantCount - (existing.chant_count || 0);
+            await updateGoalProgress(db, auth.username, resolvedSutra, delta, goalVersion, now);
+        } else {
+            await updateGoalProgress(db, auth.username, existing.sutra_name, -(existing.chant_count || 0), goalVersion, now);
+            goalVersion += 1;
+            await updateGoalProgress(db, auth.username, resolvedSutra, resolvedChantCount, goalVersion, now);
+        }
+
+        await clearPracticeCaches(env);
+        await refreshGroupsForUser(db, auth.username);
+
+        return jsonResponse({
+            success: true,
+            message: '修行记录已更新',
+            data: {
+                id: recordId,
+                sutra: resolvedSutra,
+                chantCount: resolvedChantCount,
+                duration: resolvedDuration,
+                recordDate: resolvedRecordDate,
+                localTime: resolvedLocalTime,
+                notes: resolvedNotes,
+            },
+        });
+    } catch (e) {
+        console.error('更新修行记录失败:', e);
+        return jsonResponse({ success: false, error: '更新记录失败: ' + e.message }, 500);
+    }
+}
+
+// 删除修行记录 DELETE /api/meditation/records?id=123
+export async function handleDeleteRecord(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        let body = null;
+        if (request.headers.get('Content-Type')?.includes('application/json')) {
+            try {
+                body = await request.json();
+            } catch (_) {
+                body = null;
+            }
+        }
+
+        const recordId = resolveRecordId(request, body);
+        if (!recordId) {
+            return jsonResponse({ success: false, error: 'recordId required' }, 400);
+        }
+
+        const existing = await db.prepare(`
+      SELECT id, sutra_name, chant_count
+      FROM meditation_records
+      WHERE id = ? AND username = ?
+    `).bind(recordId, auth.username).first();
+
+        if (!existing) {
+            return jsonResponse({ success: false, error: '记录不存在' }, 404);
+        }
+
+        const now = new Date().toISOString();
+        const nextVersion = await getNextSyncVersion(db, auth.username);
+
+        await db.prepare(`
+      DELETE FROM meditation_records
+      WHERE id = ? AND username = ?
+    `).bind(recordId, auth.username).run();
+
+        await updateGoalProgress(
+            db,
+            auth.username,
+            existing.sutra_name,
+            -(existing.chant_count || 0),
+            nextVersion + 1,
+            now,
+        );
+
+        await clearPracticeCaches(env);
+        await refreshGroupsForUser(db, auth.username);
+
+        return jsonResponse({ success: true, message: '修行记录已删除' });
+    } catch (e) {
+        console.error('删除修行记录失败:', e);
+        return jsonResponse({ success: false, error: '删除记录失败: ' + e.message }, 500);
     }
 }
 
