@@ -256,7 +256,23 @@ function getFinalProfileState(user, {
   };
 }
 
+function getNativeTransactionRunner(db) {
+  const storage = db?.state?.storage;
+  if (storage && typeof storage.transaction === 'function') {
+    return (action) => storage.transaction(action);
+  }
+  if (db && typeof db.transaction === 'function') {
+    return (action) => db.transaction(action);
+  }
+  return null;
+}
+
 async function runInTransaction(db, action) {
+  const nativeTransaction = getNativeTransactionRunner(db);
+  if (nativeTransaction) {
+    return nativeTransaction(action);
+  }
+
   await db.prepare('BEGIN TRANSACTION').run();
   try {
     const result = await action();

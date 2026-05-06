@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { generateToken } from '../auth-utils.js';
 import { handleUpdateProfile } from '../src/handlers/profile.js';
 
-function createDbMock() {
+function createDbMock(options = {}) {
+  const { nativeTransaction = false } = options;
   const users = new Map();
   const emailMapping = new Map();
   const statements = [];
@@ -94,6 +95,17 @@ function createDbMock() {
       };
     }
   };
+
+  if (nativeTransaction) {
+    db.state = {
+      storage: {
+        async transaction(action) {
+          statements.push({ sql: '__native_transaction__', params: [] });
+          return action();
+        }
+      }
+    };
+  }
 
   return db;
 }
@@ -189,4 +201,77 @@ test('handleUpdateProfile migrates username changes without direct in-place user
       `missing migration statement: ${expectedSql}`
     );
   }
+});
+
+test('handleUpdateProfile prefers native storage transactions when available', async () => {
+  const db = createDbMock({ nativeTransaction: true });
+  db.users.set('nativeold', {
+    username: 'nativeold',
+    email: 'native@example.com',
+    password_hash: '',
+    salt: '',
+    iterations: 0,
+    algo: '',
+    email_verified: 1,
+    alipay_user_id: null,
+    alipay_nickname: null,
+    alipay_avatar: null,
+    alipay_bound_at: null,
+    wechat_openid: null,
+    wechat_nickname: null,
+    wechat_headimgurl: null,
+    wechat_bound_at: null,
+    phone_number: '+8613800138111',
+    firebase_uid: 'firebase-native-uid',
+    apple_user_id: null,
+    nickname: 'nativeold',
+    avatar: null,
+    bio: null,
+    main_practice_title: null,
+    main_practice_file_path: null,
+    main_practice_selected_at: null,
+    membership_type: 'trial',
+    membership_expires_at: null,
+    free_trial_end_date: '2026-05-31T00:00:00Z',
+    stripe_customer_id: null,
+    subscription_id: null,
+    total_transferred_bytes: 0,
+    last_transfer_at: null,
+    sync_version: 1,
+    extra_data: null,
+    created_at: '2026-05-01T00:00:00Z',
+    updated_at: '2026-05-04T00:00:00Z'
+  });
+  db.emailMapping.set('native@example.com', 'nativeold');
+
+  const env = { JWT_SECRET: 'test-secret' };
+  const token = await generateToken('nativeold', env);
+  const request = new Request('https://flutter.ombhrum.com/api/auth/update-profile', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      username: 'nativenew',
+      email: 'native@example.com',
+      phoneNumber: '+8613800138111'
+    })
+  });
+
+  const response = await handleUpdateProfile(request, env, db);
+  assert.equal(response.status, 200);
+
+  const payload = await response.json();
+  assert.equal(payload.success, true);
+  assert.equal(payload.user.username, 'nativenew');
+  assert.ok(payload.token);
+  assert.equal(db.users.has('nativeold'), false);
+  assert.equal(db.users.has('nativenew'), true);
+  assert.equal(db.emailMapping.get('native@example.com'), 'nativenew');
+  assert.ok(db.statements.some(({ sql }) => sql === '__native_transaction__'));
+  assert.equal(
+    db.statements.some(({ sql }) => /^BEGIN TRANSACTION|^COMMIT|^ROLLBACK/.test(sql.trimStart())),
+    false
+  );
 });
