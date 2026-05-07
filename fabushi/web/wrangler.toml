@@ -57,18 +57,14 @@ destination_address = "131551832@qq.com"
 [vars]
 FROM_EMAIL = "amitabha@ombhrum.com"
 # JWT_SECRET 应该使用 Cloudflare Secret，不要在这里明文存储
-FLUTTER_WEB = "true"
-
-# 默认环境资源绑定
-[assets]
-binding = "ASSETS"
-directory = "../build/web"
+BACKEND_ONLY = "true"
+FRONTEND_URL = "https://flutter.ombhrum.com"
 
 # 生产环境配置
 [env.production]
 name = "fabushi-flutter-web-prod"
 routes = [
-  { pattern = "flutter.ombhrum.com/*", zone_name = "ombhrum.com" }
+  { pattern = "api.ombhrum.com", custom_domain = true }
 ]
 workers_dev = false
 
@@ -109,17 +105,14 @@ destination_address = "131551832@qq.com"
 [env.production.vars]
 FROM_EMAIL = "amitabha@ombhrum.com"
 JWT_SECRET = "prod_secret_key_2025_ombhrum_fabushi"
-FLUTTER_WEB = "true"
+BACKEND_ONLY = "true"
 # 支付宝配置
 ALIPAY_APP_ID = "2021005193647715"
 ALIPAY_PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAi0qnuA0SPHg/sB43ROGixTPaeCYN2kmsqCBUZ+gCaMivh405NBAX8LELBlBmrIvKhyUH9JNan+r0e2qrsmLSShIMD/M0YyB3+SqjITQXR0QSlneDKuHxl+O5qXe43qhuCaWXX3GVXwt5J+kOHPHCL+/3OThOjAYRwnCVewS85fx2hn6AtRPcyXHv+/nopckBL1ZbFrQRZC+BJuUlP3e9/NFWzWvUclAjaG2suVbz4YgmYh08fHlNNtb9/283/FKMRYbklpNKXTOwKQ7yflao0fTGPUdi9ILarLR8wPZTp8cv3ojIOU+e1toikcNNKK+Z+e24smY48QuB6MvJfV7skwIDAQAB"
-WORKER_URL = "https://flutter.ombhrum.com"
-ALIPAY_NOTIFY_URL = "https://flutter.ombhrum.com/api/alipay/notify"
+WORKER_URL = "https://api.ombhrum.com"
+FRONTEND_URL = "https://flutter.ombhrum.com"
+ALIPAY_NOTIFY_URL = "https://api.ombhrum.com/api/alipay/notify"
 ALIPAY_RETURN_URL = "https://flutter.ombhrum.com/payment-success.html"
-
-[env.production.assets]
-binding = "ASSETS"
-directory = "../build/web"
 
 # 开发环境配置
 [env.development]
@@ -157,16 +150,13 @@ destination_address = "131551832@qq.com"
 [env.development.vars]
 FROM_EMAIL = "amitabha@ombhrum.com"
 JWT_SECRET = "dev_secret_key_2025"
-FLUTTER_WEB = "true"
+BACKEND_ONLY = "true"
 ENVIRONMENT = "development"
 # 支付宝配置
 ALIPAY_APP_ID = "2021005193647715"
 ALIPAY_PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAi0qnuA0SPHg/sB43ROGixTPaeCYN2kmsqCBUZ+gCaMivh405NBAX8LELBlBmrIvKhyUH9JNan+r0e2qrsmLSShIMD/M0YyB3+SqjITQXR0QSlneDKuHxl+O5qXe43qhuCaWXX3GVXwt5J+kOHPHCL+/3OThOjAYRwnCVewS85fx2hn6AtRPcyXHv+/nopckBL1ZbFrQRZC+BJuUlP3e9/NFWzWvUclAjaG2suVbz4YgmYh08fHlNNtb9/283/FKMRYbklpNKXTOwKQ7yflao0fTGPUdi9ILarLR8wPZTp8cv3ojIOU+e1toikcNNKK+Z+e24smY48QuB6MvJfV7skwIDAQAB"
-WORKER_URL = "https://flutter.ombhrum.com"
-
-[env.development.assets]
-binding = "ASSETS"
-directory = "../build/web"
+WORKER_URL = "https://fabushi-flutter-web-dev.bhrumom.workers.dev"
+FRONTEND_URL = "https://flutter.ombhrum.com"
 
 [observability.logs]
 enabled = true

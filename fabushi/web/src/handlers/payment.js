@@ -46,6 +46,8 @@ export async function handleCreateAlipayOrder(request, env, db) {
 
   // Web平台：电脑网站支付
   if (platform === 'web') {
+    const backendUrl = env.WORKER_URL || 'https://api.ombhrum.com';
+    const frontendUrl = env.FRONTEND_URL || 'https://flutter.ombhrum.com';
     const now = new Date();
     const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
 
@@ -55,7 +57,7 @@ export async function handleCreateAlipayOrder(request, env, db) {
       subject: `全球法布施 - ${planDetails.name}`,
       product_code: 'FAST_INSTANT_TRADE_PAY',
       timeout_express: '30m',
-      quit_url: env.WORKER_URL || 'https://flutter.ombhrum.com'
+      quit_url: frontendUrl
     };
 
     const params = {
@@ -66,8 +68,8 @@ export async function handleCreateAlipayOrder(request, env, db) {
       sign_type: 'RSA2',
       timestamp,
       version: '1.0',
-      notify_url: `${env.WORKER_URL || 'https://flutter.ombhrum.com'}/api/alipay/notify`,
-      return_url: `${env.WORKER_URL || 'https://flutter.ombhrum.com'}/payment-success.html`,
+      notify_url: `${backendUrl}/api/alipay/notify`,
+      return_url: env.ALIPAY_RETURN_URL || `${frontendUrl}/payment-success.html`,
       biz_content: JSON.stringify(bizContent)
     };
 
@@ -88,6 +90,7 @@ export async function handleCreateAlipayOrder(request, env, db) {
   }
 
   // APP支付：生成 orderString 供客户端调用支付宝 SDK
+  const backendUrl = env.WORKER_URL || 'https://api.ombhrum.com';
   const now = new Date();
   const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
 
@@ -107,7 +110,7 @@ export async function handleCreateAlipayOrder(request, env, db) {
     sign_type: 'RSA2',
     timestamp,
     version: '1.0',
-    notify_url: `${env.WORKER_URL || 'https://flutter.ombhrum.com'}/api/alipay/notify`,
+    notify_url: `${backendUrl}/api/alipay/notify`,
     biz_content: JSON.stringify(appBizContent)
   };
 

@@ -286,19 +286,7 @@ async function runInTransaction(db, action) {
     return nativeTransaction(action);
   }
 
-  await db.prepare('BEGIN TRANSACTION').run();
-  try {
-    const result = await action();
-    await db.prepare('COMMIT').run();
-    return result;
-  } catch (error) {
-    try {
-      await db.prepare('ROLLBACK').run();
-    } catch (rollbackError) {
-      console.warn('回滚资料更新事务失败:', rollbackError?.message || rollbackError);
-    }
-    throw error;
-  }
+  return action();
 }
 
 async function migrateUsernameChange(db, user, {

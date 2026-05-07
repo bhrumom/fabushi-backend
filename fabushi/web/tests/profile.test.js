@@ -257,6 +257,11 @@ test('handleUpdateProfile migrates username changes without direct in-place user
       `missing migration statement: ${expectedSql}`
     );
   }
+
+  assert.equal(
+    db.statements.some(({ sql }) => /^BEGIN TRANSACTION|^COMMIT|^ROLLBACK/.test(sql.trimStart())),
+    false
+  );
 });
 
 test('handleUpdateProfile prefers native storage transactions when available', async () => {

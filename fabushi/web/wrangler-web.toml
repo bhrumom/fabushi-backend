@@ -1,0 +1,28 @@
+name = "fabushi-web"
+main = "frontend-worker.js"
+compatibility_date = "2024-08-01"
+
+[assets]
+binding = "ASSETS"
+directory = "../build/web"
+
+[env.production]
+name = "fabushi-web-prod"
+routes = [
+  { pattern = "flutter.ombhrum.com/*", zone_name = "ombhrum.com" }
+]
+workers_dev = false
+
+[env.production.assets]
+binding = "ASSETS"
+directory = "../build/web"
+
+[env.development]
+name = "fabushi-web-dev"
+
+[env.development.assets]
+binding = "ASSETS"
+directory = "../build/web"
+
+[observability.logs]
+enabled = true
