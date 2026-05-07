@@ -22,7 +22,45 @@ import { handleToggleFollow, handleGetFollowList, handleGetFollowSummary, handle
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
 import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
 import { handleSubmitFeedback } from './handlers/feedback.js';
+import { verifyToken } from '../auth-utils.js';
 import { jsonResponse } from './utils/response.js';
+
+function createLegacyMeditationToken(username) {
+  const payload = btoa(JSON.stringify({ username }));
+  return `legacy.${payload}.signature`;
+}
+
+async function normalizeMeditationAuthRequest(request, env, pathname) {
+  if (!pathname.startsWith('/api/meditation/')) {
+    return { request };
+  }
+
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return { request };
+  }
+
+  try {
+    const tokenData = await verifyToken(authHeader.substring(7), env);
+    const username = tokenData?.username || tokenData?.sub;
+    if (!username) {
+      return {
+        response: jsonResponse({ success: false, error: '认证失败，请重新登录' }, 401),
+      };
+    }
+
+    const headers = new Headers(request.headers);
+    headers.set('Authorization', `Bearer ${createLegacyMeditationToken(username)}`);
+    return {
+      request: new Request(request, { headers }),
+    };
+  } catch (error) {
+    console.warn('修行接口认证预处理失败:', error);
+    return {
+      response: jsonResponse({ success: false, error: '认证失败，请重新登录' }, 401),
+    };
+  }
+}
 
 export async function route(request, env, db, ctx) {
   const url = new URL(request.url);
@@ -37,6 +75,12 @@ export async function route(request, env, db, ctx) {
   if (pathname === '/health') {
     return jsonResponse({ status: 'ok', timestamp: new Date().toISOString() });
   }
+
+  const normalizedMeditationAuth = await normalizeMeditationAuthRequest(request, env, pathname);
+  if (normalizedMeditationAuth.response) {
+    return normalizedMeditationAuth.response;
+  }
+  request = normalizedMeditationAuth.request;
 
   // 短信验证码API (全平台支持)
   if (pathname === '/api/sms/send' && method === 'POST') return await handleSendSmsCode(request, env, db);
