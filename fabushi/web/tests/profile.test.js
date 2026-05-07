@@ -6,7 +6,7 @@ import { handleUpdateProfile } from '../src/handlers/profile.js';
 import { DatabaseService } from '../src/services/database.js';
 
 function createDbMock(options = {}) {
-  const { nativeTransaction = false } = options;
+  const { nativeTransaction = false, batchTransaction = false } = options;
   const users = new Map();
   const emailMapping = new Map();
   const statements = [];
@@ -136,6 +136,17 @@ function createDbMock(options = {}) {
           return action();
         }
       }
+    };
+  }
+
+  if (batchTransaction) {
+    db.batch = async (statementList) => {
+      statements.push({ sql: '__d1_batch__', params: [] });
+      const results = [];
+      for (const statement of statementList) {
+        results.push(await statement.run());
+      }
+      return results;
     };
   }
 
@@ -286,6 +297,45 @@ test('handleUpdateProfile prefers native storage transactions when available', a
   );
 });
 
+test('handleUpdateProfile uses D1 batch instead of SQL transactions when available', async () => {
+  const db = createDbMock({ batchTransaction: true });
+  seedUser(db, 'd1old', 'd1@example.com', '+8613800138333', {
+    firebase_uid: 'firebase-d1-uid'
+  });
+
+  const env = { JWT_SECRET: 'test-secret' };
+  const token = await generateToken('d1old', env);
+  const request = new Request('https://flutter.ombhrum.com/api/auth/update-profile', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      username: 'd1new',
+      email: 'd1@example.com',
+      phoneNumber: ''
+    })
+  });
+
+  const response = await handleUpdateProfile(request, env, db);
+  assert.equal(response.status, 200);
+
+  const payload = await response.json();
+  assert.equal(payload.success, true);
+  assert.equal(payload.user.username, 'd1new');
+  assert.ok(payload.token);
+  assert.equal(db.users.has('d1old'), false);
+  assert.equal(db.users.has('d1new'), true);
+  assert.equal(db.users.get('d1new').phone_number, null);
+  assert.equal(db.emailMapping.get('d1@example.com'), 'd1new');
+  assert.ok(db.statements.some(({ sql }) => sql === '__d1_batch__'));
+  assert.equal(
+    db.statements.some(({ sql }) => /^BEGIN TRANSACTION|^COMMIT|^ROLLBACK/.test(sql.trimStart())),
+    false
+  );
+});
+
 test('DatabaseService preserves native transaction access for profile updates', async () => {
   const rawDb = createDbMock({ nativeTransaction: true });
   seedUser(rawDb, 'wrappedold', 'wrapped@example.com', '+8613800138222', {
@@ -319,6 +369,43 @@ test('DatabaseService preserves native transaction access for profile updates', 
   assert.equal(rawDb.users.has('wrappednew'), true);
   assert.equal(rawDb.emailMapping.get('wrapped@example.com'), 'wrappednew');
   assert.ok(rawDb.statements.some(({ sql }) => sql === '__native_transaction__'));
+  assert.equal(
+    rawDb.statements.some(({ sql }) => /^BEGIN TRANSACTION|^COMMIT|^ROLLBACK/.test(sql.trimStart())),
+    false
+  );
+});
+
+test('DatabaseService exposes D1 batch for profile updates', async () => {
+  const rawDb = createDbMock({ batchTransaction: true });
+  seedUser(rawDb, 'batchwrappedold', 'batchwrapped@example.com', '+8613800138444');
+  const db = new DatabaseService(rawDb);
+
+  const env = { JWT_SECRET: 'test-secret' };
+  const token = await generateToken('batchwrappedold', env);
+  const request = new Request('https://flutter.ombhrum.com/api/auth/update-profile', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      username: 'batchwrappednew',
+      email: 'batchwrapped@example.com',
+      phoneNumber: '+8613800138444'
+    })
+  });
+
+  const response = await handleUpdateProfile(request, env, db);
+  assert.equal(response.status, 200);
+
+  const payload = await response.json();
+  assert.equal(payload.success, true);
+  assert.equal(payload.user.username, 'batchwrappednew');
+  assert.ok(payload.token);
+  assert.equal(rawDb.users.has('batchwrappedold'), false);
+  assert.equal(rawDb.users.has('batchwrappednew'), true);
+  assert.equal(rawDb.emailMapping.get('batchwrapped@example.com'), 'batchwrappednew');
+  assert.ok(rawDb.statements.some(({ sql }) => sql === '__d1_batch__'));
   assert.equal(
     rawDb.statements.some(({ sql }) => /^BEGIN TRANSACTION|^COMMIT|^ROLLBACK/.test(sql.trimStart())),
     false

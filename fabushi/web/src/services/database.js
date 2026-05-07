@@ -6,6 +6,9 @@ export class DatabaseService {
     if (typeof db?.transaction === 'function') {
       this.transaction = db.transaction.bind(db);
     }
+    if (typeof db?.batch === 'function') {
+      this.batch = db.batch.bind(db);
+    }
   }
 
   // 直接暴露 prepare 方法，允许处理器直接调用 db.prepare()

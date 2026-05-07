@@ -261,8 +261,21 @@ function getNativeTransactionRunner(db) {
   if (storage && typeof storage.transaction === 'function') {
     return (action) => storage.transaction(action);
   }
+  if (storage && typeof storage.transactionSync === 'function') {
+    return (action) => storage.transactionSync(action);
+  }
   if (db && typeof db.transaction === 'function') {
     return (action) => db.transaction(action);
+  }
+  return null;
+}
+
+function getBatchRunner(db) {
+  if (db && typeof db.batch === 'function') {
+    return (statements) => db.batch(statements);
+  }
+  if (db?.db && typeof db.db.batch === 'function') {
+    return (statements) => db.db.batch(statements);
   }
   return null;
 }
@@ -312,73 +325,93 @@ async function migrateUsernameChange(db, user, {
     updatedAt
   });
 
+  const detachOldUserStatement = db.prepare(`
+    UPDATE users
+    SET email = ?, phone_number = NULL, firebase_uid = NULL, apple_user_id = NULL,
+        alipay_user_id = NULL, wechat_openid = NULL, updated_at = ?
+    WHERE username = ?
+  `).bind(
+    migrationPlaceholderEmail(oldUsername),
+    updatedAt,
+    oldUsername
+  );
+
+  const insertNewUserStatement = db.prepare(`
+    INSERT INTO users (
+      username, email, password_hash, salt, iterations, algo, email_verified,
+      alipay_user_id, alipay_nickname, alipay_avatar, alipay_bound_at,
+      wechat_openid, wechat_nickname, wechat_headimgurl, wechat_bound_at,
+      phone_number, firebase_uid, apple_user_id,
+      nickname, avatar, bio,
+      main_practice_title, main_practice_file_path, main_practice_selected_at,
+      membership_type, membership_expires_at, free_trial_end_date,
+      stripe_customer_id, subscription_id,
+      total_transferred_bytes, last_transfer_at,
+      sync_version, extra_data,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    finalState.username,
+    finalState.email,
+    finalState.password_hash,
+    finalState.salt,
+    finalState.iterations,
+    finalState.algo,
+    finalState.email_verified,
+    finalState.alipay_user_id,
+    finalState.alipay_nickname,
+    finalState.alipay_avatar,
+    finalState.alipay_bound_at,
+    finalState.wechat_openid,
+    finalState.wechat_nickname,
+    finalState.wechat_headimgurl,
+    finalState.wechat_bound_at,
+    finalState.phone_number,
+    finalState.firebase_uid,
+    finalState.apple_user_id,
+    finalState.nickname,
+    finalState.avatar,
+    finalState.bio,
+    finalState.main_practice_title,
+    finalState.main_practice_file_path,
+    finalState.main_practice_selected_at,
+    finalState.membership_type,
+    finalState.membership_expires_at,
+    finalState.free_trial_end_date,
+    finalState.stripe_customer_id,
+    finalState.subscription_id,
+    finalState.total_transferred_bytes,
+    finalState.last_transfer_at,
+    finalState.sync_version,
+    finalState.extra_data,
+    finalState.created_at,
+    finalState.updated_at
+  );
+
+  const deleteOldUserStatement = db.prepare('DELETE FROM users WHERE username = ?').bind(oldUsername);
+  const d1BatchStatements = [detachOldUserStatement, insertNewUserStatement];
+
+  if (user.email && user.email.toLowerCase() !== finalState.email) {
+    d1BatchStatements.push(db.prepare('DELETE FROM email_username_mapping WHERE email = ?').bind(user.email.toLowerCase()));
+  }
+  if (finalState.email) {
+    d1BatchStatements.push(db.prepare('INSERT OR REPLACE INTO email_username_mapping (email, username) VALUES (?, ?)').bind(finalState.email, targetUsername));
+  }
+  d1BatchStatements.push(deleteOldUserStatement);
+
+  const runBatch = getBatchRunner(db);
+  if (runBatch) {
+    await runBatch(d1BatchStatements);
+    await updateUsernameReferences(db, oldUsername, targetUsername);
+    return;
+  }
+
   await runInTransaction(db, async () => {
-    await db.prepare(`
-      UPDATE users
-      SET email = ?, phone_number = NULL, firebase_uid = NULL, apple_user_id = NULL,
-          alipay_user_id = NULL, wechat_openid = NULL, updated_at = ?
-      WHERE username = ?
-    `).bind(
-      migrationPlaceholderEmail(oldUsername),
-      updatedAt,
-      oldUsername
-    ).run();
-
-    await db.prepare(`
-      INSERT INTO users (
-        username, email, password_hash, salt, iterations, algo, email_verified,
-        alipay_user_id, alipay_nickname, alipay_avatar, alipay_bound_at,
-        wechat_openid, wechat_nickname, wechat_headimgurl, wechat_bound_at,
-        phone_number, firebase_uid, apple_user_id,
-        nickname, avatar, bio,
-        main_practice_title, main_practice_file_path, main_practice_selected_at,
-        membership_type, membership_expires_at, free_trial_end_date,
-        stripe_customer_id, subscription_id,
-        total_transferred_bytes, last_transfer_at,
-        sync_version, extra_data,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      finalState.username,
-      finalState.email,
-      finalState.password_hash,
-      finalState.salt,
-      finalState.iterations,
-      finalState.algo,
-      finalState.email_verified,
-      finalState.alipay_user_id,
-      finalState.alipay_nickname,
-      finalState.alipay_avatar,
-      finalState.alipay_bound_at,
-      finalState.wechat_openid,
-      finalState.wechat_nickname,
-      finalState.wechat_headimgurl,
-      finalState.wechat_bound_at,
-      finalState.phone_number,
-      finalState.firebase_uid,
-      finalState.apple_user_id,
-      finalState.nickname,
-      finalState.avatar,
-      finalState.bio,
-      finalState.main_practice_title,
-      finalState.main_practice_file_path,
-      finalState.main_practice_selected_at,
-      finalState.membership_type,
-      finalState.membership_expires_at,
-      finalState.free_trial_end_date,
-      finalState.stripe_customer_id,
-      finalState.subscription_id,
-      finalState.total_transferred_bytes,
-      finalState.last_transfer_at,
-      finalState.sync_version,
-      finalState.extra_data,
-      finalState.created_at,
-      finalState.updated_at
-    ).run();
-
+    await detachOldUserStatement.run();
+    await insertNewUserStatement.run();
     await updateUsernameReferences(db, oldUsername, targetUsername);
     await applyEmailMapping(db, user.email, finalState.email, targetUsername);
-    await db.prepare('DELETE FROM users WHERE username = ?').bind(oldUsername).run();
+    await deleteOldUserStatement.run();
   });
 }
 
