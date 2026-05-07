@@ -209,7 +209,7 @@ function getFinalProfileState(user, {
   const phone = newPhone !== undefined ? newPhone : normalizeOptionalString(user.phone_number);
   const practiceChanged = practiceTitle !== undefined;
 
-  return {
+  const finalState = {
     username: targetUsername,
     email,
     password_hash: passwordCreds?.passwordHash ?? user.password_hash ?? null,
@@ -251,9 +251,13 @@ function getFinalProfileState(user, {
     last_transfer_at: normalizeOptionalString(user.last_transfer_at),
     sync_version: user.sync_version ?? 1,
     extra_data: normalizeOptionalString(user.extra_data),
-    created_at: user.created_at,
+    created_at: user.created_at || updatedAt,
     updated_at: updatedAt
   };
+
+  return Object.fromEntries(
+    Object.entries(finalState).map(([key, value]) => [key, value === undefined ? null : value])
+  );
 }
 
 function getNativeTransactionRunner(db) {

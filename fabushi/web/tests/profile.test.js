@@ -39,6 +39,10 @@ function createDbMock(options = {}) {
       const execute = async (params = []) => {
         statements.push({ sql, params });
 
+        if (params.some((param) => param === undefined)) {
+          throw new TypeError("D1_TYPE_ERROR: Type 'undefined' not supported for value 'undefined'");
+        }
+
         if (/^BEGIN TRANSACTION/.test(normalizedSql) || /^COMMIT/.test(normalizedSql) || /^ROLLBACK/.test(normalizedSql)) {
           return;
         }
@@ -339,6 +343,51 @@ test('handleUpdateProfile uses D1 batch instead of SQL transactions when availab
     db.statements.some(({ sql }) => /^BEGIN TRANSACTION|^COMMIT|^ROLLBACK/.test(sql.trimStart())),
     false
   );
+});
+
+test('handleUpdateProfile coerces missing optional legacy fields to null during username migration', async () => {
+  const db = createDbMock({ batchTransaction: true });
+  seedUser(db, 'legacyold', 'legacy@example.com', '+8613800138555', {
+    firebase_uid: 'firebase-legacy-uid'
+  });
+
+  const legacyUser = db.users.get('legacyold');
+  delete legacyUser.alipay_bound_at;
+  delete legacyUser.wechat_bound_at;
+  delete legacyUser.bio;
+  delete legacyUser.membership_expires_at;
+  delete legacyUser.stripe_customer_id;
+  delete legacyUser.subscription_id;
+  delete legacyUser.extra_data;
+
+  const env = { JWT_SECRET: 'test-secret' };
+  const token = await generateToken('legacyold', env);
+  const request = new Request('https://flutter.ombhrum.com/api/auth/update-profile', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      username: 'legacynew',
+      email: 'legacy@example.com',
+      phoneNumber: ''
+    })
+  });
+
+  const response = await handleUpdateProfile(request, env, db);
+  assert.equal(response.status, 200);
+
+  const payload = await response.json();
+  assert.equal(payload.success, true);
+  assert.equal(payload.user.username, 'legacynew');
+  assert.equal(db.users.get('legacynew').alipay_bound_at, null);
+  assert.equal(db.users.get('legacynew').wechat_bound_at, null);
+  assert.equal(db.users.get('legacynew').bio, null);
+  assert.equal(db.users.get('legacynew').membership_expires_at, null);
+  assert.equal(db.users.get('legacynew').stripe_customer_id, null);
+  assert.equal(db.users.get('legacynew').subscription_id, null);
+  assert.equal(db.users.get('legacynew').extra_data, null);
 });
 
 test('DatabaseService preserves native transaction access for profile updates', async () => {
