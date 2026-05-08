@@ -11,7 +11,6 @@ function looksLikePhone(value) {
 
 export async function handlePasswordLogin(request, env, db) {
   const { username: loginIdentifier, password } = await request.json();
-
   const identifier = String(loginIdentifier || '').trim();
   if (!identifier || !password) {
     return jsonResponse({ error: '手机号、用户名或邮箱和密码不能为空' }, 400);
@@ -23,15 +22,8 @@ export async function handlePasswordLogin(request, env, db) {
   } else if (looksLikePhone(identifier)) {
     user = await db.getUserByPhone(identifier);
   }
-
-  if (!user) {
-    user = await db.getUser(identifier);
-  }
-
-  if (!user) {
-    return jsonResponse({ error: '用户不存在' }, 401);
-  }
-
+  if (!user) user = await db.getUser(identifier);
+  if (!user) return jsonResponse({ error: '用户不存在' }, 401);
   if (!user.password_hash || !user.salt) {
     return jsonResponse({ error: '当前账号尚未设置密码，请先通过已登录资料页设置密码' }, 401);
   }
@@ -42,19 +34,19 @@ export async function handlePasswordLogin(request, env, db) {
     iterations: user.iterations,
     algo: user.algo
   });
+  if (!ok) return jsonResponse({ error: '密码错误' }, 401);
 
-  if (!ok) {
-    return jsonResponse({ error: '密码错误' }, 401);
-  }
-
-  const token = await generateToken(user.username, env);
+  const token = await generateToken({ id: user.id, username: user.username }, env);
   return jsonResponse({
     token,
     username: user.username,
+    userId: user.id,
     user: {
+      id: user.id,
+      userId: user.id,
       username: user.username,
       email: user.email || '',
-      nickname: user.username,
+      nickname: user.nickname || user.username,
       avatar: user.avatar || user.alipay_avatar || user.wechat_headimgurl || null,
       phoneNumber: user.phone_number || null,
       hasPassword: true,

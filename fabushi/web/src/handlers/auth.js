@@ -8,6 +8,8 @@ export { handleLogin, handleUpdateProfile, handleUploadAvatar };
 
 function serializeUser(user) {
   return {
+    id: user.id,
+    userId: user.id,
     username: user.username,
     email: user.email || '',
     nickname: user.nickname || user.username,
@@ -30,6 +32,17 @@ function serializeUser(user) {
       expiresAt: user.membership_expires_at || user.free_trial_end_date || null
     }
   };
+}
+
+async function resolveAuthenticatedUser(db, tokenData) {
+  if (tokenData?.userId !== undefined && tokenData?.userId !== null && db.getUserById) {
+    const user = await db.getUserById(tokenData.userId);
+    if (user) return user;
+  }
+  if (tokenData?.username) {
+    return await db.getUser(tokenData.username);
+  }
+  return null;
 }
 
 async function safeRun(db, sql, ...params) {
@@ -162,13 +175,12 @@ export async function handleGetUserInfo(request, env, db) {
     return jsonResponse({ error: '未提供认证信息' }, 401);
   }
 
-  const token = authHeader.substring(7);
-  const tokenData = await verifyToken(token, env);
+  const tokenData = await verifyToken(authHeader.substring(7), env);
   if (!tokenData) {
     return jsonResponse({ error: '认证失败' }, 401);
   }
 
-  const user = await db.getUser(tokenData.username);
+  const user = await resolveAuthenticatedUser(db, tokenData);
   if (!user) {
     return jsonResponse({ error: '用户不存在' }, 404);
   }
@@ -190,31 +202,30 @@ export async function handleFirebasePhoneLogin(request, env, db) {
       user = await db.getUserByFirebaseUid(firebaseUid);
     }
 
-    let token;
-    let username;
-
     if (user) {
       if (user.firebase_uid !== firebaseUid || user.phone_number !== phoneNumber) {
-        await db.prepare(`
-          UPDATE users SET firebase_uid = ?, phone_number = ?, updated_at = ?
-          WHERE username = ?
-        `).bind(firebaseUid, phoneNumber, new Date().toISOString(), user.username).run();
-        user = await db.getUser(user.username);
+        if (db.updateUserById) {
+          await db.updateUserById(user.id, { firebase_uid: firebaseUid, phone_number: phoneNumber });
+        } else {
+          await db.prepare(`
+            UPDATE users SET firebase_uid = ?, phone_number = ?, updated_at = ?
+            WHERE username = ?
+          `).bind(firebaseUid, phoneNumber, new Date().toISOString(), user.username).run();
+        }
+        user = db.getUserById ? await db.getUserById(user.id) : await db.getUser(user.username);
       }
-
-      username = user.username;
-      token = await generateToken(username, env);
 
       return jsonResponse({
         success: true,
-        token,
-        username,
+        token: await generateToken({ id: user.id, username: user.username }, env),
+        username: user.username,
+        userId: user.id,
         isNewUser: false,
         user: serializeUser(user)
       });
     }
 
-    username = `user_${Date.now().toString(36)}`;
+    const username = `user_${Date.now().toString(36)}`;
     const email = `${firebaseUid}@phone.user`;
     const trialEndDate = calculateTrialEndDate();
 
@@ -228,20 +239,27 @@ export async function handleFirebasePhoneLogin(request, env, db) {
       createdAt: new Date().toISOString()
     });
 
-    token = await generateToken(username, env);
-    const createdUser = await db.getUser(username);
+    const createdUser = db.getUserById
+      ? await db.getUserByEmail(email)
+      : await db.getUser(username);
+    const fallbackUser = createdUser || {
+      id: null,
+      username,
+      email,
+      phone_number: phoneNumber,
+      membership_type: 'trial',
+      free_trial_end_date: trialEndDate.toISOString(),
+      created_at: new Date().toISOString(),
+      email_verified: 1
+    };
 
     return jsonResponse({
       success: true,
-      token,
+      token: await generateToken({ id: createdUser?.id, username }, env),
       username,
+      userId: createdUser?.id,
       isNewUser: isNewUser ?? true,
-      user: createdUser ? serializeUser(createdUser) : {
-        username,
-        email,
-        phoneNumber,
-        membership: { type: 'trial', expiresAt: trialEndDate.toISOString() }
-      }
+      user: serializeUser(fallbackUser)
     });
   } catch (error) {
     console.error('Firebase手机登录失败:', error);
@@ -290,16 +308,27 @@ export async function handleAppleLogin(request, env, db) {
     let user = await db.getUserByAppleId(appleUserId);
 
     if (user) {
-      const username = user.username;
-      const token = await generateToken(username, env);
       const updates = {};
       if (appleEmail && !user.email) updates.email = appleEmail;
       const fullName = [givenName, familyName].filter(Boolean).join(' ');
-      if (fullName && !user.nickname) updates.nickname = username;
-      if (Object.keys(updates).length > 0) await db.updateUser(username, updates);
-      user = await db.getUser(username);
+      if (fullName && !user.nickname) updates.nickname = user.username;
+      if (Object.keys(updates).length > 0) {
+        if (db.updateUserById) {
+          await db.updateUserById(user.id, updates);
+        } else {
+          await db.updateUser(user.username, updates);
+        }
+        user = db.getUserById ? await db.getUserById(user.id) : await db.getUser(user.username);
+      }
 
-      return jsonResponse({ success: true, token, username, isNewUser: false, user: serializeUser(user) });
+      return jsonResponse({
+        success: true,
+        token: await generateToken({ id: user.id, username: user.username }, env),
+        username: user.username,
+        userId: user.id,
+        isNewUser: false,
+        user: serializeUser(user)
+      });
     }
 
     const username = `apple_${Date.now().toString(36)}`;
@@ -308,10 +337,22 @@ export async function handleAppleLogin(request, env, db) {
 
     const existingEmailUser = await db.db.prepare('SELECT * FROM users WHERE email = ?').bind(userEmail).first();
     if (existingEmailUser) {
-      await db.updateUser(existingEmailUser.username, { apple_user_id: appleUserId, nickname: existingEmailUser.username });
-      const token = await generateToken(existingEmailUser.username, env);
-      const updated = await db.getUser(existingEmailUser.username);
-      return jsonResponse({ success: true, token, username: existingEmailUser.username, isNewUser: false, user: serializeUser(updated) });
+      const updates = { apple_user_id: appleUserId };
+      if (!existingEmailUser.nickname) updates.nickname = existingEmailUser.username;
+      if (db.updateUserById) {
+        await db.updateUserById(existingEmailUser.id, updates);
+      } else {
+        await db.updateUser(existingEmailUser.username, updates);
+      }
+      const updated = db.getUserById ? await db.getUserById(existingEmailUser.id) : await db.getUser(existingEmailUser.username);
+      return jsonResponse({
+        success: true,
+        token: await generateToken({ id: updated.id, username: updated.username }, env),
+        username: updated.username,
+        userId: updated.id,
+        isNewUser: false,
+        user: serializeUser(updated)
+      });
     }
 
     await db.createAppleUser({
@@ -324,9 +365,15 @@ export async function handleAppleLogin(request, env, db) {
       createdAt: new Date().toISOString()
     });
 
-    const token = await generateToken(username, env);
     const createdUser = await db.getUser(username);
-    return jsonResponse({ success: true, token, username, isNewUser: true, user: serializeUser(createdUser) });
+    return jsonResponse({
+      success: true,
+      token: await generateToken({ id: createdUser?.id, username }, env),
+      username,
+      userId: createdUser?.id,
+      isNewUser: true,
+      user: serializeUser(createdUser)
+    });
   } catch (error) {
     console.error('Apple登录失败:', error);
     return jsonResponse({ error: 'Apple登录失败: ' + error.message }, 500);
@@ -341,24 +388,23 @@ export async function handleDeleteAccount(request, env, db) {
       return jsonResponse({ error: '未提供认证信息' }, 401);
     }
 
-    const token = authHeader.substring(7);
-    const tokenData = await verifyToken(token, env);
+    const tokenData = await verifyToken(authHeader.substring(7), env);
     if (!tokenData) {
       return jsonResponse({ error: '认证失效，请重新登录' }, 401);
     }
 
-    const user = await db.getUser(tokenData.username);
+    const user = await resolveAuthenticatedUser(db, tokenData);
     if (!user) {
       return jsonResponse({ error: '用户不存在' }, 404);
     }
 
     await runInTransaction(db, async () => {
-      await deleteUserArtifacts(db, tokenData.username, user.email);
+      await deleteUserArtifacts(db, user.username, user.email);
 
       if (db.deleteUser) {
-        await db.deleteUser(tokenData.username);
+        await db.deleteUser(user.username);
       } else {
-        await db.prepare('DELETE FROM users WHERE username = ?').bind(tokenData.username).run();
+        await db.prepare('DELETE FROM users WHERE username = ?').bind(user.username).run();
       }
     });
 
