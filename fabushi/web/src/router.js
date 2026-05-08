@@ -22,6 +22,7 @@ import { handleToggleFollow, handleGetFollowList, handleGetFollowSummary, handle
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
 import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
 import { handleSubmitFeedback } from './handlers/feedback.js';
+import { routeAuthRequest } from './routes/auth-routes.js';
 import { verifyToken } from '../auth-utils.js';
 import { jsonResponse } from './utils/response.js';
 
@@ -86,6 +87,11 @@ export async function route(request, env, db, ctx) {
     return normalizedMeditationAuth.response;
   }
   request = normalizedMeditationAuth.request;
+
+  const authResponse = await routeAuthRequest({ pathname, method, request, env, db, ctx });
+  if (authResponse) {
+    return authResponse;
+  }
 
   if (pathname === '/api/sms/send' && method === 'POST') return await handleSendSmsCode(request, env, db);
   if (pathname === '/api/sms/login' && method === 'POST') return await handleSmsLogin(request, env, db);
