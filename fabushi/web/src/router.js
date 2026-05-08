@@ -23,6 +23,8 @@ import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as ha
 import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
 import { handleSubmitFeedback } from './handlers/feedback.js';
 import { routeAuthRequest } from './routes/auth-routes.js';
+import { routeMembershipRequest } from './routes/membership-routes.js';
+import { routeMeditationRequest } from './routes/meditation-routes.js';
 import { verifyToken } from '../auth-utils.js';
 import { jsonResponse } from './utils/response.js';
 
@@ -91,6 +93,16 @@ export async function route(request, env, db, ctx) {
   const authResponse = await routeAuthRequest({ pathname, method, request, env, db, ctx });
   if (authResponse) {
     return authResponse;
+  }
+
+  const membershipResponse = await routeMembershipRequest({ pathname, method, request, env, db, ctx });
+  if (membershipResponse) {
+    return membershipResponse;
+  }
+
+  const meditationResponse = await routeMeditationRequest({ pathname, method, request, env, db, ctx });
+  if (meditationResponse) {
+    return meditationResponse;
   }
 
   if (pathname === '/api/sms/send' && method === 'POST') return await handleSendSmsCode(request, env, db);
