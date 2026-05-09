@@ -1,3 +1,74 @@
+export const USER_ID_CUSTOM_EPOCH_MS = Date.UTC(2025, 0, 1);
+const USER_ID_TIMESTAMP_BITS = 41;
+const USER_ID_WORKER_BITS = 5;
+const USER_ID_SEQUENCE_BITS = 7;
+const USER_ID_MAX_TIMESTAMP_DELTA = (2 ** USER_ID_TIMESTAMP_BITS) - 1;
+export const USER_ID_MAX_WORKER_ID = (2 ** USER_ID_WORKER_BITS) - 1;
+export const USER_ID_MAX_SEQUENCE = (2 ** USER_ID_SEQUENCE_BITS) - 1;
+const USER_ID_WORKER_MULTIPLIER = 2 ** USER_ID_SEQUENCE_BITS;
+const USER_ID_TIMESTAMP_MULTIPLIER = 2 ** (USER_ID_WORKER_BITS + USER_ID_SEQUENCE_BITS);
+
+const globalState = globalThis.__fabushiUserIdSnowflakeState;
+const USER_ID_GENERATOR_STATE = globalState || createSnowflakeUserIdState();
+if (!globalState) {
+  globalThis.__fabushiUserIdSnowflakeState = USER_ID_GENERATOR_STATE;
+}
+
+function createDefaultSnowflakeWorkerId() {
+  return Math.floor(Math.random() * (USER_ID_MAX_WORKER_ID + 1));
+}
+
+export function normalizeSnowflakeWorkerId(workerId) {
+  const parsed = Number(workerId);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.abs(Math.trunc(parsed)) % (USER_ID_MAX_WORKER_ID + 1);
+}
+
+export function createSnowflakeUserIdState(workerId = createDefaultSnowflakeWorkerId()) {
+  return {
+    workerId: normalizeSnowflakeWorkerId(workerId),
+    lastTimestamp: -1,
+    sequence: 0,
+  };
+}
+
+export function generateSnowflakeUserId({
+  nowMs = Date.now(),
+  workerId = USER_ID_GENERATOR_STATE.workerId,
+  state = USER_ID_GENERATOR_STATE,
+} = {}) {
+  const normalizedWorkerId = normalizeSnowflakeWorkerId(workerId);
+  let timestamp = Math.max(Math.trunc(nowMs), state.lastTimestamp);
+
+  if (timestamp === state.lastTimestamp) {
+    if (state.sequence >= USER_ID_MAX_SEQUENCE) {
+      timestamp = state.lastTimestamp + 1;
+      state.sequence = 0;
+    } else {
+      state.sequence += 1;
+    }
+  } else {
+    state.sequence = 0;
+  }
+
+  state.lastTimestamp = timestamp;
+  state.workerId = normalizedWorkerId;
+
+  const timestampDelta = timestamp - USER_ID_CUSTOM_EPOCH_MS;
+  if (timestampDelta < 0) {
+    throw new Error('用户 ID 时间戳早于自定义 epoch');
+  }
+  if (timestampDelta > USER_ID_MAX_TIMESTAMP_DELTA) {
+    throw new Error('用户 ID 时间戳超出雪花式范围');
+  }
+
+  return (
+    timestampDelta * USER_ID_TIMESTAMP_MULTIPLIER +
+    normalizedWorkerId * USER_ID_WORKER_MULTIPLIER +
+    state.sequence
+  );
+}
+
 // D1数据库服务
 export class DatabaseService {
   constructor(db) {
@@ -153,36 +224,10 @@ export class DatabaseService {
 
   async generateUniqueUserId() {
     for (let attempt = 0; attempt < 200; attempt += 1) {
-      const candidate = generateSixDigitId();
+      const candidate = generateSnowflakeUserId();
       const existing = await this.getUserById(candidate);
       if (!existing) return candidate;
     }
-    throw new Error('无法生成可用的 6 位用户 ID');
+    throw new Error('无法生成可用的雪花式用户 ID');
   }
-}
-
-function generateSixDigitId() {
-  while (true) {
-    const candidate = Math.floor(100000 + Math.random() * 900000);
-    if (!hasObviousPattern(candidate)) {
-      return candidate;
-    }
-  }
-}
-
-function hasObviousPattern(value) {
-  const text = String(value);
-  if (!/^\d{6}$/.test(text)) return true;
-  if (/^(\d)\1{5}$/.test(text)) return true;
-
-  let ascending = true;
-  let descending = true;
-  for (let index = 1; index < text.length; index += 1) {
-    const previous = Number(text[index - 1]);
-    const current = Number(text[index]);
-    if (current !== previous + 1) ascending = false;
-    if (current !== previous - 1) descending = false;
-  }
-
-  return ascending || descending;
 }
