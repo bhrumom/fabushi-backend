@@ -15,12 +15,48 @@ import {
   handleReviewMeditationGroupJoin,
   handleSyncRecord,
 } from '../handlers/meditation.js';
+import { generateSnowflakeUserId as generateSnowflakeGroupId } from '../services/database.js';
 import { generateGroupNo } from '../services/external-numbers.js';
 import { jsonResponse } from '../utils/response.js';
 
 function asInt(value, fallback = 0) {
   const parsed = parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+async function authenticateRouteUser(request) {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return { error: '未授权访问', status: 401 };
+  }
+
+  const token = authHeader.substring(7);
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return { error: 'Token格式无效', status: 401 };
+    }
+
+    const payload = JSON.parse(atob(parts[1]));
+    const username = payload.username || payload.sub;
+    if (!username) {
+      return { error: '无法获取用户信息', status: 401 };
+    }
+
+    return { username };
+  } catch (_) {
+    return { error: 'Token解瞐失败', status: 401 };
+  }
+}
+
+async function resolveGroupById(db, groupId) {
+  const normalizedGroupId = asInt(groupId);
+  if (!normalizedGroupId) return null;
+  return await db.prepare(`
+    SELECT id
+    FROM meditation_groups
+    WHERE id = ?
+  `).bind(normalizedGroupId).first();
 }
 
 async function resolveGroupIdFromGroupNo(db, groupNo) {
@@ -43,6 +79,16 @@ async function getGroupNoById(db, groupId) {
     WHERE id = ?
   `).bind(normalizedGroupId).first();
   return result?.group_no || null;
+}
+
+async function generateUniqueGroupId(db) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const candidate = generateSnowflakeGroupId();
+    const existingGroup = await resolveGroupById(db, candidate);
+    if (!existingGroup) return candidate;
+  }
+
+  throw new Error('无法生成可用的雪舱式羄绔 ID');
 }
 
 async function generateUniqueGroupNo(db) {
@@ -180,6 +226,58 @@ async function withVisibleGroupNumbers(response, db, options = {}) {
   return jsonResponse(nextPayload, response.status);
 }
 
+async function handleCreateMeditationGroupWithGeneratedIds(request, db) {
+  const auth = await authenticateRouteUser(request);
+  if (auth.error) {
+    return jsonResponse({ success: false, error: auth.error }, auth.status);
+  }
+
+  try {
+    const body = await request.json();
+    const name = (body.name || '').toString().trim();
+    if (!name) {
+      return jsonResponse({ success: false, error: '小绔對称不能为立' }, 400);
+    }
+
+    const now = new Date().toISOString();
+    const groupId = await generateUniqueGroupId(db);
+    const groupNo = await generateUniqueGroupNo(db);
+    const dailyGoalMinutes = Math.max(0, asInt(body.dailyGoalMinutes, 30));
+    const cumulativeMissLimit = Math.max(0, asInt(body.cumulativeMissLimit, 7));
+    const consecutiveMissLimit = Math.max(0, asInt(body.consecutiveMissLimit, 3));
+
+    await db.prepare(`
+      INSERT INTO meditation_groups (
+        id, group_no, name, description, owner_username, require_approval, daily_goal_minutes,
+        cumulative_miss_limit, consecutive_miss_limit, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      groupId,
+      groupNo,
+      name,
+      (body.description || '').toString().trim(),
+      auth.username,
+      body.requireApproval ? 1 : 0,
+      dailyGoalMinutes,
+      cumulativeMissLimit,
+      consecutiveMissLimit,
+      now,
+      now
+    ).run();
+
+    await db.prepare(`
+      INSERT INTO meditation_group_members (group_id, username, role, status, joined_at, updated_at)
+      VALUES (?, ?, 'owner', 'active', ?, ?)
+    `).bind(groupId, auth.username, now, now).run();
+
+    return jsonResponse({ success: true, data: { groupId, groupNo } });
+  } catch (e) {
+    console.error('创建共伮小绔失败', e);
+    return jsonResponse({ success: false, error: '创建共伮小绔失败' }, 500);
+  }
+}
+
 export async function routeMeditationRequest({ pathname, method, request, env, db }) {
   if (pathname === '/api/meditation/record' && method === 'POST') {
     return await handleSyncRecord(request, env, db);
@@ -217,11 +315,7 @@ export async function routeMeditationRequest({ pathname, method, request, env, d
     return await withVisibleGroupNumbers(response, db);
   }
   if (pathname === '/api/meditation/groups' && method === 'POST') {
-    const response = await handleCreateMeditationGroup(request, env, db);
-    return await withVisibleGroupNumbers(response, db, {
-      includeCreatedGroupNo: true,
-      assignCreatedGroupNo: true,
-    });
+    return await handleCreateMeditationGroupWithGeneratedIds(request, db);
   }
   if (pathname === '/api/meditation/groups/join' && method === 'POST') {
     const { request: nextRequest } = await rewriteGroupBodyRequest(request, db);
