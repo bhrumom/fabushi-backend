@@ -1,3 +1,5 @@
+import { generateUserNo } from './external-numbers.js';
+
 export const USER_ID_CUSTOM_EPOCH_MS = Date.UTC(2025, 0, 1);
 const USER_ID_TIMESTAMP_BITS = 41;
 const USER_ID_WORKER_BITS = 5;
@@ -251,14 +253,10 @@ export class DatabaseService {
 
   async generateUniqueUserNo() {
     for (let attempt = 0; attempt < 200; attempt += 1) {
-      const candidate = generateSixDigitNo();
+      const candidate = generateUserNo();
       const existing = await this.getUserByUserNo(candidate);
       if (!existing) return candidate;
     }
-    throw new Error('无法生成可用的 6 位用户号');
+    throw new Error('无法生成可用的 9 位用户号');
   }
-}
-
-function generateSixDigitNo() {
-  return Math.floor(100000 + Math.random() * 900000);
 }

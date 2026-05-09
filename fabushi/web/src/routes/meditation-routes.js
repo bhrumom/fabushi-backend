@@ -15,6 +15,7 @@ import {
   handleReviewMeditationGroupJoin,
   handleSyncRecord,
 } from '../handlers/meditation.js';
+import { generateGroupNo } from '../services/external-numbers.js';
 import { jsonResponse } from '../utils/response.js';
 
 function asInt(value, fallback = 0) {
@@ -42,6 +43,36 @@ async function getGroupNoById(db, groupId) {
     WHERE id = ?
   `).bind(normalizedGroupId).first();
   return result?.group_no || null;
+}
+
+async function generateUniqueGroupNo(db) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const candidate = generateGroupNo();
+    const existingGroupId = await resolveGroupIdFromGroupNo(db, candidate);
+    if (!existingGroupId) return candidate;
+  }
+
+  throw new Error('无法生成可用的 8 位群号');
+}
+
+async function ensureCreatedGroupNo(db, groupId) {
+  const normalizedGroupId = asInt(groupId);
+  if (!normalizedGroupId) return null;
+
+  const currentGroupNo = await getGroupNoById(db, normalizedGroupId);
+  if (currentGroupNo && currentGroupNo !== normalizedGroupId) {
+    return currentGroupNo;
+  }
+
+  const groupNo = await generateUniqueGroupNo(db);
+  await db.prepare(`
+    UPDATE meditation_groups
+    SET group_no = ?,
+        updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+    WHERE id = ?
+  `).bind(groupNo, normalizedGroupId).run();
+
+  return groupNo;
 }
 
 async function cloneRequestWithJsonBody(request, body) {
@@ -138,7 +169,9 @@ async function withVisibleGroupNumbers(response, db, options = {}) {
   }
 
   if (options.includeCreatedGroupNo && nextPayload?.data?.groupId) {
-    const groupNo = await getGroupNoById(db, nextPayload.data.groupId);
+    const groupNo = options.assignCreatedGroupNo
+      ? await ensureCreatedGroupNo(db, nextPayload.data.groupId)
+      : await getGroupNoById(db, nextPayload.data.groupId);
     if (groupNo) {
       nextPayload.data.groupNo = groupNo;
     }
@@ -185,7 +218,10 @@ export async function routeMeditationRequest({ pathname, method, request, env, d
   }
   if (pathname === '/api/meditation/groups' && method === 'POST') {
     const response = await handleCreateMeditationGroup(request, env, db);
-    return await withVisibleGroupNumbers(response, db, { includeCreatedGroupNo: true });
+    return await withVisibleGroupNumbers(response, db, {
+      includeCreatedGroupNo: true,
+      assignCreatedGroupNo: true,
+    });
   }
   if (pathname === '/api/meditation/groups/join' && method === 'POST') {
     const { request: nextRequest } = await rewriteGroupBodyRequest(request, db);

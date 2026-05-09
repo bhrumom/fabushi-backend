@@ -68,7 +68,7 @@ function createDbMock() {
 test('serializeAccountUser and login payload expose userNo separately from internal id', () => {
   const user = {
     id: 12,
-    user_no: 618273,
+    user_no: 618273941,
     username: 'mingyue',
     email: 'mingyue@example.com',
     nickname: '明月',
@@ -81,12 +81,12 @@ test('serializeAccountUser and login payload expose userNo separately from inter
   const serialized = serializeAccountUser(user);
   assert.equal(serialized.id, 12);
   assert.equal(serialized.userId, 12);
-  assert.equal(serialized.userNo, 618273);
+  assert.equal(serialized.userNo, 618273941);
 
   const payload = buildPasswordLoginPayload({ token: 'token', user });
   assert.equal(payload.userId, 12);
-  assert.equal(payload.userNo, 618273);
-  assert.equal(payload.user.userNo, 618273);
+  assert.equal(payload.userNo, 618273941);
+  assert.equal(payload.user.userNo, 618273941);
 });
 
 test('DatabaseService createUser stores generated user_no while id stays snowflake internal id', async () => {
@@ -107,6 +107,6 @@ test('DatabaseService createUser stores generated user_no while id stays snowfla
   });
 
   assert.equal(Number.isSafeInteger(created.id), true);
-  assert.match(String(created.user_no), /^\d{6}$/);
+  assert.match(String(created.user_no), /^\d{9}$/);
   assert.notEqual(created.user_no, created.id);
 });
