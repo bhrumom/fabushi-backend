@@ -16,7 +16,11 @@ import {
   handleSyncRecord,
 } from '../handlers/meditation.js';
 import { generateSnowflakeUserId as generateSnowflakeGroupId } from '../services/database.js';
-import { generateGroupNo } from '../services/external-numbers.js';
+import {
+  GROUP_NO_MAX_LENGTH,
+  GROUP_NO_MIN_LENGTH,
+  generateGroupNo,
+} from '../services/external-numbers.js';
 import { jsonResponse } from '../utils/response.js';
 
 function asInt(value, fallback = 0) {
@@ -92,13 +96,15 @@ async function generateUniqueGroupId(db) {
 }
 
 async function generateUniqueGroupNo(db) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const candidate = generateGroupNo();
-    const existingGroupId = await resolveGroupIdFromGroupNo(db, candidate);
-    if (!existingGroupId) return candidate;
+  for (let length = GROUP_NO_MIN_LENGTH; length <= GROUP_NO_MAX_LENGTH; length += 1) {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const candidate = generateGroupNo(length);
+      const existingGroupId = await resolveGroupIdFromGroupNo(db, candidate);
+      if (!existingGroupId) return candidate;
+    }
   }
 
-  throw new Error('无法生成可用的 8 位群号');
+  throw new Error(`无法生成可用的 ${GROUP_NO_MIN_LENGTH}-${GROUP_NO_MAX_LENGTH} 位群号`);
 }
 
 async function ensureCreatedGroupNo(db, groupId) {
@@ -172,19 +178,17 @@ async function rewriteGroupDetailRequest(request, db) {
 
 async function rewriteGroupBodyRequest(request, db) {
   const body = await request.json();
-  if (body.groupId || !body.groupNo) {
-    return { request, body };
-  }
+  let nextBody = body;
 
-  const groupId = await resolveGroupIdFromGroupNo(db, body.groupNo);
-  if (!groupId) {
-    return { request, body };
+  if (!body.groupId && body.groupNo) {
+    const groupId = await resolveGroupIdFromGroupNo(db, body.groupNo);
+    if (groupId) {
+      nextBody = {
+        ...body,
+        groupId,
+      };
+    }
   }
-
-  const nextBody = {
-    ...body,
-    groupId,
-  };
 
   return {
     request: await cloneRequestWithJsonBody(request, nextBody),

@@ -1,5 +1,7 @@
 export const USER_NO_LENGTH = 9;
-export const GROUP_NO_LENGTH = 8;
+export const GROUP_NO_MIN_LENGTH = 5;
+export const GROUP_NO_MAX_LENGTH = 8;
+export const GROUP_NO_LENGTH = GROUP_NO_MIN_LENGTH;
 
 const UINT32_SIZE = 0x100000000;
 
@@ -44,6 +46,6 @@ export function generateUserNo() {
   return generateExternalNumericNo(USER_NO_LENGTH);
 }
 
-export function generateGroupNo() {
-  return generateExternalNumericNo(GROUP_NO_LENGTH);
+export function generateGroupNo(length = GROUP_NO_LENGTH) {
+  return generateExternalNumericNo(length);
 }

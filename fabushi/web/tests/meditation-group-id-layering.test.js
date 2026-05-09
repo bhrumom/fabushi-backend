@@ -26,11 +26,22 @@ function createGroupDbMock() {
                 return state.groups.find((group) => group.id === Number(params[0])) || null;
               }
               if (normalizedSql === 'SELECT id FROM meditation_groups WHERE group_no = ?') {
-                return state.groups.find((group) => group.group_no === Number(params[0])) || null;
+                const group = state.groups.find((entry) => entry.group_no === Number(params[0]));
+                return group ? { id: group.id } : null;
               }
               if (normalizedSql === 'SELECT group_no FROM meditation_groups WHERE id = ?') {
                 const group = state.groups.find((entry) => entry.id === Number(params[0]));
                 return group ? { group_no: group.group_no } : null;
+              }
+              if (normalizedSql === 'SELECT id, require_approval, owner_username FROM meditation_groups WHERE id = ?') {
+                const group = state.groups.find((entry) => entry.id === Number(params[0]));
+                return group
+                  ? {
+                      id: group.id,
+                      require_approval: group.require_approval,
+                      owner_username: group.owner_username,
+                    }
+                  : null;
               }
               return null;
             },
@@ -64,6 +75,27 @@ function createGroupDbMock() {
                 });
                 return { meta: { last_row_id: Number(id) } };
               }
+              if (normalizedSql.startsWith('INSERT INTO meditation_group_members (group_id, username, role, status, joined_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT')) {
+                const [groupId, username, role, status, joinedAt, updatedAt] = params;
+                const existing = state.members.find(
+                  (member) => member.group_id === Number(groupId) && member.username === username,
+                );
+                if (existing) {
+                  existing.role = existing.role === 'owner' ? 'owner' : role;
+                  existing.status = status;
+                  existing.updated_at = updatedAt;
+                } else {
+                  state.members.push({
+                    group_id: Number(groupId),
+                    username,
+                    role,
+                    status,
+                    joined_at: joinedAt,
+                    updated_at: updatedAt,
+                  });
+                }
+                return { meta: {} };
+              }
               if (normalizedSql.startsWith('INSERT INTO meditation_group_members (group_id, username, role, status, joined_at, updated_at)')) {
                 const [groupId, username, joinedAt, updatedAt] = params;
                 state.members.push({
@@ -86,7 +118,7 @@ function createGroupDbMock() {
   };
 }
 
-test('creating meditation group uses snowflake internal id and random external groupNo', async () => {
+test('creating meditation group uses snowflake internal id and short external groupNo', async () => {
   const db = createGroupDbMock();
   const request = new Request('https://example.com/api/meditation/groups', {
     method: 'POST',
@@ -116,9 +148,46 @@ test('creating meditation group uses snowflake internal id and random external g
 
   assert.equal(payload.success, true);
   assert.equal(Number.isSafeInteger(payload.data.groupId), true);
-  assert.match(String(payload.data.groupNo), /^\d{8}$/);
+  assert.match(String(payload.data.groupNo), /^\d{5}$/);
   assert.notEqual(payload.data.groupId, payload.data.groupNo);
   assert.equal(db.state.groups[0].id, payload.data.groupId);
   assert.equal(db.state.groups[0].group_no, payload.data.groupNo);
   assert.equal(db.state.members[0].group_id, payload.data.groupId);
+});
+
+test('joining meditation group keeps request body readable after route rewrite', async () => {
+  const db = createGroupDbMock();
+  db.state.groups.push({
+    id: 1793864023001,
+    group_no: 12345,
+    owner_username: 'owner',
+    require_approval: 1,
+  });
+
+  const request = new Request('https://example.com/api/meditation/groups/join', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${makeToken('applicant')}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ groupId: 1793864023001 }),
+  });
+
+  const response = await routeMeditationRequest({
+    pathname: '/api/meditation/groups/join',
+    method: 'POST',
+    request,
+    env: {},
+    db,
+  });
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+
+  assert.equal(payload.success, true);
+  assert.equal(payload.data.status, 'pending');
+  assert.equal(payload.data.message, '已提交加入申请，等待同意');
+  assert.equal(db.state.members[0].group_id, 1793864023001);
+  assert.equal(db.state.members[0].username, 'applicant');
+  assert.equal(db.state.members[0].status, 'pending');
 });
