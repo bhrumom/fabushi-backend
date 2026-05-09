@@ -161,9 +161,8 @@ CREATE TABLE alipay_bindings (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-INSERT INTO alipay_bindings (id, alipay_user_id, username, user_id, bound_at)
+INSERT INTO alipay_bindings (alipay_user_id, username, user_id, bound_at)
 SELECT
-  binding.id,
   binding.alipay_user_id,
   binding.username,
   users.id,
