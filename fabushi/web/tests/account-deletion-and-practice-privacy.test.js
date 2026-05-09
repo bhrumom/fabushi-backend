@@ -33,3 +33,14 @@ test('account deletion purges meditation and social artifacts before removing th
   assert.match(accountCommandRepository, /DELETE FROM meditation_group_members WHERE group_id IN \(SELECT id FROM meditation_groups WHERE owner_username = \?\)/);
   assert.match(accountCommandRepository, /DELETE FROM user_follows WHERE follower_username = \? OR following_username = \?/);
 });
+
+test('account deletion avoids unsupported SQL transactions on Cloudflare storage', () => {
+  assert.match(accountCommandRepository, /typeof this\.db\.transaction === 'function'/);
+  assert.match(accountCommandRepository, /storage\.transaction/);
+  assert.match(accountCommandRepository, /return await action\(\);/);
+  assert.doesNotMatch(accountCommandRepository, /BEGIN TRANSACTION|SAVEPOINT|COMMIT|ROLLBACK/);
+});
+
+test('account deletion hides backend SQL errors from users', () => {
+  assert.match(authHandler, /apiError\.status >= 500 \? '注销账户失败，请稍后重试' : apiError\.message/);
+});

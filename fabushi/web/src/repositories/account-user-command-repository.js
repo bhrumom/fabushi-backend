@@ -8,6 +8,10 @@ async function safeRun(db, sql, ...params) {
   }
 }
 
+function resolveDurableObjectStorage(db) {
+  return db?.state?.storage || db?.db?.state?.storage || null;
+}
+
 export class AccountUserRepository extends BaseAccountUserRepository {
   async getByFirebaseUid(firebaseUid) {
     return await this.db.getUserByFirebaseUid(firebaseUid);
@@ -30,19 +34,20 @@ export class AccountUserRepository extends BaseAccountUserRepository {
   }
 
   async withTransaction(action) {
-    await this.db.prepare('BEGIN TRANSACTION').run();
-    try {
-      const result = await action();
-      await this.db.prepare('COMMIT').run();
-      return result;
-    } catch (error) {
-      try {
-        await this.db.prepare('ROLLBACK').run();
-      } catch (rollbackError) {
-        console.warn('账户事务回滚失败:', rollbackError?.message || rollbackError);
-      }
-      throw error;
+    if (typeof this.db.transaction === 'function') {
+      return await this.db.transaction(action);
     }
+
+    const storage = resolveDurableObjectStorage(this.db);
+    if (typeof storage?.transaction === 'function') {
+      return await storage.transaction(async () => await action());
+    }
+
+    // Cloudflare storage may reject explicit SQL transaction-control
+    // statements. When a JavaScript transaction API is unavailable, keep the
+    // deletion flow idempotent and run the cleanup directly instead of failing
+    // before the first DELETE.
+    return await action();
   }
 
   async deleteAccountArtifacts({ userId, username, email }) {

@@ -287,6 +287,7 @@ export async function handleDeleteAccount(request, env, db) {
   } catch (error) {
     const apiError = asApiError(error, '注销账户失败');
     console.error('注销账户失败:', error);
-    return jsonResponse({ error: apiError.message }, apiError.status);
+    const message = apiError.status >= 500 ? '注销账户失败，请稍后重试' : apiError.message;
+    return jsonResponse({ error: message }, apiError.status);
   }
 }
