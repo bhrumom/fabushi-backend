@@ -38,6 +38,7 @@ export function normalizeProfileUpdateBody(body) {
     displayName: rawDisplayName !== undefined ? normalizeDisplayName(rawDisplayName) : undefined,
     email: body.email !== undefined ? normalizeEmail(body.email) : undefined,
     phoneNumber: body.phoneNumber !== undefined ? normalizePhone(body.phoneNumber) : undefined,
+    avatar: body.avatar !== undefined ? normalizeOptionalString(body.avatar) : undefined,
     password,
   };
 }

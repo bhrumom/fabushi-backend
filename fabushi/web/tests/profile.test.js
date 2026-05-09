@@ -171,6 +171,30 @@ test('handleUpdateProfile uses token userId before mismatched username fallback'
   assert.equal(db.users.get('wrong_user').nickname, '错用户');
 });
 
+test('handleUpdateProfile persists avatar updates in the returned payload and stored user', async () => {
+  const db = createDbMock();
+  const user = db.seedUser('avatar_user', 'avatar@example.com', '+8613800138111', {
+    nickname: '旧头像昵称',
+    avatar: 'https://example.com/old-avatar.png'
+  });
+  const avatar = 'https://example.com/new-avatar.png';
+
+  const response = await updateProfile(db, { id: user.id, username: user.username }, {
+    nickname: '新头像昵称',
+    email: 'avatar@example.com',
+    phoneNumber: '+8613800138111',
+    avatar
+  });
+
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.success, true);
+  assert.equal(payload.user.userId, user.id);
+  assert.equal(payload.user.nickname, '新头像昵称');
+  assert.equal(payload.user.avatar, avatar);
+  assert.equal(db.users.get('avatar_user').avatar, avatar);
+});
+
 test('handleUpdateProfile rejects duplicate email by id, not by username', async () => {
   const db = createDbMock();
   const one = db.seedUser('one', 'one@example.com', '+8613800138222');

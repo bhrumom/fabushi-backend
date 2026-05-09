@@ -18,7 +18,7 @@ export async function updateProfileCommand({ currentUser, body }, repository) {
     throw new ApiError(error.message, 400);
   }
 
-  const { hasDisplayNameField, displayName, email, phoneNumber, password } = normalized;
+  const { hasDisplayNameField, displayName, email, phoneNumber, avatar, password } = normalized;
   if (hasDisplayNameField && !displayName) {
     throw new ApiError('请输入昵称', 400);
   }
@@ -44,6 +44,7 @@ export async function updateProfileCommand({ currentUser, body }, repository) {
     updates.email_verified = email ? 1 : 0;
   }
   if (phoneNumber !== undefined) updates.phone_number = phoneNumber;
+  if (avatar !== undefined) updates.avatar = avatar;
   if (password !== undefined && password.length > 0) {
     if (currentUser.password_hash && currentUser.salt) {
       throw new ApiError('当前账号已设置密码，请使用修改密码功能', 400);
