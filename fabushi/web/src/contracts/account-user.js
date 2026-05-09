@@ -37,10 +37,12 @@ export function buildPasswordLoginPayload({ token, user }) {
   };
 }
 
-export function buildProfileUpdatedPayload(user) {
-  return {
+export function buildProfileUpdatedPayload(user, token) {
+  const payload = {
     success: true,
     message: '个人资料更新成功',
     user: serializeAccountUser(user),
   };
+  if (token) payload.token = token;
+  return payload;
 }

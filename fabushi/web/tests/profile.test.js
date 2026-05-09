@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { generateToken } from '../auth-utils.js';
+import { generateToken, verifyToken } from '../auth-utils.js';
 import { handleUpdateProfile } from '../src/handlers/profile.js';
 
 function createDbMock() {
@@ -45,6 +45,7 @@ function createDbMock() {
           const key = params.at(-1);
           const user = whereById ? usersById.get(Number(key)) : users.get(key);
           if (!user) return;
+          const oldUsername = user.username;
           const assignments = normalizedSql
             .slice('UPDATE users SET'.length, normalizedSql.indexOf(whereById ? 'WHERE id = ?' : 'WHERE username = ?'))
             .split(',')
@@ -54,6 +55,9 @@ function createDbMock() {
             const match = assignment.match(/^([a-zA-Z0-9_]+)\s*=\s*\?$/);
             if (match) user[match[1]] = params[index];
           });
+          if (oldUsername !== user.username) {
+            users.delete(oldUsername);
+          }
           users.set(user.username, user);
           usersById.set(user.id, user);
           return;
@@ -209,4 +213,29 @@ test('handleUpdateProfile rejects duplicate email by id, not by username', async
   const payload = await response.json();
   assert.equal(response.status, 400);
   assert.equal(payload.error, '该邮箱已被其他账号使用');
+});
+
+test('handleUpdateProfile renames username, rotates token, and refreshes email mapping', async () => {
+  const db = createDbMock();
+  const user = db.seedUser('stable_1', 'stable@example.com', '+8613800138444', { nickname: '旧昵称' });
+
+  const response = await updateProfile(db, { id: user.id, username: user.username }, {
+    username: 'stable-renamed',
+    email: 'stable@example.com',
+    phoneNumber: '+8613800138444'
+  });
+
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.user.userId, user.id);
+  assert.equal(payload.user.username, 'stable-renamed');
+  assert.equal(payload.user.nickname, '旧昵称');
+  assert.ok(payload.token);
+  assert.equal(db.users.has('stable_1'), false);
+  assert.equal(db.users.get('stable-renamed').id, user.id);
+  assert.equal(db.emailMapping.get('stable@example.com').username, 'stable-renamed');
+
+  const tokenPayload = await verifyToken(payload.token, { JWT_SECRET: 'test-secret' });
+  assert.equal(tokenPayload.userId, user.id);
+  assert.equal(tokenPayload.username, 'stable-renamed');
 });

@@ -29,13 +29,52 @@ export function normalizePhone(value) {
   return phone;
 }
 
-export function normalizeProfileUpdateBody(body) {
-  const rawDisplayName = body.nickname !== undefined ? body.nickname : body.username;
+export function normalizeUsername(value) {
+  const username = normalizeOptionalString(value);
+  if (!username) return username;
+  if (username.includes('@') || /\s/.test(username)) {
+    throw new Error('用户名不能包含 @ 或空格');
+  }
+  if (username.length < 2 || username.length > 32) {
+    throw new Error('用户名长度需为 2-32 个字符');
+  }
+  return username;
+}
+
+function looksLikeAccountUsername(value) {
+  return /^[A-Za-z0-9_-]{2,32}$/.test(value);
+}
+
+export function normalizeProfileUpdateBody(body, currentUsername = '') {
+  const rawNickname = body.nickname;
+  const rawUsername = body.username;
   const password = body.password !== undefined ? String(body.password) : undefined;
+  const normalizedCurrentUsername = String(currentUsername || '').trim();
+
+  let hasDisplayNameField = rawNickname !== undefined;
+  let displayName = rawNickname !== undefined ? normalizeDisplayName(rawNickname) : undefined;
+  let username;
+
+  if (rawUsername !== undefined) {
+    const normalizedUsername = normalizeOptionalString(rawUsername);
+    const wantsRename = Boolean(
+      normalizedUsername
+      && normalizedUsername !== normalizedCurrentUsername
+      && looksLikeAccountUsername(normalizedUsername)
+    );
+
+    if (wantsRename) {
+      username = normalizeUsername(normalizedUsername);
+    } else if (rawNickname === undefined) {
+      hasDisplayNameField = true;
+      displayName = normalizeDisplayName(rawUsername);
+    }
+  }
 
   return {
-    hasDisplayNameField: rawDisplayName !== undefined,
-    displayName: rawDisplayName !== undefined ? normalizeDisplayName(rawDisplayName) : undefined,
+    hasDisplayNameField,
+    displayName,
+    username,
     email: body.email !== undefined ? normalizeEmail(body.email) : undefined,
     phoneNumber: body.phoneNumber !== undefined ? normalizePhone(body.phoneNumber) : undefined,
     avatar: body.avatar !== undefined ? normalizeOptionalString(body.avatar) : undefined,

@@ -1,4 +1,4 @@
-import { createPasswordHash } from '../../auth-utils.js';
+import { createPasswordHash, generateToken } from '../../auth-utils.js';
 import { buildProfileUpdatedPayload, serializeAccountUser } from '../contracts/account-user.js';
 import { ApiError } from '../contracts/api-error.js';
 import { normalizeProfileUpdateBody } from '../domain/account-identity.js';
@@ -7,20 +7,27 @@ import { authenticateRequest } from './authenticated-user.js';
 export async function updateProfileFromRequest(request, env, repository) {
   const { user } = await authenticateRequest(request, env, repository);
   const body = await request.json();
-  return await updateProfileCommand({ currentUser: user, body }, repository);
+  return await updateProfileCommand({ currentUser: user, body, env }, repository);
 }
 
-export async function updateProfileCommand({ currentUser, body }, repository) {
+export async function updateProfileCommand({ currentUser, body, env }, repository) {
   let normalized;
   try {
-    normalized = normalizeProfileUpdateBody(body);
+    normalized = normalizeProfileUpdateBody(body, currentUser.username);
   } catch (error) {
     throw new ApiError(error.message, 400);
   }
 
-  const { hasDisplayNameField, displayName, email, phoneNumber, avatar, password } = normalized;
+  const { hasDisplayNameField, displayName, username, email, phoneNumber, avatar, password } = normalized;
   if (hasDisplayNameField && !displayName) {
     throw new ApiError('请输入昵称', 400);
+  }
+
+  if (username !== undefined && username !== currentUser.username) {
+    const existingUser = await repository.getByUsername(username);
+    if (existingUser && existingUser.id !== currentUser.id) {
+      throw new ApiError('用户名已存在', 400);
+    }
   }
 
   if (email !== undefined && email) {
@@ -38,6 +45,7 @@ export async function updateProfileCommand({ currentUser, body }, repository) {
   }
 
   const updates = {};
+  if (username !== undefined && username !== currentUser.username) updates.username = username;
   if (displayName !== undefined) updates.nickname = displayName;
   if (email !== undefined) {
     updates.email = email || '';
@@ -67,15 +75,29 @@ export async function updateProfileCommand({ currentUser, body }, repository) {
   }
 
   await repository.updateById(currentUser.id, updates);
-  if (email !== undefined) {
-    await repository.replaceEmailMapping({
+  const updatedUser = (await repository.getById(currentUser.id)) || { ...currentUser, ...updates };
+
+  if (username !== undefined && username !== currentUser.username) {
+    await repository.renameUsernameReferences({
       userId: currentUser.id,
-      username: currentUser.username,
-      oldEmail: currentUser.email,
-      newEmail: email,
+      oldUsername: currentUser.username,
+      newUsername: updatedUser.username,
     });
   }
 
-  const updatedUser = (await repository.getById(currentUser.id)) || currentUser;
-  return buildProfileUpdatedPayload(updatedUser);
+  const resolvedEmail = email !== undefined ? email : currentUser.email;
+  if (resolvedEmail || email !== undefined) {
+    await repository.replaceEmailMapping({
+      userId: currentUser.id,
+      username: updatedUser.username,
+      oldEmail: currentUser.email,
+      newEmail: resolvedEmail,
+    });
+  }
+
+  const token = username !== undefined && username !== currentUser.username
+    ? await generateToken({ id: updatedUser.id, username: updatedUser.username }, env)
+    : undefined;
+
+  return buildProfileUpdatedPayload(updatedUser, token);
 }

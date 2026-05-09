@@ -67,4 +67,37 @@ export class AccountUserRepository {
       );
     }
   }
+
+  async renameUsernameReferences({ userId, oldUsername, newUsername }) {
+    if (!oldUsername || !newUsername || oldUsername === newUsername) return;
+
+    const updates = [
+      ['UPDATE email_username_mapping SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE alipay_bindings SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE orders SET username = ? WHERE account_user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE purchase_history SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE redeem_history SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE memberships SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE meditation_records SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE meditation_goals SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE meditation_settings SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE meditation_groups SET owner_username = ? WHERE owner_user_id = ? OR owner_username = ?', newUsername, userId, oldUsername],
+      ['UPDATE meditation_group_members SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE user_follows SET follower_username = ? WHERE follower_user_id = ? OR follower_username = ?', newUsername, userId, oldUsername],
+      ['UPDATE user_follows SET following_username = ? WHERE following_user_id = ? OR following_username = ?', newUsername, userId, oldUsername],
+      ['UPDATE notifications SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE notifications SET related_username = ? WHERE related_user_id = ? OR related_username = ?', newUsername, userId, oldUsername],
+      ['UPDATE sync_log SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE user_sync_state SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE comments SET username = ? WHERE account_user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE likes SET username = ? WHERE username = ?', newUsername, oldUsername],
+      ['UPDATE favorites SET username = ? WHERE username = ?', newUsername, oldUsername],
+      ['UPDATE content_likes SET username = ? WHERE account_user_id = ? OR username = ?', newUsername, userId, oldUsername],
+      ['UPDATE content_favorites SET username = ? WHERE user_id = ? OR username = ?', newUsername, userId, oldUsername],
+    ];
+
+    for (const [sql, ...params] of updates) {
+      await safeRun(this.db, sql, ...params);
+    }
+  }
 }
