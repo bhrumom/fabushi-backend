@@ -1,7 +1,10 @@
 export function serializeAccountUser(user) {
+  const userNo = user.user_no ?? user.id ?? null;
+
   return {
     id: user.id,
     userId: user.id,
+    userNo,
     username: user.username,
     email: user.email || '',
     nickname: user.nickname || user.username,
@@ -33,6 +36,7 @@ export function buildPasswordLoginPayload({ token, user }) {
     token,
     username: user.username,
     userId: user.id,
+    userNo: user.user_no ?? user.id ?? null,
     user: serializeAccountUser(user),
   };
 }

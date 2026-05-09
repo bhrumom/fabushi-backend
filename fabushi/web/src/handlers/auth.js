@@ -12,9 +12,12 @@ import { deleteAccountCommand } from '../use-cases/delete-account.js';
 export { handleLogin, handleUpdateProfile, handleUploadAvatar };
 
 function serializeUser(user) {
+  const userNo = user.user_no ?? user.id ?? null;
+
   return {
     id: user.id,
     userId: user.id,
+    userNo,
     username: user.username,
     email: user.email || '',
     nickname: user.nickname || user.username,
@@ -108,6 +111,7 @@ export async function handleFirebasePhoneLogin(request, env, db) {
         token: await generateToken({ id: user.id, username: user.username }, env),
         username: user.username,
         userId: user.id,
+        userNo: user.user_no ?? user.id ?? null,
         isNewUser: false,
         user: serializeUser(user)
       });
@@ -132,6 +136,7 @@ export async function handleFirebasePhoneLogin(request, env, db) {
       : await db.getUser(username);
     const fallbackUser = createdUser || {
       id: null,
+      user_no: null,
       username,
       email,
       phone_number: phoneNumber,
@@ -146,6 +151,7 @@ export async function handleFirebasePhoneLogin(request, env, db) {
       token: await generateToken({ id: createdUser?.id, username }, env),
       username,
       userId: createdUser?.id,
+      userNo: createdUser?.user_no ?? createdUser?.id ?? null,
       isNewUser: isNewUser ?? true,
       user: serializeUser(fallbackUser)
     });
@@ -214,6 +220,7 @@ export async function handleAppleLogin(request, env, db) {
         token: await generateToken({ id: user.id, username: user.username }, env),
         username: user.username,
         userId: user.id,
+        userNo: user.user_no ?? user.id ?? null,
         isNewUser: false,
         user: serializeUser(user)
       });
@@ -238,6 +245,7 @@ export async function handleAppleLogin(request, env, db) {
         token: await generateToken({ id: updated.id, username: updated.username }, env),
         username: updated.username,
         userId: updated.id,
+        userNo: updated.user_no ?? updated.id ?? null,
         isNewUser: false,
         user: serializeUser(updated)
       });
@@ -259,6 +267,7 @@ export async function handleAppleLogin(request, env, db) {
       token: await generateToken({ id: createdUser?.id, username }, env),
       username,
       userId: createdUser?.id,
+      userNo: createdUser?.user_no ?? createdUser?.id ?? null,
       isNewUser: true,
       user: serializeUser(createdUser)
     });

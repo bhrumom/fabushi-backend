@@ -92,6 +92,12 @@ export class DatabaseService {
     return await this.db.prepare('SELECT * FROM users WHERE id = ?').bind(normalizedId).first();
   }
 
+  async getUserByUserNo(userNo) {
+    const normalizedUserNo = Number(userNo);
+    if (!Number.isFinite(normalizedUserNo)) return null;
+    return await this.db.prepare('SELECT * FROM users WHERE user_no = ?').bind(normalizedUserNo).first();
+  }
+
   async getUserByAlipayId(alipayUserId) {
     const binding = await this.db.prepare(
       'SELECT user_id, username FROM alipay_bindings WHERE alipay_user_id = ?'
@@ -124,11 +130,13 @@ export class DatabaseService {
 
   async createUser(userData) {
     const userId = await this.generateUniqueUserId();
+    const userNo = await this.generateUniqueUserNo();
     await this.db.prepare(`
-      INSERT INTO users (id, username, email, password_hash, salt, iterations, algo, email_verified, membership_type, free_trial_end_date, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, user_no, username, email, password_hash, salt, iterations, algo, email_verified, membership_type, free_trial_end_date, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       userId,
+      userNo,
       userData.username,
       userData.email,
       userData.passwordHash,
@@ -141,8 +149,8 @@ export class DatabaseService {
       userData.createdAt
     ).run();
 
-    const createdUser = await this.getUserById(userId);
-    if (!createdUser) throw new Error('创建用户后无法重新读取 users.id');
+    const createdUser = await this.getCreatedUser(userId, userNo);
+    if (!createdUser) throw new Error('创建用户后无法重新读取 users.id / users.user_no');
 
     await this.db.prepare(
       'INSERT INTO email_username_mapping (email, username, user_id) VALUES (?, ?, ?)'
@@ -177,11 +185,13 @@ export class DatabaseService {
 
   async createPhoneUser(userData) {
     const userId = await this.generateUniqueUserId();
+    const userNo = await this.generateUniqueUserNo();
     await this.db.prepare(`
-      INSERT INTO users (id, username, email, phone_number, firebase_uid, password_hash, salt, iterations, algo, email_verified, membership_type, free_trial_end_date, created_at)
-      VALUES (?, ?, ?, ?, ?, '', '', 0, '', 1, ?, ?, ?)
+      INSERT INTO users (id, user_no, username, email, phone_number, firebase_uid, password_hash, salt, iterations, algo, email_verified, membership_type, free_trial_end_date, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, '', '', 0, '', 1, ?, ?, ?)
     `).bind(
       userId,
+      userNo,
       userData.username,
       userData.email,
       userData.phoneNumber,
@@ -190,7 +200,7 @@ export class DatabaseService {
       userData.freeTrialEndDate,
       userData.createdAt
     ).run();
-    return await this.getUserById(userId);
+    return await this.getCreatedUser(userId, userNo);
   }
 
   async getUserByAppleId(appleUserId) {
@@ -199,11 +209,13 @@ export class DatabaseService {
 
   async createAppleUser(userData) {
     const userId = await this.generateUniqueUserId();
+    const userNo = await this.generateUniqueUserNo();
     await this.db.prepare(`
-      INSERT INTO users (id, username, email, apple_user_id, nickname, password_hash, salt, iterations, algo, email_verified, membership_type, membership_expires_at, created_at)
-      VALUES (?, ?, ?, ?, ?, '', '', 0, '', 1, ?, ?, ?)
+      INSERT INTO users (id, user_no, username, email, apple_user_id, nickname, password_hash, salt, iterations, algo, email_verified, membership_type, membership_expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, '', '', 0, '', 1, ?, ?, ?)
     `).bind(
       userId,
+      userNo,
       userData.username,
       userData.email,
       userData.appleUserId,
@@ -212,14 +224,20 @@ export class DatabaseService {
       userData.membershipExpiresAt,
       userData.createdAt
     ).run();
-    const createdUser = await this.getUserById(userId);
-    if (!createdUser) throw new Error('创建 Apple 用户后无法重新读取 users.id');
+    const createdUser = await this.getCreatedUser(userId, userNo);
+    if (!createdUser) throw new Error('创建 Apple 用户后无法重新读取 users.id / users.user_no');
     if (userData.email) {
       await this.db.prepare(
         'INSERT OR REPLACE INTO email_username_mapping (email, username, user_id) VALUES (?, ?, ?)'
       ).bind(userData.email, userData.username, createdUser.id).run();
     }
     return createdUser;
+  }
+
+  async getCreatedUser(userId, userNo) {
+    const userById = await this.getUserById(userId);
+    if (userById) return userById;
+    return await this.getUserByUserNo(userNo);
   }
 
   async generateUniqueUserId() {
@@ -230,4 +248,17 @@ export class DatabaseService {
     }
     throw new Error('无法生成可用的雪花式用户 ID');
   }
+
+  async generateUniqueUserNo() {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const candidate = generateSixDigitNo();
+      const existing = await this.getUserByUserNo(candidate);
+      if (!existing) return candidate;
+    }
+    throw new Error('无法生成可用的 6 位用户号');
+  }
+}
+
+function generateSixDigitNo() {
+  return Math.floor(100000 + Math.random() * 900000);
 }
