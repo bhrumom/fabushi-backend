@@ -259,4 +259,84 @@ export class DatabaseService {
     }
     throw new Error('无法生成可用的 9 位用户号');
   }
+
+  async getLeaderboard(limit = 100) {
+    const parsedLimit = Number.parseInt(limit, 10);
+    const safeLimit = Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(parsedLimit, 1), 100)
+      : 100;
+
+    try {
+      const result = await this.db.prepare(`
+        SELECT
+          username,
+          nickname,
+          avatar,
+          alipay_avatar,
+          wechat_headimgurl,
+          COALESCE(total_transferred_bytes, 0) AS totalBytes,
+          last_transfer_at AS latestTransferAt
+        FROM users
+        WHERE COALESCE(total_transferred_bytes, 0) > 0
+        ORDER BY COALESCE(total_transferred_bytes, 0) DESC,
+                 COALESCE(last_transfer_at, updated_at, created_at) DESC
+        LIMIT ?
+      `).bind(safeLimit).all();
+
+      return (result?.results || []).map((entry, index) => ({
+        username: entry.username || 'Unknown',
+        displayName: entry.nickname || entry.username || 'Unknown',
+        avatar: entry.avatar || entry.alipay_avatar || entry.wechat_headimgurl || null,
+        totalBytes: Number(entry.totalBytes) || 0,
+        totalRecords: 0,
+        totalDays: 0,
+        latestRecordDate: entry.latestTransferAt || null,
+        latestTransferAt: entry.latestTransferAt || null,
+        rank: index + 1,
+      }));
+    } catch (error) {
+      console.error('获取全球布施排行榜失败:', error);
+      return [];
+    }
+  }
+
+  async updateTransferData(username, bytes) {
+    const normalizedUsername = String(username || '').trim();
+    const parsedBytes = Number(bytes);
+    const normalizedBytes = Number.isFinite(parsedBytes) ? Math.trunc(parsedBytes) : 0;
+
+    if (!normalizedUsername) {
+      throw new Error('缺少用户名，无法更新排行榜数据');
+    }
+    if (normalizedBytes <= 0) {
+      throw new Error('无效的传输字节数，无法更新排行榜数据');
+    }
+
+    const now = new Date().toISOString();
+    const result = await this.db.prepare(`
+      UPDATE users
+      SET total_transferred_bytes = COALESCE(total_transferred_bytes, 0) + ?,
+          last_transfer_at = ?,
+          updated_at = ?
+      WHERE username = ?
+    `).bind(normalizedBytes, now, now, normalizedUsername).run();
+
+    if (result?.meta?.changes === 0) {
+      throw new Error(`用户不存在，无法更新排行榜数据: ${normalizedUsername}`);
+    }
+
+    const row = await this.db.prepare(`
+      SELECT COALESCE(total_transferred_bytes, 0) AS totalBytes,
+             last_transfer_at AS lastTransferAt
+      FROM users
+      WHERE username = ?
+    `).bind(normalizedUsername).first();
+
+    return {
+      username: normalizedUsername,
+      bytes: normalizedBytes,
+      totalBytes: Number(row?.totalBytes) || 0,
+      lastTransferAt: row?.lastTransferAt || now,
+    };
+  }
 }
