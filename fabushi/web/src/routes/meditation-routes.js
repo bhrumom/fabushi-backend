@@ -28,7 +28,21 @@ function asInt(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-async function authenticateRouteUser(request) {
+async function resolveUserIdByUsername(db, username) {
+  if (!username) return null;
+  try {
+    const row = await db.prepare(`
+      SELECT id
+      FROM users
+      WHERE username = ?
+    `).bind(username).first();
+    return row?.id ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function authenticateRouteUser(request, db = null) {
   const authHeader = request.headers.get('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return { error: '未授权访问', status: 401 };
@@ -47,10 +61,20 @@ async function authenticateRouteUser(request) {
       return { error: '无法获取用户信息', status: 401 };
     }
 
-    return { username };
+    const tokenUserId = payload.userId ?? payload.id ?? null;
+    const userId = tokenUserId ?? (db ? await resolveUserIdByUsername(db, username) : null);
+    return { username, userId };
   } catch (_) {
-    return { error: 'Token解瞐失败', status: 401 };
+    return { error: 'Token解析失败', status: 401 };
   }
+}
+
+function isMissingUserIdColumnError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('owner_user_id') ||
+    message.includes('user_id') ||
+    message.includes('no such column') ||
+    message.includes('has no column named');
 }
 
 async function resolveGroupById(db, groupId) {
@@ -92,7 +116,7 @@ async function generateUniqueGroupId(db) {
     if (!existingGroup) return candidate;
   }
 
-  throw new Error('无法生成可用的雪舱式羄绔 ID');
+  throw new Error('无法生成可用的雪花式小组 ID');
 }
 
 async function generateUniqueGroupNo(db) {
@@ -231,7 +255,7 @@ async function withVisibleGroupNumbers(response, db, options = {}) {
 }
 
 async function handleCreateMeditationGroupWithGeneratedIds(request, db) {
-  const auth = await authenticateRouteUser(request);
+  const auth = await authenticateRouteUser(request, db);
   if (auth.error) {
     return jsonResponse({ success: false, error: auth.error }, auth.status);
   }
@@ -240,7 +264,7 @@ async function handleCreateMeditationGroupWithGeneratedIds(request, db) {
     const body = await request.json();
     const name = (body.name || '').toString().trim();
     if (!name) {
-      return jsonResponse({ success: false, error: '小绔對称不能为立' }, 400);
+      return jsonResponse({ success: false, error: '小组名称不能为空' }, 400);
     }
 
     const now = new Date().toISOString();
@@ -250,35 +274,148 @@ async function handleCreateMeditationGroupWithGeneratedIds(request, db) {
     const cumulativeMissLimit = Math.max(0, asInt(body.cumulativeMissLimit, 7));
     const consecutiveMissLimit = Math.max(0, asInt(body.consecutiveMissLimit, 3));
 
-    await db.prepare(`
-      INSERT INTO meditation_groups (
-        id, group_no, name, description, owner_username, require_approval, daily_goal_minutes,
-        cumulative_miss_limit, consecutive_miss_limit, created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      groupId,
-      groupNo,
-      name,
-      (body.description || '').toString().trim(),
-      auth.username,
-      body.requireApproval ? 1 : 0,
-      dailyGoalMinutes,
-      cumulativeMissLimit,
-      consecutiveMissLimit,
-      now,
-      now
-    ).run();
+    try {
+      await db.prepare(`
+        INSERT INTO meditation_groups (
+          id, group_no, name, description, owner_username, owner_user_id, require_approval, daily_goal_minutes,
+          cumulative_miss_limit, consecutive_miss_limit, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        groupId,
+        groupNo,
+        name,
+        (body.description || '').toString().trim(),
+        auth.username,
+        auth.userId,
+        body.requireApproval ? 1 : 0,
+        dailyGoalMinutes,
+        cumulativeMissLimit,
+        consecutiveMissLimit,
+        now,
+        now
+      ).run();
 
-    await db.prepare(`
-      INSERT INTO meditation_group_members (group_id, username, role, status, joined_at, updated_at)
-      VALUES (?, ?, 'owner', 'active', ?, ?)
-    `).bind(groupId, auth.username, now, now).run();
+      await db.prepare(`
+        INSERT INTO meditation_group_members (group_id, username, user_id, role, status, joined_at, updated_at)
+        VALUES (?, ?, ?, 'owner', 'active', ?, ?)
+      `).bind(groupId, auth.username, auth.userId, now, now).run();
+    } catch (error) {
+      if (!isMissingUserIdColumnError(error)) {
+        throw error;
+      }
+
+      await db.prepare(`
+        INSERT INTO meditation_groups (
+          id, group_no, name, description, owner_username, require_approval, daily_goal_minutes,
+          cumulative_miss_limit, consecutive_miss_limit, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        groupId,
+        groupNo,
+        name,
+        (body.description || '').toString().trim(),
+        auth.username,
+        body.requireApproval ? 1 : 0,
+        dailyGoalMinutes,
+        cumulativeMissLimit,
+        consecutiveMissLimit,
+        now,
+        now
+      ).run();
+
+      await db.prepare(`
+        INSERT INTO meditation_group_members (group_id, username, role, status, joined_at, updated_at)
+        VALUES (?, ?, 'owner', 'active', ?, ?)
+      `).bind(groupId, auth.username, now, now).run();
+    }
 
     return jsonResponse({ success: true, data: { groupId, groupNo } });
   } catch (e) {
-    console.error('创建共伮小绔失败', e);
-    return jsonResponse({ success: false, error: '创建共伮小绔失败' }, 500);
+    console.error('创建共修小组失败', e);
+    return jsonResponse({ success: false, error: '创建共修小组失败' }, 500);
+  }
+}
+
+async function handleJoinMeditationGroupWithStableUserId(request, env, db) {
+  const auth = await authenticateRouteUser(request, db);
+  if (auth.error) {
+    return jsonResponse({ success: false, error: auth.error }, auth.status);
+  }
+
+  try {
+    const body = await request.json();
+    const groupId = asInt(body.groupId);
+    if (!groupId) {
+      return jsonResponse({ success: false, error: 'groupId required' }, 400);
+    }
+
+    if (!auth.userId) {
+      return await handleJoinMeditationGroup(await cloneRequestWithJsonBody(request, body), env, db);
+    }
+
+    let group;
+    try {
+      group = await db.prepare(`
+        SELECT id, require_approval, owner_username, owner_user_id
+        FROM meditation_groups
+        WHERE id = ?
+      `).bind(groupId).first();
+    } catch (error) {
+      if (!isMissingUserIdColumnError(error)) {
+        throw error;
+      }
+      return await handleJoinMeditationGroup(await cloneRequestWithJsonBody(request, body), env, db);
+    }
+
+    if (!group) {
+      return jsonResponse({ success: false, error: '小组不存在' }, 404);
+    }
+
+    const now = new Date().toISOString();
+    const isOwner = group.owner_user_id === auth.userId || group.owner_username === auth.username;
+    const role = isOwner ? 'owner' : 'member';
+    const status = role === 'owner' || group.require_approval !== 1 ? 'active' : 'pending';
+
+    const existing = await db.prepare(`
+      SELECT id, role
+      FROM meditation_group_members
+      WHERE group_id = ? AND user_id = ?
+    `).bind(groupId, auth.userId).first();
+
+    if (existing) {
+      await db.prepare(`
+        UPDATE meditation_group_members
+        SET username = ?,
+            status = ?,
+            role = CASE WHEN role = 'owner' THEN 'owner' ELSE ? END,
+            warning_message = NULL,
+            removal_reason = NULL,
+            removed_at = NULL,
+            updated_at = ?
+        WHERE id = ?
+      `).bind(auth.username, status, role, now, existing.id).run();
+    } else {
+      await db.prepare(`
+        INSERT INTO meditation_group_members (group_id, username, user_id, role, status, joined_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).bind(groupId, auth.username, auth.userId, role, status, now, now).run();
+    }
+
+    return jsonResponse({
+      success: true,
+      data: {
+        status,
+        message: status === 'pending' ? '已提交加入申请，等待同意' : '已加入共修小组',
+      },
+    });
+  } catch (e) {
+    if (isMissingUserIdColumnError(e)) {
+      return await handleJoinMeditationGroup(request, env, db);
+    }
+    console.error('加入共修小组失败:', e);
+    return jsonResponse({ success: false, error: '加入共修小组失败' }, 500);
   }
 }
 
@@ -323,7 +460,7 @@ export async function routeMeditationRequest({ pathname, method, request, env, d
   }
   if (pathname === '/api/meditation/groups/join' && method === 'POST') {
     const { request: nextRequest } = await rewriteGroupBodyRequest(request, db);
-    return await handleJoinMeditationGroup(nextRequest, env, db);
+    return await handleJoinMeditationGroupWithStableUserId(nextRequest, env, db);
   }
   if (pathname === '/api/meditation/groups/detail' && method === 'GET') {
     const nextRequest = await rewriteGroupDetailRequest(request, db);

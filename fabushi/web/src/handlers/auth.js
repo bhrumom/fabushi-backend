@@ -170,6 +170,8 @@ export async function handleAppleLogin(request, env, db) {
       return jsonResponse({ error: '缺少必要参数 (identityToken, authorizationCode)' }, 400);
     }
 
+    const appleDisplayName = [givenName, familyName].filter(Boolean).join(' ').trim();
+
     let appleUserId;
     let appleEmail;
     try {
@@ -204,8 +206,7 @@ export async function handleAppleLogin(request, env, db) {
     if (user) {
       const updates = {};
       if (appleEmail && !user.email) updates.email = appleEmail;
-      const fullName = [givenName, familyName].filter(Boolean).join(' ');
-      if (fullName && !user.nickname) updates.nickname = user.username;
+      if (appleDisplayName && !user.nickname) updates.nickname = appleDisplayName;
       if (Object.keys(updates).length > 0) {
         if (db.updateUserById) {
           await db.updateUserById(user.id, updates);
@@ -233,7 +234,11 @@ export async function handleAppleLogin(request, env, db) {
     const existingEmailUser = await db.db.prepare('SELECT * FROM users WHERE email = ?').bind(userEmail).first();
     if (existingEmailUser) {
       const updates = { apple_user_id: appleUserId };
-      if (!existingEmailUser.nickname) updates.nickname = existingEmailUser.username;
+      if (appleDisplayName && !existingEmailUser.nickname) {
+        updates.nickname = appleDisplayName;
+      } else if (!existingEmailUser.nickname) {
+        updates.nickname = existingEmailUser.username;
+      }
       if (db.updateUserById) {
         await db.updateUserById(existingEmailUser.id, updates);
       } else {
@@ -255,7 +260,7 @@ export async function handleAppleLogin(request, env, db) {
       username,
       email: userEmail,
       appleUserId,
-      nickname: username,
+      nickname: appleDisplayName || username,
       membershipType: 'trial',
       membershipExpiresAt: trialEndDate.toISOString(),
       createdAt: new Date().toISOString()
