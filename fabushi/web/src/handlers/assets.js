@@ -84,6 +84,14 @@ export async function handleR2Proxy(request, env) {
       
       const size = headObject.size;
       const end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+      if (start >= size || end < start) {
+        const headers = new Headers();
+        headers.set('Content-Range', `bytes */${size}`);
+        headers.set('Accept-Ranges', 'bytes');
+        headers.set('Access-Control-Allow-Origin', '*');
+        return new Response('请求范围不满足', { status: 416, headers });
+      }
+
       const length = end - start + 1;
 
       const rangedObject = await env.R2_BUCKET.get(fileKey, { range: { offset: start, length } });
