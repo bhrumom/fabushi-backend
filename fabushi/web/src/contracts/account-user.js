@@ -6,6 +6,7 @@ export function serializeAccountUser(user) {
     userId: user.id,
     userNo,
     username: user.username,
+    usernameChangedAt: user.username_changed_at || null,
     email: user.email || '',
     nickname: user.nickname || user.username,
     avatar: user.avatar || user.alipay_avatar || user.wechat_headimgurl || null,

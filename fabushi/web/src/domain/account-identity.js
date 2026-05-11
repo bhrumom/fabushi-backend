@@ -46,13 +46,13 @@ function looksLikeAccountUsername(value) {
 }
 
 export function normalizeProfileUpdateBody(body, currentUsername = '') {
-  const rawNickname = body.nickname;
+  const rawDisplayName = body.displayName !== undefined ? body.displayName : body.nickname;
   const rawUsername = body.username;
   const password = body.password !== undefined ? String(body.password) : undefined;
   const normalizedCurrentUsername = String(currentUsername || '').trim();
 
-  let hasDisplayNameField = rawNickname !== undefined;
-  let displayName = rawNickname !== undefined ? normalizeDisplayName(rawNickname) : undefined;
+  let hasDisplayNameField = rawDisplayName !== undefined;
+  let displayName = rawDisplayName !== undefined ? normalizeDisplayName(rawDisplayName) : undefined;
   let username;
 
   if (rawUsername !== undefined) {
@@ -65,7 +65,7 @@ export function normalizeProfileUpdateBody(body, currentUsername = '') {
 
     if (wantsRename) {
       username = normalizeUsername(normalizedUsername);
-    } else if (rawNickname === undefined) {
+    } else if (rawDisplayName === undefined) {
       hasDisplayNameField = true;
       displayName = normalizeDisplayName(rawUsername);
     }

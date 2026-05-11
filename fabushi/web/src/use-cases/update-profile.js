@@ -4,6 +4,19 @@ import { ApiError } from '../contracts/api-error.js';
 import { normalizeProfileUpdateBody } from '../domain/account-identity.js';
 import { authenticateRequest } from './authenticated-user.js';
 
+const USERNAME_CHANGE_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
+
+function parseIsoDate(value) {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return null;
+  return new Date(timestamp);
+}
+
+function formatDateOnly(date) {
+  return date.toISOString().slice(0, 10);
+}
+
 export async function updateProfileFromRequest(request, env, repository) {
   const { user } = await authenticateRequest(request, env, repository);
   const body = await request.json();
@@ -24,6 +37,14 @@ export async function updateProfileCommand({ currentUser, body, env }, repositor
   }
 
   if (username !== undefined && username !== currentUser.username) {
+    const lastChangedAt = parseIsoDate(currentUser.username_changed_at);
+    if (lastChangedAt) {
+      const nextAllowedAt = new Date(lastChangedAt.getTime() + USERNAME_CHANGE_WINDOW_MS);
+      if (nextAllowedAt.getTime() > Date.now()) {
+        throw new ApiError(`用户名一年只能修改一次，请在${formatDateOnly(nextAllowedAt)}后再试`, 400);
+      }
+    }
+
     const existingUser = await repository.getByUsername(username);
     if (existingUser && existingUser.id !== currentUser.id) {
       throw new ApiError('用户名已存在', 400);
@@ -45,7 +66,10 @@ export async function updateProfileCommand({ currentUser, body, env }, repositor
   }
 
   const updates = {};
-  if (username !== undefined && username !== currentUser.username) updates.username = username;
+  if (username !== undefined && username !== currentUser.username) {
+    updates.username = username;
+    updates.username_changed_at = new Date().toISOString();
+  }
   if (displayName !== undefined) updates.nickname = displayName;
   if (email !== undefined) {
     updates.email = email || '';

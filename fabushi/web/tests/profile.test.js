@@ -88,8 +88,10 @@ function createDbMock() {
       };
     },
     seedUser(username, email, phoneNumber, extra = {}) {
+      const id = nextId++;
       const user = {
-        id: nextId++,
+        id,
+        user_no: extra.user_no ?? id,
         username,
         email,
         password_hash: '',
@@ -105,6 +107,7 @@ function createDbMock() {
         membership_type: 'trial',
         membership_expires_at: null,
         free_trial_end_date: '2026-05-31T00:00:00Z',
+        username_changed_at: extra.username_changed_at ?? null,
         created_at: '2026-05-01T00:00:00Z',
         updated_at: '2026-05-04T00:00:00Z'
       };
@@ -155,6 +158,24 @@ test('handleUpdateProfile treats legacy username payload as display name and kee
     db.statements.some(({ sql }) => sql.startsWith('INSERT INTO users') || sql.startsWith('DELETE FROM users')),
     false
   );
+});
+
+test('handleUpdateProfile accepts explicit displayName field and keeps username stable', async () => {
+  const db = createDbMock();
+  const user = db.seedUser('display_name_user', 'display@example.com', '+8613800138009', { nickname: '旧显示名' });
+
+  const response = await updateProfile(db, { id: user.id, username: user.username }, {
+    displayName: '新显示名',
+    email: 'display@example.com',
+    phoneNumber: '+8613800138009'
+  });
+
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.user.userId, user.id);
+  assert.equal(payload.user.username, 'display_name_user');
+  assert.equal(payload.user.nickname, '新显示名');
+  assert.equal(db.users.get('display_name_user').nickname, '新显示名');
 });
 
 test('handleUpdateProfile uses token userId before mismatched username fallback', async () => {
@@ -215,6 +236,30 @@ test('handleUpdateProfile rejects duplicate email by id, not by username', async
   assert.equal(payload.error, '该邮箱已被其他账号使用');
 });
 
+test('handleUpdateProfile blocks username rename within one year window', async () => {
+  const db = createDbMock();
+  const recentChangeAt = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const expectedNextDate = new Date(Date.parse(recentChangeAt) + 365 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const user = db.seedUser('rename_locked', 'locked@example.com', '+8613800138440', {
+    nickname: '改名受限',
+    username_changed_at: recentChangeAt,
+  });
+
+  const response = await updateProfile(db, { id: user.id, username: user.username }, {
+    username: 'rename_unlocked_later',
+    email: 'locked@example.com',
+    phoneNumber: '+8613800138440'
+  });
+
+  const payload = await response.json();
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, `用户名一年只能修改一次，请在${expectedNextDate}后再试`);
+  assert.equal(db.users.has('rename_locked'), true);
+  assert.equal(db.users.has('rename_unlocked_later'), false);
+});
+
 test('handleUpdateProfile renames username, rotates token, and refreshes email mapping', async () => {
   const db = createDbMock();
   const user = db.seedUser('stable_1', 'stable@example.com', '+8613800138444', { nickname: '旧昵称' });
@@ -231,8 +276,11 @@ test('handleUpdateProfile renames username, rotates token, and refreshes email m
   assert.equal(payload.user.username, 'stable-renamed');
   assert.equal(payload.user.nickname, '旧昵称');
   assert.ok(payload.token);
+  assert.ok(payload.user.userNo);
+  assert.ok(payload.user.usernameChangedAt);
   assert.equal(db.users.has('stable_1'), false);
   assert.equal(db.users.get('stable-renamed').id, user.id);
+  assert.ok(db.users.get('stable-renamed').username_changed_at);
   assert.equal(db.emailMapping.get('stable@example.com').username, 'stable-renamed');
 
   const tokenPayload = await verifyToken(payload.token, { JWT_SECRET: 'test-secret' });

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
   last_transfer_at TEXT,
   sync_version INTEGER DEFAULT 1,
   extra_data TEXT,
+  username_changed_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT
 );
