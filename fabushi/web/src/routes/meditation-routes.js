@@ -15,7 +15,6 @@ import {
   handleReviewMeditationGroupJoin,
   handleSyncRecord,
 } from '../handlers/meditation.js';
-import { verifyToken } from '../../auth-utils.js';
 import { generateSnowflakeUserId as generateSnowflakeGroupId } from '../services/database.js';
 import {
   GROUP_NO_MAX_LENGTH,
@@ -43,66 +42,31 @@ async function resolveUserIdByUsername(db, username) {
   }
 }
 
-function buildLegacyMeditationToken({ username, userId }) {
-  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = btoa(JSON.stringify({
-    ...(userId !== undefined && userId !== null ? { userId } : {}),
-    username,
-  }));
-  return `${header}.${payload}.legacy`;
-}
-
-function cloneRequestWithAuthToken(request, token) {
-  const headers = new Headers(request.headers);
-  headers.set('Authorization', `Bearer ${token}`);
-  return new Request(request.url, {
-    method: request.method,
-    headers,
-    body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
-  });
-}
-
-async function authenticateRouteUser(request, env, db = null) {
+async function authenticateRouteUser(request, db = null) {
   const authHeader = request.headers.get('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return { error: '未授权访问', status: 401 };
   }
 
   const token = authHeader.substring(7);
-  const payload = await verifyToken(token, env);
-  if (!payload) {
-    return { error: '认证失败', status: 401 };
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return { error: 'Token格式无效', status: 401 };
+    }
+
+    const payload = JSON.parse(atob(parts[1]));
+    const username = payload.username || payload.sub;
+    if (!username) {
+      return { error: '无法获取用户信息', status: 401 };
+    }
+
+    const tokenUserId = payload.userId ?? payload.id ?? null;
+    const userId = tokenUserId ?? (db ? await resolveUserIdByUsername(db, username) : null);
+    return { username, userId };
+  } catch (_) {
+    return { error: 'Token解析失败', status: 401 };
   }
-
-  const username = payload.username || payload.sub;
-  if (!username) {
-    return { error: '无法获取用户信息', status: 401 };
-  }
-
-  const tokenUserId = payload.userId ?? payload.id ?? null;
-  const userId = tokenUserId ?? (db ? await resolveUserIdByUsername(db, username) : null);
-  return { username, userId };
-}
-
-async function prepareLegacyMeditationRequest(request, env, db) {
-  const auth = await authenticateRouteUser(request, env, db);
-  if (auth.error) {
-    return auth;
-  }
-
-  return {
-    auth,
-    request: cloneRequestWithAuthToken(request, buildLegacyMeditationToken(auth)),
-  };
-}
-
-async function routeWithVerifiedLegacyAuth(handler, request, env, db) {
-  const prepared = await prepareLegacyMeditationRequest(request, env, db);
-  if (prepared.error) {
-    return jsonResponse({ success: false, error: prepared.error }, prepared.status);
-  }
-
-  return await handler(prepared.request, env, db);
 }
 
 function isMissingUserIdColumnError(error) {
@@ -290,8 +254,8 @@ async function withVisibleGroupNumbers(response, db, options = {}) {
   return jsonResponse(nextPayload, response.status);
 }
 
-async function handleCreateMeditationGroupWithGeneratedIds(request, env, db) {
-  const auth = await authenticateRouteUser(request, env, db);
+async function handleCreateMeditationGroupWithGeneratedIds(request, db) {
+  const auth = await authenticateRouteUser(request, db);
   if (auth.error) {
     return jsonResponse({ success: false, error: auth.error }, auth.status);
   }
@@ -375,7 +339,7 @@ async function handleCreateMeditationGroupWithGeneratedIds(request, env, db) {
 }
 
 async function handleJoinMeditationGroupWithStableUserId(request, env, db) {
-  const auth = await authenticateRouteUser(request, env, db);
+  const auth = await authenticateRouteUser(request, db);
   if (auth.error) {
     return jsonResponse({ success: false, error: auth.error }, auth.status);
   }
@@ -388,11 +352,7 @@ async function handleJoinMeditationGroupWithStableUserId(request, env, db) {
     }
 
     if (!auth.userId) {
-      const prepared = await prepareLegacyMeditationRequest(await cloneRequestWithJsonBody(request, body), env, db);
-      if (prepared.error) {
-        return jsonResponse({ success: false, error: prepared.error }, prepared.status);
-      }
-      return await handleJoinMeditationGroup(prepared.request, env, db);
+      return await handleJoinMeditationGroup(await cloneRequestWithJsonBody(request, body), env, db);
     }
 
     let group;
@@ -406,11 +366,7 @@ async function handleJoinMeditationGroupWithStableUserId(request, env, db) {
       if (!isMissingUserIdColumnError(error)) {
         throw error;
       }
-      const prepared = await prepareLegacyMeditationRequest(await cloneRequestWithJsonBody(request, body), env, db);
-      if (prepared.error) {
-        return jsonResponse({ success: false, error: prepared.error }, prepared.status);
-      }
-      return await handleJoinMeditationGroup(prepared.request, env, db);
+      return await handleJoinMeditationGroup(await cloneRequestWithJsonBody(request, body), env, db);
     }
 
     if (!group) {
@@ -456,11 +412,7 @@ async function handleJoinMeditationGroupWithStableUserId(request, env, db) {
     });
   } catch (e) {
     if (isMissingUserIdColumnError(e)) {
-      const prepared = await prepareLegacyMeditationRequest(request, env, db);
-      if (prepared.error) {
-        return jsonResponse({ success: false, error: prepared.error }, prepared.status);
-      }
-      return await handleJoinMeditationGroup(prepared.request, env, db);
+      return await handleJoinMeditationGroup(request, env, db);
     }
     console.error('加入共修小组失败:', e);
     return jsonResponse({ success: false, error: '加入共修小组失败' }, 500);
@@ -469,42 +421,42 @@ async function handleJoinMeditationGroupWithStableUserId(request, env, db) {
 
 export async function routeMeditationRequest({ pathname, method, request, env, db }) {
   if (pathname === '/api/meditation/record' && method === 'POST') {
-    return await routeWithVerifiedLegacyAuth(handleSyncRecord, request, env, db);
+    return await handleSyncRecord(request, env, db);
   }
   if (pathname === '/api/meditation/records' && method === 'GET') {
-    return await routeWithVerifiedLegacyAuth(handleGetRecords, request, env, db);
+    return await handleGetRecords(request, env, db);
   }
   if (pathname === '/api/meditation/records' && method === 'PUT') {
-    return await routeWithVerifiedLegacyAuth(handleUpdateRecord, request, env, db);
+    return await handleUpdateRecord(request, env, db);
   }
   if (pathname === '/api/meditation/records' && method === 'DELETE') {
-    return await routeWithVerifiedLegacyAuth(handleDeleteRecord, request, env, db);
+    return await handleDeleteRecord(request, env, db);
   }
   if (pathname === '/api/meditation/stats' && method === 'GET') {
-    return await routeWithVerifiedLegacyAuth(handleGetStats, request, env, db);
+    return await handleGetStats(request, env, db);
   }
   if (pathname === '/api/meditation/weekly' && method === 'GET') {
-    return await routeWithVerifiedLegacyAuth(handleGetWeeklyStats, request, env, db);
+    return await handleGetWeeklyStats(request, env, db);
   }
   if (pathname === '/api/meditation/monthly' && method === 'GET') {
-    return await routeWithVerifiedLegacyAuth(handleGetMonthlyStats, request, env, db);
+    return await handleGetMonthlyStats(request, env, db);
   }
   if (pathname === '/api/meditation/goal' && method === 'POST') {
-    return await routeWithVerifiedLegacyAuth(handleSetGoal, request, env, db);
+    return await handleSetGoal(request, env, db);
   }
   if (pathname === '/api/meditation/goal' && method === 'GET') {
-    return await routeWithVerifiedLegacyAuth(handleGetGoals, request, env, db);
+    return await handleGetGoals(request, env, db);
   }
   if (pathname === '/api/meditation/settings' && (method === 'GET' || method === 'POST')) {
-    return await routeWithVerifiedLegacyAuth(handleMeditationSettings, request, env, db);
+    return await handleMeditationSettings(request, env, db);
   }
   if (pathname === '/api/meditation/groups' && method === 'GET') {
     const nextRequest = await rewriteNumericGroupQueryToInternalId(request, db);
-    const response = await routeWithVerifiedLegacyAuth(handleGetMeditationGroups, nextRequest, env, db);
+    const response = await handleGetMeditationGroups(nextRequest, env, db);
     return await withVisibleGroupNumbers(response, db);
   }
   if (pathname === '/api/meditation/groups' && method === 'POST') {
-    return await handleCreateMeditationGroupWithGeneratedIds(request, env, db);
+    return await handleCreateMeditationGroupWithGeneratedIds(request, db);
   }
   if (pathname === '/api/meditation/groups/join' && method === 'POST') {
     const { request: nextRequest } = await rewriteGroupBodyRequest(request, db);
@@ -512,12 +464,12 @@ export async function routeMeditationRequest({ pathname, method, request, env, d
   }
   if (pathname === '/api/meditation/groups/detail' && method === 'GET') {
     const nextRequest = await rewriteGroupDetailRequest(request, db);
-    const response = await routeWithVerifiedLegacyAuth(handleGetMeditationGroupDetail, nextRequest, env, db);
+    const response = await handleGetMeditationGroupDetail(nextRequest, env, db);
     return await withVisibleGroupNumbers(response, db);
   }
   if (pathname === '/api/meditation/groups/review' && method === 'POST') {
     const { request: nextRequest } = await rewriteGroupBodyRequest(request, db);
-    return await routeWithVerifiedLegacyAuth(handleReviewMeditationGroupJoin, nextRequest, env, db);
+    return await handleReviewMeditationGroupJoin(nextRequest, env, db);
   }
 
   return null;
