@@ -6,8 +6,14 @@ function normalizeRequiredString(value) {
   return String(value || '').trim();
 }
 
+function normalizeOptionalString(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized.length === 0 ? null : normalized;
+}
+
 export async function registerAccountCommand(body, env, repository) {
-  const { username, email, password, verificationCode } = body;
+  const { username, email, password, verificationCode, nickname, avatar } = body;
 
   if (!username || !email || !password || !verificationCode) {
     throw new ApiError('缺少必要字段', 400);
@@ -15,6 +21,8 @@ export async function registerAccountCommand(body, env, repository) {
 
   const normalizedUsername = normalizeRequiredString(username);
   const normalizedEmail = normalizeRequiredString(email).toLowerCase();
+  const normalizedNickname = normalizeOptionalString(nickname) || normalizedUsername;
+  const normalizedAvatar = normalizeOptionalString(avatar);
 
   if (normalizedUsername.includes('@') || /\s/.test(normalizedUsername)) {
     throw new ApiError('用户名不能包含 @ 或空格', 400);
@@ -51,6 +59,8 @@ export async function registerAccountCommand(body, env, repository) {
     iterations: creds.iterations,
     algo: creds.algo,
     emailVerified: true,
+    nickname: normalizedNickname,
+    avatar: normalizedAvatar,
     membershipType: 'trial',
     freeTrialEndDate: trialEndDate.toISOString(),
     createdAt: new Date().toISOString(),
