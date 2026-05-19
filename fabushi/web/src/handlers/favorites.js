@@ -1,119 +1,170 @@
 import { jsonResponse } from '../utils/response.js';
-import { verifyToken } from '../../auth-utils.js';
+import {
+  backfillOwnerUserId,
+  hasStableUserId,
+  isMissingUserIdColumnError,
+  optionalAuthIdentity,
+  requireAuthIdentity,
+  withOwnerScope,
+} from '../utils/auth-identity.js';
 
-// 切换收藏状态
+async function backfillFavoritesUserId(db, auth) {
+  await backfillOwnerUserId(db, auth, [{ table: 'content_favorites' }]);
+}
+
+async function insertFavorite(db, auth, {
+  contentId,
+  contentType,
+  title,
+  filePath,
+  description,
+}) {
+  const now = new Date().toISOString();
+  const insertLegacy = () => db.prepare(`
+    INSERT OR IGNORE INTO content_favorites
+      (content_id, content_type, username, title, file_path, description, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    contentId,
+    contentType,
+    auth.username,
+    title || null,
+    filePath || null,
+    description || null,
+    now
+  ).run();
+
+  if (!hasStableUserId(auth)) {
+    return await insertLegacy();
+  }
+
+  try {
+    return await db.prepare(`
+      INSERT OR IGNORE INTO content_favorites
+        (content_id, content_type, username, user_id, title, file_path, description, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      contentId,
+      contentType,
+      auth.username,
+      auth.userId,
+      title || null,
+      filePath || null,
+      description || null,
+      now
+    ).run();
+  } catch (error) {
+    if (!isMissingUserIdColumnError(error)) throw error;
+    return await insertLegacy();
+  }
+}
+
+async function deleteFavorite(db, auth, contentId) {
+  return await withOwnerScope(db, auth, (scope) => ({
+    sql: `
+      DELETE FROM content_favorites
+      WHERE content_id = ? AND ${scope.where}
+    `,
+    params: [contentId, ...scope.params],
+  }), { mode: 'run' });
+}
+
+async function favoriteStatus(db, auth, contentId) {
+  return await withOwnerScope(db, auth, (scope) => ({
+    sql: `
+      SELECT COUNT(*) as count
+      FROM content_favorites
+      WHERE content_id = ? AND ${scope.where}
+    `,
+    params: [contentId, ...scope.params],
+  }), { mode: 'first' });
+}
+
 export async function handleToggleFavorite(request, env, db) {
-    try {
-        const authHeader = request.headers.get('Authorization');
-        const token = authHeader?.replace('Bearer ', '');
+  try {
+    const auth = await requireAuthIdentity(request, env, db);
+    if (auth.error) return jsonResponse({ error: auth.error }, auth.status);
+    await backfillFavoritesUserId(db, auth);
 
-        if (!token) {
-            return jsonResponse({ error: '未登录' }, 401);
-        }
+    const { contentId, contentType, action, title, filePath, description } = await request.json();
 
-        const decoded = await verifyToken(token, env);
-        if (!decoded?.username) {
-            return jsonResponse({ error: '无效的token' }, 401);
-        }
-
-        const { contentId, contentType, action, title, filePath, description } = await request.json();
-
-        if (!contentId || !contentType) {
-            return jsonResponse({ error: '缺少必要参数' }, 400);
-        }
-
-        if (action === 'favorite') {
-            await db.prepare(
-                `INSERT OR IGNORE INTO content_favorites 
-                 (content_id, content_type, username, title, file_path, description, created_at) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`
-            ).bind(contentId, contentType, decoded.username, title || null, filePath || null, description || null, new Date().toISOString()).run();
-        } else if (action === 'unfavorite') {
-            await db.prepare(
-                'DELETE FROM content_favorites WHERE content_id = ? AND username = ?'
-            ).bind(contentId, decoded.username).run();
-        }
-
-        // 检查当前收藏状态
-        const result = await db.prepare(
-            'SELECT COUNT(*) as count FROM content_favorites WHERE content_id = ? AND username = ?'
-        ).bind(contentId, decoded.username).first();
-
-        return jsonResponse({
-            success: true,
-            isFavorited: result.count > 0
-        });
-    } catch (error) {
-        console.error('Toggle favorite error:', error);
-        return jsonResponse({ error: '操作失败' }, 500);
+    if (!contentId || !contentType) {
+      return jsonResponse({ error: 'missing required params' }, 400);
     }
+
+    if (action === 'favorite') {
+      await insertFavorite(db, auth, { contentId, contentType, title, filePath, description });
+    } else if (action === 'unfavorite') {
+      await deleteFavorite(db, auth, contentId);
+    }
+
+    const result = await favoriteStatus(db, auth, contentId);
+    return jsonResponse({
+      success: true,
+      isFavorited: (result?.count || 0) > 0,
+    });
+  } catch (error) {
+    console.error('Toggle favorite error:', error);
+    return jsonResponse({ error: 'operation failed' }, 500);
+  }
 }
 
-// 获取用户收藏列表
 export async function handleGetMyFavorites(request, env, db) {
-    try {
-        const authHeader = request.headers.get('Authorization');
-        const token = authHeader?.replace('Bearer ', '');
+  try {
+    const auth = await requireAuthIdentity(request, env, db);
+    if (auth.error) return jsonResponse({ error: auth.error }, auth.status);
+    await backfillFavoritesUserId(db, auth);
 
-        if (!token) {
-            return jsonResponse({ error: '未登录' }, 401);
-        }
+    const results = await withOwnerScope(db, auth, (scope) => ({
+      sql: `
+        SELECT content_id as id, content_type as contentType, title,
+               file_path as filePath, description, created_at as favoritedAt
+        FROM content_favorites
+        WHERE ${scope.where}
+        ORDER BY created_at DESC
+      `,
+      params: [...scope.params],
+    }));
 
-        const decoded = await verifyToken(token, env);
-        if (!decoded?.username) {
-            return jsonResponse({ error: '无效的token' }, 401);
-        }
-
-        const results = await db.prepare(
-            `SELECT content_id as id, content_type as contentType, title, file_path as filePath, 
-                    description, created_at as favoritedAt 
-             FROM content_favorites 
-             WHERE username = ? 
-             ORDER BY created_at DESC`
-        ).bind(decoded.username).all();
-
-        return jsonResponse({ success: true, favorites: results.results });
-    } catch (error) {
-        console.error('Get my favorites error:', error);
-        return jsonResponse({ error: '获取失败' }, 500);
-    }
+    return jsonResponse({ success: true, favorites: results.results || [] });
+  } catch (error) {
+    console.error('Get my favorites error:', error);
+    return jsonResponse({ error: 'get failed' }, 500);
+  }
 }
 
-// 批量检查收藏状态
 export async function handleBatchCheckFavorites(request, env, db) {
-    try {
-        const authHeader = request.headers.get('Authorization');
-        const token = authHeader?.replace('Bearer ', '');
-
-        let username = null;
-        if (token) {
-            const decoded = await verifyToken(token, env);
-            username = decoded?.username || null;
-        }
-
-        if (!username) {
-            return jsonResponse({ favoriteStatus: {} });
-        }
-
-        const { contentIds } = await request.json();
-
-        if (!contentIds || !Array.isArray(contentIds) || contentIds.length === 0) {
-            return jsonResponse({ favoriteStatus: {} });
-        }
-
-        const placeholders = contentIds.map(() => '?').join(',');
-        const results = await db.prepare(
-            `SELECT content_id FROM content_favorites WHERE username = ? AND content_id IN (${placeholders})`
-        ).bind(username, ...contentIds).all();
-
-        const favoriteStatus = {};
-        contentIds.forEach(id => {
-            favoriteStatus[id] = results.results.some(r => r.content_id === id);
-        });
-
-        return jsonResponse({ favoriteStatus });
-    } catch (error) {
-        console.error('Batch check favorites error:', error);
-        return jsonResponse({ error: '获取失败' }, 500);
+  try {
+    const auth = await optionalAuthIdentity(request, env, db);
+    if (!auth?.username) {
+      return jsonResponse({ favoriteStatus: {} });
     }
+    await backfillFavoritesUserId(db, auth);
+
+    const { contentIds } = await request.json();
+    if (!contentIds || !Array.isArray(contentIds) || contentIds.length === 0) {
+      return jsonResponse({ favoriteStatus: {} });
+    }
+
+    const placeholders = contentIds.map(() => '?').join(',');
+    const results = await withOwnerScope(db, auth, (scope) => ({
+      sql: `
+        SELECT content_id
+        FROM content_favorites
+        WHERE ${scope.where} AND content_id IN (${placeholders})
+      `,
+      params: [...scope.params, ...contentIds],
+    }));
+
+    const favoriteStatus = {};
+    const favoriteIds = new Set((results.results || []).map((row) => row.content_id));
+    contentIds.forEach((id) => {
+      favoriteStatus[id] = favoriteIds.has(id);
+    });
+
+    return jsonResponse({ favoriteStatus });
+  } catch (error) {
+    console.error('Batch check favorites error:', error);
+    return jsonResponse({ error: 'get failed' }, 500);
+  }
 }

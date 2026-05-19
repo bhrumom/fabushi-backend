@@ -393,6 +393,20 @@ CREATE INDEX IF NOT EXISTS idx_user_follows_following ON user_follows(following_
 CREATE INDEX IF NOT EXISTS idx_user_follows_follower_user_id ON user_follows(follower_user_id);
 CREATE INDEX IF NOT EXISTS idx_user_follows_following_user_id ON user_follows(following_user_id);
 
+CREATE TABLE IF NOT EXISTS user_practice_privacy (
+  username TEXT PRIMARY KEY,
+  user_id INTEGER UNIQUE,
+  is_private INTEGER DEFAULT 0 NOT NULL,
+  show_practice_name INTEGER DEFAULT 1 NOT NULL,
+  show_duration INTEGER DEFAULT 1 NOT NULL,
+  show_chant_count INTEGER DEFAULT 1 NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_practice_privacy_user_id ON user_practice_privacy(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_practice_privacy_private ON user_practice_privacy(is_private);
+
 CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT,

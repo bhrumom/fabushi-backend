@@ -34,8 +34,8 @@ function jsonStringifyAscii(value) {
   });
 }
 
-function createLegacyMeditationToken(username) {
-  const payload = btoa(jsonStringifyAscii({ username }));
+function createLegacyMeditationToken(username, userId = null) {
+  const payload = btoa(jsonStringifyAscii({ username, userId }));
   return `legacy.${payload}.signature`;
 }
 
@@ -59,7 +59,8 @@ async function normalizeMeditationAuthRequest(request, env, pathname) {
     }
 
     const headers = new Headers(request.headers);
-    headers.set('Authorization', `Bearer ${createLegacyMeditationToken(username)}`);
+    const userId = tokenData?.userId ?? tokenData?.user_id ?? tokenData?.id ?? null;
+    headers.set('Authorization', `Bearer ${createLegacyMeditationToken(username, userId)}`);
     return {
       request: new Request(request, { headers }),
     };

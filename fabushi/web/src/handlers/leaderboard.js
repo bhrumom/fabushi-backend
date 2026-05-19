@@ -173,7 +173,7 @@ export async function handleGetPracticeLeaderboard(request, env, db) {
         COALESCE(pp.show_duration, 1) as showDuration,
         COALESCE(pp.show_chant_count, 1) as showChantCount,
         COUNT(*) as totalRecords,
-        SUM(CASE WHEN mr.chant_count > 0 THEN mr.chant_count ELSE 1 END) as totalCount,
+        SUM(COALESCE(mr.chant_count, 0)) as totalCount,
         SUM(COALESCE(mr.duration, 0)) as totalDuration,
         COUNT(DISTINCT mr.record_date) as totalDays,
         MAX(mr.record_date) as latestRecordDate,

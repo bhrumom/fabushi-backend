@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const webRoot = new URL('..', import.meta.url);
+const webRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-const authHandler = readFileSync(join(webRoot.pathname, 'src/handlers/auth.js'), 'utf8');
-const deleteAccountUseCase = readFileSync(join(webRoot.pathname, 'src/use-cases/delete-account.js'), 'utf8');
+const authHandler = readFileSync(join(webRoot, 'src/handlers/auth.js'), 'utf8');
+const deleteAccountUseCase = readFileSync(join(webRoot, 'src/use-cases/delete-account.js'), 'utf8');
 const accountCommandRepository = readFileSync(
-  join(webRoot.pathname, 'src/repositories/account-user-command-repository.js'),
+  join(webRoot, 'src/repositories/account-user-command-repository.js'),
   'utf8'
 );
-const leaderboardHandler = readFileSync(join(webRoot.pathname, 'src/handlers/leaderboard.js'), 'utf8');
+const leaderboardHandler = readFileSync(join(webRoot, 'src/handlers/leaderboard.js'), 'utf8');
 
 test('practice leaderboard filters out deleted users instead of keeping orphaned records visible', () => {
   assert.match(leaderboardHandler, /FROM meditation_records mr\s+JOIN users u ON mr\.username = u\.username/s);
@@ -25,6 +26,13 @@ test('account deletion purges meditation and social artifacts before removing th
   assert.match(deleteAccountUseCase, /await repository\.deleteByUsername\(user\.username\);/);
   assert.match(deleteAccountUseCase, /await clearLeaderboardCaches\(env\);/);
   assert.match(accountCommandRepository, /async deleteAccountArtifacts\(\{ userId, username, email \}\)/);
+  assert.match(accountCommandRepository, /stableUserId/);
+  assert.match(accountCommandRepository, /DELETE FROM meditation_records WHERE user_id = \? OR username = \?/);
+  assert.match(accountCommandRepository, /DELETE FROM user_practice_privacy WHERE user_id = \? OR username = \?/);
+  assert.match(accountCommandRepository, /DELETE FROM user_follows WHERE follower_user_id = \? OR following_user_id = \?/);
+  assert.match(accountCommandRepository, /DELETE FROM comments WHERE account_user_id = \? OR username = \?/);
+  assert.match(accountCommandRepository, /DELETE FROM content_likes WHERE account_user_id = \? OR username = \?/);
+  assert.match(accountCommandRepository, /DELETE FROM content_favorites WHERE user_id = \? OR username = \?/);
   assert.match(accountCommandRepository, /DELETE FROM meditation_records WHERE username = \?/);
   assert.match(accountCommandRepository, /DELETE FROM meditation_goals WHERE username = \?/);
   assert.match(accountCommandRepository, /DELETE FROM meditation_settings WHERE username = \?/);

@@ -1,22 +1,74 @@
 import { jsonResponse } from '../utils/response.js';
-import { verifyToken } from '../../auth-utils.js';
+import {
+    backfillOwnerUserId,
+    hasStableUserId,
+    isMissingUserIdColumnError,
+    requireAuthIdentity,
+} from '../utils/auth-identity.js';
 
-// 获取评论列表
+async function backfillCommentsUserId(db, auth) {
+    await backfillOwnerUserId(db, auth, [
+        { table: 'comments', idColumn: 'account_user_id' },
+    ]);
+}
+
+function isCommentShapeFallbackError(error) {
+    const message = String(error?.message || error || '').toLowerCase();
+    return isMissingUserIdColumnError(error) ||
+        message.includes('not null constraint failed: comments.video_id');
+}
+
+async function insertComment(db, auth, {
+    contentId,
+    content,
+    parentId,
+    tag,
+    videoTitle,
+    mainPractice,
+    now,
+}) {
+    if (hasStableUserId(auth)) {
+        try {
+            return await db.db.prepare(`
+      INSERT INTO comments (content_id, username, account_user_id, content, created_at, parent_id, tag, content_title, main_practice, sync_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `).bind(contentId, auth.username, auth.userId, content, now, parentId || null, tag || null, videoTitle || null, mainPractice || null).run();
+        } catch (error) {
+            if (!isCommentShapeFallbackError(error)) throw error;
+        }
+    }
+
+    try {
+        return await db.db.prepare(`
+      INSERT INTO comments (content_id, username, content, created_at, parent_id, tag, content_title, main_practice, sync_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `).bind(contentId, auth.username, content, now, parentId || null, tag || null, videoTitle || null, mainPractice || null).run();
+    } catch (error) {
+        if (!isCommentShapeFallbackError(error)) throw error;
+    }
+
+    return await db.db.prepare(`
+      INSERT INTO comments (content_id, video_id, username, user_id, content, created_at, parent_id, tag, content_title, main_practice, sync_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `).bind(contentId, contentId, auth.username, auth.username, content, now, parentId || null, tag || null, videoTitle || null, mainPractice || null).run();
+}
+
+// 闂佸吋鍎抽崲鑼躲亹閸モ晜瀚氶柛鏇ㄥ櫘閸熷牓鏌涢幒鎿冩畽闁?
 export async function handleGetComments(request, env, db) {
     try {
         const url = new URL(request.url);
-        // 支持 contentId 和 videoId（向后兼容）
+        // 闂佽　鍋撴い鏍ㄧ☉閻?contentId 闂?videoId闂佹寧绋戦悧鍡涘箖濠婂牆瑙﹂幖绮光偓铏€柣搴℃贡濞呫垻妲?
         const contentId = url.searchParams.get('contentId') || url.searchParams.get('videoId');
         const page = parseInt(url.searchParams.get('page') || '1');
         const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
         const offset = (page - 1) * pageSize;
 
         if (!contentId) {
-            return jsonResponse({ error: '内容ID不能为空' }, 400);
+            return jsonResponse({ error: '闂佸憡鍔曢幊搴敊閹婵炴垶鎸哥粔鐑藉礂濡崵鈻旈柧蹇撳帨閺? }, 400);
         }
 
-        // 获取评论列表，包含用户信息
-        // 使用content_id统一标识（替代原来的video_id）
+        // 闂佸吋鍎抽崲鑼躲亹閸モ晜瀚氶柛鏇ㄥ櫘閸熷牓鏌涢幒鎿冩畽闁靛棗鍟撮弫宥囦沪閽樺妯侀梺鍛婂嚬閸嬪棝寮妶澶婄闁炬艾鍊风换鍡涙煙?
+        // 婵炶揪缍€濞夋洟寮ˇ濉穘tent_id缂傚倷鑳堕崰宥囩博閹绢喖鍐€闁搞儺浜炲Σ鏇㈡煥濞戞澧涙繛瀛樼⊕缁傛帡鏁愰崨顓熸灳闂佸搫顦崕鍐测枔閹插タdeo_id闂?
         const comments = await db.db.prepare(`
       SELECT 
         c.id, c.content_id, c.username as user_id, c.content, c.created_at, c.parent_id, c.like_count, c.tag, c.main_practice,
@@ -28,7 +80,7 @@ export async function handleGetComments(request, env, db) {
       LIMIT ? OFFSET ?
     `).bind(contentId, pageSize, offset).all();
 
-        // 获取总评论数
+        // 闂佸吋鍎抽崲鑼躲亹閸ヮ剙绠戦柡鍕箳濡叉垿鎮规担鍝勫妺闁?
         const totalResult = await db.db.prepare(`
       SELECT COUNT(*) as count FROM comments WHERE content_id = ? AND (tag IS NULL OR tag != 'practice')
     `).bind(contentId).first();
@@ -40,48 +92,45 @@ export async function handleGetComments(request, env, db) {
             pageSize
         });
     } catch (error) {
-        console.error('获取评论失败:', error);
-        return jsonResponse({ error: '获取评论失败' }, 500);
+        console.error('闂佸吋鍎抽崲鑼躲亹閸モ晜瀚氶柛鏇ㄥ櫘閸熷牆顭块幆鎵翱閻?', error);
+        return jsonResponse({ error: '闂佸吋鍎抽崲鑼躲亹閸モ晜瀚氶柛鏇ㄥ櫘閸熷牆顭块幆鎵翱閻? }, 500);
     }
 }
 
-// 发布评论
+// 闂佸憡鐟﹂崹鐢电博妞嬪孩瀚氶柛鏇ㄥ櫘閸?
 export async function handlePostComment(request, env, db) {
     try {
-        const authHeader = request.headers.get('Authorization');
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return jsonResponse({ error: '未提供认证信息' }, 401);
-        }
-
-        const token = authHeader.substring(7);
-        const tokenData = await verifyToken(token, env);
-        if (!tokenData) {
-            return jsonResponse({ error: '认证失败' }, 401);
-        }
-
-        // 支持 contentId 和 videoId（向后兼容）
+        const auth = await requireAuthIdentity(request, env, db.db || db);
+        if (auth.error) return jsonResponse({ error: auth.error }, auth.status);
+        await backfillCommentsUserId(db.db || db, auth);
+        // 闂佽　鍋撴い鏍ㄧ☉閻?contentId 闂?videoId闂佹寧绋戦悧鍡涘箖濠婂牆瑙﹂幖绮光偓铏€柣搴℃贡濞呫垻妲?
         const { videoId, contentId: requestContentId, content, parentId, tag, videoTitle, filePath, mainPractice } = await request.json();
         const contentId = requestContentId || filePath || videoId;
 
         if (!contentId || !content) {
-            return jsonResponse({ error: '内容ID和评论内容不能为空' }, 400);
+            return jsonResponse({ error: '闂佸憡鍔曢幊搴敊閹闂佸憡绮岄惌渚€鎯佹惔锝嗗闁告繂瀚弫鍫曟倵瑜版巻鍋撳☉姘辨喒闂佽壈娅曢崹婵堟嫻閻旇櫣鐭? }, 400);
         }
 
-        // 验证标签值
+        // 婵°倗濮撮惌渚€鎯佹径鎰唨闁搞儮鏅╅崝顕€鏌?
         const validTags = ['ganying', 'fayuan', 'practice', null];
         if (tag && !validTags.includes(tag)) {
-            return jsonResponse({ error: '无效的标签类型' }, 400);
+            return jsonResponse({ error: '闂佸搫鍟版慨鐢稿疾閵夆晜鍎嶉柛鏇ㄥ墰閸ㄨ偐绱掑☉妯衡挃閻炴凹鍋婂畷? }, 400);
         }
 
         const now = new Date().toISOString();
 
-        // 插入评论（使用统一的 content_id，同时填充 video_id 和 user_id 保持向后兼容）
-        const result = await db.db.prepare(`
-      INSERT INTO comments (content_id, video_id, username, user_id, content, created_at, parent_id, tag, content_title, main_practice, sync_version)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-    `).bind(contentId, contentId, tokenData.username, tokenData.username, content, now, parentId || null, tag || null, videoTitle || null, mainPractice || null).run();
+        // 闂佸湱绮敮鎺楀矗閸℃瑦瀚氶柛鏇ㄥ櫘閸熷牓鏌ㄥ☉妯煎濠电偛娲幃浠嬪Ω瑜忛崺鐘测槈閹绢垰浜鹃梺?content_id闂佹寧绋戦懟顖炲箖閹捐绫嶉悹铏瑰皑缂嶆牠鏌?video_id 闂?user_id 婵烇絽娲︾换鍐偓鍨瀹曘儵骞嬪┑鍥р偓鐢告煕韫囨洖甯舵い鏃€鍔欓弫?
+        const result = await insertComment(db, auth, {
+            contentId,
+            content,
+            parentId,
+            tag,
+            videoTitle,
+            mainPractice,
+            now,
+        });
 
-        // 同步更新 content_metadata 的 comment_count
+        // 闂佸憡鑹鹃張顒勵敆閻愬搫鍗抽悗娑櫳戦悡鈧?content_metadata 闂?comment_count
         await db.db.prepare(`
             INSERT INTO content_metadata (content_id, content_type, title, file_path, like_count, comment_count)
             VALUES (?, 'text', ?, ?, 0, 1)
@@ -91,7 +140,7 @@ export async function handlePostComment(request, env, db) {
               comment_count = comment_count + 1
         `).bind(contentId, videoTitle || null, filePath || null).run();
 
-        // 获取新插入的评论详情（包含用户信息、标签、内容标题、主修功课）
+        // 闂佸吋鍎抽崲鑼躲亹閸ヮ剙妫橀柣妤€鐗嗙徊濠氭煕韫囧鍔ゆ繛鍫熷灩閹风娀宕熼鍛櫏闁荤姴娴勯梽鍕磿韫囨稒鏅柛顐ｇ箓閻﹀爼鏌涘鐓庝簽闁轰降鍊濋獮瀣憥閸屾瑧绠氶梺璇″弾閸剟鍩€椤戣法鍔嶉柣鏍电悼缁灚绌遍幍浣镐壕濞达絿顭堥弫鍫曟倵绾拋娼愰柣鏍电稻閿涙劕螣缁洖浜惧ù锝呭槻閻︽粌菐閸ヨ泛鏋涘┑顔界〒閹风娀骞橀崨顖滎槴
         const newComment = await db.db.prepare(`
       SELECT 
         c.id, c.content_id, c.username as user_id, c.content, c.created_at, c.parent_id, c.like_count, c.tag, c.content_title, c.main_practice,
@@ -102,62 +151,68 @@ export async function handlePostComment(request, env, db) {
     `).bind(result.meta.last_row_id).first();
 
         return jsonResponse({
-            message: '评论发布成功',
+            message: '闁荤姴娲ょ€氼垶顢欓幋锕€鐭楅柟瀛樼箘椤忔挳鏌熺€涙ê濮囧┑?,
             comment: newComment
         }, 201);
     } catch (error) {
-        console.error('发布评论失败:', error);
-        return jsonResponse({ error: '发布评论失败: ' + error.message }, 500);
+        console.error('闂佸憡鐟﹂崹鐢电博妞嬪孩瀚氶柛鏇ㄥ櫘閸熷牆顭块幆鎵翱閻?', error);
+        return jsonResponse({ error: '闂佸憡鐟﹂崹鐢电博妞嬪孩瀚氶柛鏇ㄥ櫘閸熷牆顭块幆鎵翱閻? ' + error.message }, 500);
     }
 }
 
-// 删除评论
+// 闂佸憡甯炴繛鈧繛鍛捣閹风娀宕熼鍛櫏
 export async function handleDeleteComment(request, env, db) {
     try {
-        const authHeader = request.headers.get('Authorization');
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return jsonResponse({ error: '未提供认证信息' }, 401);
-        }
-
-        const token = authHeader.substring(7);
-        const tokenData = await verifyToken(token, env);
-        if (!tokenData) {
-            return jsonResponse({ error: '认证失败' }, 401);
-        }
+        const auth = await requireAuthIdentity(request, env, db.db || db);
+        if (auth.error) return jsonResponse({ error: auth.error }, auth.status);
+        await backfillCommentsUserId(db.db || db, auth);
 
         const url = new URL(request.url);
         const commentId = url.searchParams.get('id');
 
         if (!commentId) {
-            return jsonResponse({ error: '评论ID不能为空' }, 400);
+            return jsonResponse({ error: 'comment id required' }, 400);
         }
 
-        // 检查评论是否存在以及是否属于当前用户
-        const comment = await db.db.prepare(`
-      SELECT username FROM comments WHERE id = ?
+        let comment;
+        try {
+            comment = await db.db.prepare(`
+      SELECT username, account_user_id
+      FROM comments
+      WHERE id = ?
     `).bind(commentId).first();
+        } catch (error) {
+            if (!isMissingUserIdColumnError(error)) throw error;
+            comment = await db.db.prepare(`
+      SELECT username
+      FROM comments
+      WHERE id = ?
+    `).bind(commentId).first();
+        }
 
         if (!comment) {
-            return jsonResponse({ error: '评论不存在' }, 404);
+            return jsonResponse({ error: 'comment not found' }, 404);
         }
 
-        // 只有作者可以删除评论 (后续可添加管理员权限)
-        if (comment.username !== tokenData.username) {
-            return jsonResponse({ error: '无权删除此评论' }, 403);
+        const commentUserId = Number(comment.account_user_id);
+        const isOwnerById = Number.isFinite(commentUserId) && commentUserId === auth.userId;
+        const isOwnerByUsername = comment.username === auth.username;
+        if (!isOwnerById && !isOwnerByUsername) {
+            return jsonResponse({ error: 'forbidden' }, 403);
         }
 
         await db.db.prepare(`
       DELETE FROM comments WHERE id = ?
     `).bind(commentId).run();
 
-        return jsonResponse({ message: '评论已删除' });
+        return jsonResponse({ message: 'comment deleted' });
     } catch (error) {
-        console.error('删除评论失败:', error);
-        return jsonResponse({ error: '删除评论失败' }, 500);
+        console.error('delete comment failed:', error);
+        return jsonResponse({ error: 'delete comment failed' }, 500);
     }
 }
 
-// 获取带标签的帖子列表（感应/发愿）
+// 闂佸吋鍎抽崲鑼躲亹閸モ晜鏆滈柨鏃傛櫕閸ㄨ偐绱掑☉妯衡挃婵炲牊鍨归弫顕€寮借閹藉秹鏌涢幒鎿冩畽闁靛棗鍟撮弫宥夊醇閻斿嘲韦闁?闂佸憡鐟﹂崹鍫曞礉瑜版帗鏅?
 export async function handleGetTaggedPosts(request, env, db) {
     try {
         const url = new URL(request.url);
@@ -167,10 +222,10 @@ export async function handleGetTaggedPosts(request, env, db) {
         const offset = (page - 1) * pageSize;
 
         if (!tag || !['ganying', 'fayuan'].includes(tag)) {
-            return jsonResponse({ error: '标签类型无效，必须是 ganying 或 fayuan' }, 400);
+            return jsonResponse({ error: '闂佸搫绉村ú銊╊敆妞嬪海灏甸悹鍥皺閳ь剛鍏樺顕€鎮╅搹顐ｇ彙闂佹寧绋戦懟顖滄崲閳ь剙顪冮妶鍥╁笡婵?ganying 闂?fayuan' }, 400);
         }
 
-        // 获取带标签的帖子，包含用户信息、点赞数和内容标题
+        // 闂佸吋鍎抽崲鑼躲亹閸モ晜鏆滈柨鏃傛櫕閸ㄨ偐绱掑☉妯衡挃婵炲牊鍨归弫顕€寮借閹藉秹鏌ㄥ☉妯垮閻庡灚锕㈠畷銉╊敃閵堝棙娈㈤梺鍦棎濞撹绌辨繝鍥х畳妞ゆ牗菤閸嬫挻鎷呴崫鍕寲闁荤姍鍛沪闁哄棛鍠栧畷顏嗕沪閽樺鏆ラ柣搴ｎ攰椤鎮ラ敐鍡矗?
         const posts = await db.db.prepare(`
       SELECT 
         c.id, c.content_id, c.username as user_id, c.content, c.created_at, c.tag, c.like_count, c.content_title,
@@ -182,14 +237,14 @@ export async function handleGetTaggedPosts(request, env, db) {
       LIMIT ? OFFSET ?
     `).bind(tag, pageSize, offset).all();
 
-        // 为每个帖子处理 content_title（优先使用数据库存储的标题，否则从 content_id 提取）
+        // 婵炴垶鎸鹃崕銈夋儊閳╁啰鈻旀い蹇撳閻燁垶鎮楀☉娆忓妞わ腹鏅犻幃?content_title闂佹寧绋戦悧鍛椤撱垹绀傞柛顐ｇ矊閳诲繘鏌ｉ～顒€濡介柡鍡欏枛楠炴垿顢欓懖鈺傜殤闁诲孩绋掗敋闁稿绉归幆鍐礋椤掑倸鐏辨俊顐ゅ閿曨偆妲愬┑瀣Е闁挎洍鍋撻柛顭戝灡缁?content_id 闂佸湱绮崝鏇°亹閸ヮ剚鏅?
         const postsWithTitle = posts.results.map(post => {
-            // 如果数据库有存储的标题，直接使用
+            // 婵犵鈧啿鈧綊鎮樻径鎰瀬闁绘鐗嗙粊锕傚箹鐎涙ɑ灏版繝鈧担琛″亾濞戞顏堝磻瀹ュ鍎嶉柛鏇ㄥ墰閸ㄧ厧螞閻楀牞鍏紒杈ㄧ箞閹嫮鈧稒锚婢跺秴霉閿濆牊纭堕柡?
             if (post.content_title && post.content_title.trim()) {
                 return post;
             }
 
-            // 否则尝试从 content_id 提取（兼容旧数据）
+            // 闂佸憡鐔粻鎴﹀垂椤栨粈鐒婃繝闈涳功濡茬霉?content_id 闂佸湱绮崝鏇°亹閸ヮ剚鏅柛顐ｇ箓閹垿鎮楃涵鍜佹綈婵☆偒鍋婂顐︽偋閸繄銈﹂梺?
             let contentTitle = '';
             if (post.content_id) {
                 const parts = post.content_id.split('/');
@@ -200,7 +255,7 @@ export async function handleGetTaggedPosts(request, env, db) {
             return { ...post, content_title: contentTitle };
         });
 
-        // 获取总数
+        // 闂佸吋鍎抽崲鑼躲亹閸ヮ剙绠戠紓浣股戝▓?
         const totalResult = await db.db.prepare(`
       SELECT COUNT(*) as count FROM comments WHERE tag = ?
     `).bind(tag).first();
@@ -212,12 +267,12 @@ export async function handleGetTaggedPosts(request, env, db) {
             pageSize
         });
     } catch (error) {
-        console.error('获取帖子列表失败:', error);
-        return jsonResponse({ error: '获取帖子列表失败' }, 500);
+        console.error('闂佸吋鍎抽崲鑼躲亹閸モ晜鏆滈柡宓懏鎲ら梺鍛婂笚椤ㄥ濡撮崘鈺佺窞閺夊牜鍋夎:', error);
+        return jsonResponse({ error: '闂佸吋鍎抽崲鑼躲亹閸モ晜鏆滈柡宓懏鎲ら梺鍛婂笚椤ㄥ濡撮崘鈺佺窞閺夊牜鍋夎' }, 500);
     }
 }
 
-// 获取热门内容（从统一的 content_metadata 表获取，包含点赞数和评论数）
+// 闂佸吋鍎抽崲鑼躲亹閸ヮ剚鍊绘い鎾卞灪閿涘矂鏌涢幇顒佸櫣妞ゆ梹鍔欓弫宥夊醇濠婂懐鐓犵紓鍌欒兌閸犲秶绮╅幘顔藉剭?content_metadata 闁荤偞绋忛崝蹇涚嵁韫囨稑鐭楅柡宥囨暩缁€澶愭煕閺嵮勫櫣闁诡垰鐗撻幃娆戞兜閸涱垼娴€闂佽桨鐒﹀姗€骞忛幍顔藉珰闁告洦鍣崯鍫ユ煛娴ｇ绨荤紒?
 export async function handleGetHotFeed(request, env, db) {
     try {
         const url = new URL(request.url);
@@ -225,7 +280,7 @@ export async function handleGetHotFeed(request, env, db) {
         const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
         const offset = (page - 1) * pageSize;
 
-        // 从统一的 content_metadata 表获取热门内容
+        // 婵炲濮村ù椋庡垝閻戞鈻旈柍褜鍓熼幆?content_metadata 闁荤偞绋忛崝蹇涚嵁韫囨稑鐭楅柡宥庡亜閸斾即姊婚崒妯哄闁哥偛顕埀?
         const hotContent = await db.db.prepare(`
           SELECT 
             content_id as id,
@@ -240,7 +295,7 @@ export async function handleGetHotFeed(request, env, db) {
           LIMIT ? OFFSET ?
         `).bind(pageSize, offset).all();
 
-        // 获取总数
+        // 闂佸吋鍎抽崲鑼躲亹閸ヮ剙绠戠紓浣股戝▓?
         const totalResult = await db.db.prepare(`
           SELECT COUNT(*) as count FROM content_metadata WHERE like_count > 0 OR comment_count > 0
         `).first();
@@ -252,22 +307,22 @@ export async function handleGetHotFeed(request, env, db) {
             pageSize
         });
     } catch (error) {
-        console.error('获取热门内容失败:', error);
-        return jsonResponse({ error: '获取热门内容失败' }, 500);
+        console.error('闂佸吋鍎抽崲鑼躲亹閸ヮ剚鍊绘い鎾卞灪閿涘矂鏌涢幇顒佸櫣妞ゆ梹鍔栧鍕綇椤愩儛?', error);
+        return jsonResponse({ error: '闂佸吋鍎抽崲鑼躲亹閸ヮ剚鍊绘い鎾卞灪閿涘矂鏌涢幇顒佸櫣妞ゆ梹鍔栧鍕綇椤愩儛? }, 500);
     }
 }
 
-// 获取帖子详情（包含原视频信息）
+// 闂佸吋鍎抽崲鑼躲亹閸モ晜鏆滈柡宓懏鎲ら柣鐘叉祫闂勫嫰宕曡箛娑欐櫖闁割偅绻傞惁鍫曟煕濮樼厧浜滈悽顖ｅ亞閹叉挳宕卞☉杈ㄦ婵烇絽娲犻崜婵囧閸涘瓨鏅?
 export async function handleGetPostDetail(request, env, db) {
     try {
         const url = new URL(request.url);
         const postId = url.searchParams.get('id');
 
         if (!postId) {
-            return jsonResponse({ error: '帖子ID不能为空' }, 400);
+            return jsonResponse({ error: '闁汇埄鍨遍悧鏇㈡偤濮楊湂婵炴垶鎸哥粔鐑藉礂濡崵鈻旈柧蹇撳帨閺? }, 400);
         }
 
-        // 获取帖子详情
+        // 闂佸吋鍎抽崲鑼躲亹閸モ晜鏆滈柡宓懏鎲ら柣鐘叉祫闂勫嫰宕?
         const post = await db.db.prepare(`
       SELECT 
         c.id, c.content_id, c.username as user_id, c.content, c.created_at, c.tag, c.like_count,
@@ -278,29 +333,29 @@ export async function handleGetPostDetail(request, env, db) {
     `).bind(postId).first();
 
         if (!post) {
-            return jsonResponse({ error: '帖子不存在' }, 404);
+            return jsonResponse({ error: '闁汇埄鍨遍悧鏇㈡偤濞嗘劗鈻旂€广儱鎳愰幗鐘绘煕? }, 404);
         }
 
         return jsonResponse({ post });
     } catch (error) {
-        console.error('获取帖子详情失败:', error);
-        return jsonResponse({ error: '获取帖子详情失败' }, 500);
+        console.error('闂佸吋鍎抽崲鑼躲亹閸モ晜鏆滈柡宓懏鎲ら柣鐘叉祫闂勫嫰宕曡箛鏂跨窞閺夊牜鍋夎:', error);
+        return jsonResponse({ error: '闂佸吋鍎抽崲鑼躲亹閸モ晜鏆滈柡宓懏鎲ら柣鐘叉祫闂勫嫰宕曡箛鏂跨窞閺夊牜鍋夎' }, 500);
     }
 }
 
-// 批量获取评论数
+// 闂佸綊娼х紞濠囧闯濞差亝鍤旂€瑰嫭婢樼徊鍧楁偣閸パ冾伂妞ゆ梹鍨垮?
 export async function handleBatchGetCommentCounts(request, env, db) {
     try {
         const { videoIds } = await request.json();
 
         if (!videoIds || !Array.isArray(videoIds) || videoIds.length === 0) {
-            return jsonResponse({ error: '视频ID列表不能为空' }, 400);
+            return jsonResponse({ error: '闁荤喐鐟ュΛ婵嬨€傜粋婊甸梺鍛婂笚椤ㄥ濡撮崘鈺冣枖鐎广儱鐗嗛崢鏉戔槈閹捐顏犻柍? }, 400);
         }
 
-        // 限制一次最多查询100个
+        // 闂傚倸瀚崝鏇㈠春濡や胶鈻旈柍褜鍓欓埢搴ㄥ焺閸愨晙绮繝銏ｅ煐绾板秹鎮￠敍鍕珰?00婵?
         const limitedIds = videoIds.slice(0, 100);
 
-        // 构建查询 - 使用 content_id 统一标识
+        // 闂佸搫顑呯€氼剛绱撻幘璇茶摕闁靛鐓堥崵?- 婵炶揪缍€濞夋洟寮?content_id 缂傚倷鑳堕崰宥囩博閹绢喖鍐€闁搞儺浜炲Σ?
         const placeholders = limitedIds.map(() => '?').join(',');
         const results = await db.db.prepare(`
             SELECT content_id, COUNT(*) as comment_count
@@ -309,13 +364,13 @@ export async function handleBatchGetCommentCounts(request, env, db) {
             GROUP BY content_id
         `).bind(...limitedIds).all();
 
-        // 构建映射
+        // 闂佸搫顑呯€氼剛绱撻幘璇插強闁绘灏欏▓?
         const counts = {};
         for (const row of results.results) {
             counts[row.content_id] = row.comment_count;
         }
 
-        // 确保所有请求的ID都有值（没有评论的返回0）
+        // 缂佺虎鍙庨崰鏇犳崲濮樿泛绠ラ柍褜鍓熷鍨緞鎼搭喖娈插┑顔炬嚀閸婅鈻撻幈鏈岄梻渚囧枦婵倕锕㈡笟鈧畷鎰兜妞嬪海顦╁┑鐐插閸撴繂锕㈡担鐑樺珰闁告洦鍣崯鍫ユ煟閵娿儱顏紒缁樺灴瀹?闂?
         for (const id of limitedIds) {
             if (!(id in counts)) {
                 counts[id] = 0;
@@ -324,7 +379,7 @@ export async function handleBatchGetCommentCounts(request, env, db) {
 
         return jsonResponse({ counts });
     } catch (error) {
-        console.error('批量获取评论数失败:', error);
-        return jsonResponse({ error: '获取评论数失败' }, 500);
+        console.error('闂佸綊娼х紞濠囧闯濞差亝鍤旂€瑰嫭婢樼徊鍧楁偣閸パ冾伂妞ゆ梹鍨垮顐﹀级鐟併倓鏉柣?', error);
+        return jsonResponse({ error: '闂佸吋鍎抽崲鑼躲亹閸モ晜瀚氶柛鏇ㄥ櫘閸熷牓鏌℃担瑙勭凡闁靛洦鍨归幏? }, 500);
     }
 }

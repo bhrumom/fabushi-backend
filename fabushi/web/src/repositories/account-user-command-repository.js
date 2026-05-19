@@ -52,23 +52,39 @@ export class AccountUserRepository extends BaseAccountUserRepository {
 
   async deleteAccountArtifacts({ userId, username, email }) {
     const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedUserId = Number(userId);
+    const stableUserId = Number.isFinite(normalizedUserId) ? normalizedUserId : null;
     const resolvedUserId = userId ?? username;
     const deletions = [
+      ['DELETE FROM meditation_group_members WHERE group_id IN (SELECT id FROM meditation_groups WHERE owner_user_id = ? OR owner_username = ?)', stableUserId, username],
       ['DELETE FROM meditation_group_members WHERE group_id IN (SELECT id FROM meditation_groups WHERE owner_username = ?)', username],
+      ['DELETE FROM meditation_groups WHERE owner_user_id = ? OR owner_username = ?', stableUserId, username],
       ['DELETE FROM meditation_groups WHERE owner_username = ?', username],
+      ['DELETE FROM meditation_group_members WHERE user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM meditation_group_members WHERE username = ?', username],
+      ['DELETE FROM meditation_records WHERE user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM meditation_records WHERE username = ?', username],
+      ['DELETE FROM meditation_goals WHERE user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM meditation_goals WHERE username = ?', username],
+      ['DELETE FROM meditation_settings WHERE user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM meditation_settings WHERE username = ?', username],
+      ['DELETE FROM user_practice_privacy WHERE user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM user_practice_privacy WHERE username = ?', username],
+      ['DELETE FROM user_follows WHERE follower_user_id = ? OR following_user_id = ? OR follower_username = ? OR following_username = ?', stableUserId, stableUserId, username, username],
       ['DELETE FROM user_follows WHERE follower_username = ? OR following_username = ?', username, username],
+      ['DELETE FROM notifications WHERE user_id = ? OR related_user_id = ? OR username = ? OR related_username = ?', stableUserId, stableUserId, username, username],
       ['DELETE FROM notifications WHERE username = ? OR related_username = ?', username, username],
+      ['DELETE FROM sync_log WHERE user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM sync_log WHERE username = ?', username],
+      ['DELETE FROM user_sync_state WHERE user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM user_sync_state WHERE username = ?', username],
+      ['DELETE FROM comments WHERE account_user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM comments WHERE user_id = ? OR username = ?', resolvedUserId, username],
       ['DELETE FROM likes WHERE username = ?', username],
       ['DELETE FROM favorites WHERE username = ?', username],
+      ['DELETE FROM content_likes WHERE account_user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM content_likes WHERE user_id = ? OR username = ?', resolvedUserId, username],
+      ['DELETE FROM content_favorites WHERE user_id = ? OR username = ?', stableUserId, username],
       ['DELETE FROM content_favorites WHERE username = ?', username],
       ['DELETE FROM content_reports WHERE reporter_user_id = ?', resolvedUserId],
       ['DELETE FROM user_blocks WHERE blocked_user_id = ?', resolvedUserId],

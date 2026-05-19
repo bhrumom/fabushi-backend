@@ -1,5 +1,112 @@
 import { jsonResponse } from '../utils/response.js';
 
+function normalizeUserId(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isMissingUserIdColumnError(error) {
+    const message = String(error?.message || error || '').toLowerCase();
+    return message.includes('no such column') ||
+        message.includes('has no column named');
+}
+
+async function resolveUserIdByUsername(db, username) {
+    if (!username) return null;
+    try {
+        const row = await db.prepare(`
+      SELECT id
+      FROM users
+      WHERE username = ?
+    `).bind(username).first();
+        return normalizeUserId(row?.id);
+    } catch (_) {
+        return null;
+    }
+}
+
+function hasStableUserId(auth) {
+    return Number.isFinite(auth?.userId);
+}
+
+function userScope(auth, tableAlias = '') {
+    const prefix = tableAlias ? `${tableAlias}.` : '';
+    if (hasStableUserId(auth)) {
+        return {
+            where: `(${prefix}user_id = ? OR (${prefix}user_id IS NULL AND ${prefix}username = ?))`,
+            params: [auth.userId, auth.username],
+            stable: true
+        };
+    }
+    return {
+        where: `${prefix}username = ?`,
+        params: [auth.username],
+        stable: false
+    };
+}
+
+function usernameScope(auth, tableAlias = '') {
+    const prefix = tableAlias ? `${tableAlias}.` : '';
+    return {
+        where: `${prefix}username = ?`,
+        params: [auth.username],
+        stable: false
+    };
+}
+
+async function withUserScope(db, auth, build, mode = 'all') {
+    const run = async (scope) => {
+        const { sql, params } = build(scope);
+        const statement = db.prepare(sql).bind(...params);
+        if (mode === 'first') return await statement.first();
+        if (mode === 'run') return await statement.run();
+        return await statement.all();
+    };
+
+    const scope = userScope(auth);
+    try {
+        return await run(scope);
+    } catch (error) {
+        if (!scope.stable || !isMissingUserIdColumnError(error)) {
+            throw error;
+        }
+        return await run(usernameScope(auth));
+    }
+}
+
+async function backfillMeditationUserId(db, auth) {
+    if (!hasStableUserId(auth)) return;
+
+    const backfill = async (sql) => {
+        try {
+            await db.prepare(sql).bind(auth.userId, auth.username).run();
+        } catch (error) {
+            if (!isMissingUserIdColumnError(error)) {
+                console.warn('meditation user_id backfill skipped:', error?.message || error);
+            }
+        }
+    };
+
+    await Promise.all([
+        backfill(`
+      UPDATE meditation_records
+      SET user_id = ?
+      WHERE user_id IS NULL AND username = ?
+    `),
+        backfill(`
+      UPDATE meditation_goals
+      SET user_id = ?
+      WHERE user_id IS NULL AND username = ?
+    `),
+        backfill(`
+      UPDATE meditation_settings
+      SET user_id = ?
+      WHERE user_id IS NULL AND username = ?
+    `)
+    ]);
+}
+
 // 验证认证Token并获取用户名
 async function authenticateUser(request, db) {
     const authHeader = request.headers.get('Authorization');
@@ -23,7 +130,11 @@ async function authenticateUser(request, db) {
             return { error: '无法获取用户信息', status: 401 };
         }
 
-        return { username };
+        const tokenUserId = normalizeUserId(payload.userId ?? payload.user_id ?? payload.id);
+        const userId = tokenUserId ?? await resolveUserIdByUsername(db, username);
+        const auth = { username, userId };
+        await backfillMeditationUserId(db, auth);
+        return auth;
     } catch (e) {
         return { error: 'Token解析失败', status: 401 };
     }
@@ -88,12 +199,13 @@ async function clearPracticeCaches(env) {
     ]);
 }
 
-async function updateGoalProgress(db, username, sutraName, delta, syncVersion, now) {
+async function updateGoalProgress(db, auth, sutraName, delta, syncVersion, now) {
     if (!sutraName || !delta) {
         return;
     }
 
-    await db.prepare(`
+    await withUserScope(db, auth, (scope) => ({
+        sql: `
       UPDATE meditation_goals
       SET current_count = CASE
             WHEN current_count + ? < 0 THEN 0
@@ -101,8 +213,10 @@ async function updateGoalProgress(db, username, sutraName, delta, syncVersion, n
           END,
           updated_at = ?,
           sync_version = ?
-      WHERE username = ? AND sutra_name = ? AND status = 'active'
-    `).bind(delta, delta, now, syncVersion, username, sutraName).run();
+      WHERE ${scope.where} AND sutra_name = ? AND status = 'active'
+    `,
+        params: [delta, delta, now, syncVersion, ...scope.params, sutraName]
+    }), 'run');
 }
 
 function resolveRecordId(request, body = null) {
@@ -367,9 +481,11 @@ export async function handleSyncRecord(request, env, db) {
         const now = new Date().toISOString();
         const date = recordDate || now.split('T')[0];
         const localClock = parseLocalTime(localTime, new Date());
+        const resolvedDuration = Math.max(0, asInt(duration, 0));
+        const resolvedChantCount = Math.max(0, asInt(chantCount, 0));
         const nextVersion = await getNextSyncVersion(db, auth.username);
 
-        const insertResult = await db.prepare(`
+        const insertWithoutUserId = () => db.prepare(`
       INSERT INTO meditation_records (
         username, sutra_name, sutra_source, duration, chant_count, record_date,
         local_time, timezone_offset_minutes, start_time, end_time,
@@ -380,8 +496,8 @@ export async function handleSyncRecord(request, env, db) {
             auth.username,
             sutra,
             sutraSource,
-            duration,
-            chantCount,
+            resolvedDuration,
+            resolvedChantCount,
             date,
             localClock,
             timezoneOffsetMinutes,
@@ -393,14 +509,43 @@ export async function handleSyncRecord(request, env, db) {
             nextVersion
         ).run();
 
+        let insertResult;
+        if (hasStableUserId(auth)) {
+            try {
+                insertResult = await db.prepare(`
+      INSERT INTO meditation_records (
+        username, user_id, sutra_name, sutra_source, duration, chant_count, record_date,
+        local_time, timezone_offset_minutes, start_time, end_time,
+        is_manual, notes, created_at, sync_version
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+                    auth.username,
+                    auth.userId,
+                    sutra,
+                    sutraSource,
+                    resolvedDuration,
+                    resolvedChantCount,
+                    date,
+                    localClock,
+                    timezoneOffsetMinutes,
+                    startTime,
+                    endTime,
+                    isManual ? 1 : 0,
+                    notes,
+                    now,
+                    nextVersion
+                ).run();
+            } catch (error) {
+                if (!isMissingUserIdColumnError(error)) throw error;
+                insertResult = await insertWithoutUserId();
+            }
+        } else {
+            insertResult = await insertWithoutUserId();
+        }
+
         // 更新发愿目标进度
-        await db.prepare(`
-      UPDATE meditation_goals
-      SET current_count = current_count + ?,
-          updated_at = ?,
-          sync_version = ?
-      WHERE username = ? AND sutra_name = ? AND status = 'active'
-    `).bind(chantCount, now, nextVersion + 1, auth.username, sutra).run();
+        await updateGoalProgress(db, auth, sutra, resolvedChantCount, nextVersion + 1, now);
 
         await clearPracticeCaches(env);
         await refreshGroupsForUser(db, auth.username);
@@ -431,37 +576,37 @@ export async function handleGetRecords(request, env, db) {
         const offset = Number.isFinite(requestedOffset) ? Math.max(requestedOffset, 0) : 0;
         const sutra = url.searchParams.get('sutra');
 
-        let query = `
+        const [result, totalResult] = await Promise.all([
+            withUserScope(db, auth, (scope) => {
+                let sql = `
       SELECT id, sutra_name, sutra_source, duration, chant_count, record_date,
              local_time, timezone_offset_minutes, start_time, end_time,
              is_manual, notes, created_at
       FROM meditation_records
-      WHERE username = ?
+      WHERE ${scope.where}
     `;
-        const params = [auth.username];
-
-        if (sutra) {
-            query += ` AND sutra_name = ?`;
-            params.push(sutra);
-        }
-
-        let countQuery = `
+                const params = [...scope.params];
+                if (sutra) {
+                    sql += ` AND sutra_name = ?`;
+                    params.push(sutra);
+                }
+                sql += ` ORDER BY record_date DESC, created_at DESC LIMIT ? OFFSET ?`;
+                params.push(limit, offset);
+                return { sql, params };
+            }),
+            withUserScope(db, auth, (scope) => {
+                let sql = `
       SELECT COUNT(*) as total
       FROM meditation_records
-      WHERE username = ?
+      WHERE ${scope.where}
     `;
-        const countParams = [auth.username];
-        if (sutra) {
-            countQuery += ` AND sutra_name = ?`;
-            countParams.push(sutra);
-        }
-
-        query += ` ORDER BY record_date DESC, created_at DESC LIMIT ? OFFSET ?`;
-        params.push(limit, offset);
-
-        const [result, totalResult] = await Promise.all([
-            db.prepare(query).bind(...params).all(),
-            db.prepare(countQuery).bind(...countParams).first()
+                const params = [...scope.params];
+                if (sutra) {
+                    sql += ` AND sutra_name = ?`;
+                    params.push(sutra);
+                }
+                return { sql, params };
+            }, 'first')
         ]);
 
         return jsonResponse({
@@ -491,13 +636,16 @@ export async function handleUpdateRecord(request, env, db) {
             return jsonResponse({ success: false, error: 'recordId required' }, 400);
         }
 
-        const existing = await db.prepare(`
+        const existing = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT id, sutra_name, sutra_source, duration, chant_count, record_date,
              local_time, timezone_offset_minutes, start_time, end_time,
              is_manual, notes
       FROM meditation_records
-      WHERE id = ? AND username = ?
-    `).bind(recordId, auth.username).first();
+      WHERE id = ? AND ${scope.where}
+    `,
+            params: [recordId, ...scope.params]
+        }), 'first');
 
         if (!existing) {
             return jsonResponse({ success: false, error: '记录不存在' }, 404);
@@ -523,7 +671,8 @@ export async function handleUpdateRecord(request, env, db) {
         const resolvedNotes = (body.notes ?? existing.notes ?? '').toString();
         const nextVersion = await getNextSyncVersion(db, auth.username);
 
-        await db.prepare(`
+        await withUserScope(db, auth, (scope) => ({
+            sql: `
       UPDATE meditation_records
       SET sutra_name = ?,
           sutra_source = ?,
@@ -537,32 +686,34 @@ export async function handleUpdateRecord(request, env, db) {
           is_manual = ?,
           notes = ?,
           sync_version = ?
-      WHERE id = ? AND username = ?
-    `).bind(
-            resolvedSutra,
-            resolvedSutraSource,
-            resolvedDuration,
-            resolvedChantCount,
-            resolvedRecordDate,
-            resolvedLocalTime,
-            resolvedTimezoneOffsetMinutes,
-            resolvedStartTime,
-            resolvedEndTime,
-            resolvedIsManual ? 1 : 0,
-            resolvedNotes,
-            nextVersion,
-            recordId,
-            auth.username
-        ).run();
+      WHERE id = ? AND ${scope.where}
+    `,
+            params: [
+                resolvedSutra,
+                resolvedSutraSource,
+                resolvedDuration,
+                resolvedChantCount,
+                resolvedRecordDate,
+                resolvedLocalTime,
+                resolvedTimezoneOffsetMinutes,
+                resolvedStartTime,
+                resolvedEndTime,
+                resolvedIsManual ? 1 : 0,
+                resolvedNotes,
+                nextVersion,
+                recordId,
+                ...scope.params
+            ]
+        }), 'run');
 
         let goalVersion = nextVersion + 1;
         if (existing.sutra_name === resolvedSutra) {
             const delta = resolvedChantCount - (existing.chant_count || 0);
-            await updateGoalProgress(db, auth.username, resolvedSutra, delta, goalVersion, now);
+            await updateGoalProgress(db, auth, resolvedSutra, delta, goalVersion, now);
         } else {
-            await updateGoalProgress(db, auth.username, existing.sutra_name, -(existing.chant_count || 0), goalVersion, now);
+            await updateGoalProgress(db, auth, existing.sutra_name, -(existing.chant_count || 0), goalVersion, now);
             goalVersion += 1;
-            await updateGoalProgress(db, auth.username, resolvedSutra, resolvedChantCount, goalVersion, now);
+            await updateGoalProgress(db, auth, resolvedSutra, resolvedChantCount, goalVersion, now);
         }
 
         await clearPracticeCaches(env);
@@ -609,11 +760,14 @@ export async function handleDeleteRecord(request, env, db) {
             return jsonResponse({ success: false, error: 'recordId required' }, 400);
         }
 
-        const existing = await db.prepare(`
+        const existing = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT id, sutra_name, chant_count
       FROM meditation_records
-      WHERE id = ? AND username = ?
-    `).bind(recordId, auth.username).first();
+      WHERE id = ? AND ${scope.where}
+    `,
+            params: [recordId, ...scope.params]
+        }), 'first');
 
         if (!existing) {
             return jsonResponse({ success: false, error: '记录不存在' }, 404);
@@ -622,14 +776,17 @@ export async function handleDeleteRecord(request, env, db) {
         const now = new Date().toISOString();
         const nextVersion = await getNextSyncVersion(db, auth.username);
 
-        await db.prepare(`
+        await withUserScope(db, auth, (scope) => ({
+            sql: `
       DELETE FROM meditation_records
-      WHERE id = ? AND username = ?
-    `).bind(recordId, auth.username).run();
+      WHERE id = ? AND ${scope.where}
+    `,
+            params: [recordId, ...scope.params]
+        }), 'run');
 
         await updateGoalProgress(
             db,
-            auth.username,
+            auth,
             existing.sutra_name,
             -(existing.chant_count || 0),
             nextVersion + 1,
@@ -997,37 +1154,46 @@ export async function handleGetStats(request, env, db) {
         const today = new Date().toISOString().split('T')[0];
 
         // 今日统计
-        const todayStats = await db.prepare(`
+        const todayStats = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT sutra_name, SUM(chant_count) as today_count, SUM(duration) as today_duration
       FROM meditation_records
-      WHERE username = ? AND record_date = ?
+      WHERE ${scope.where} AND record_date = ?
       GROUP BY sutra_name
       ORDER BY today_count DESC
       LIMIT 1
-    `).bind(auth.username, today).first();
+    `,
+            params: [...scope.params, today]
+        }), 'first');
 
         // 累计统计
-        const totalStats = await db.prepare(`
+        const totalStats = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT 
         COUNT(*) as total_records,
         SUM(chant_count) as total_count,
         SUM(duration) as total_duration,
         COUNT(DISTINCT record_date) as total_days
       FROM meditation_records
-      WHERE username = ?
-    `).bind(auth.username).first();
+      WHERE ${scope.where}
+    `,
+            params: [...scope.params]
+        }), 'first');
 
         // 连续天数计算
-        const consecutiveDays = await calculateConsecutiveDays(db, auth.username, today);
+        const consecutiveDays = await calculateConsecutiveDays(db, auth, today);
 
         // 按功课分类统计
-        const sutraStats = await db.prepare(`
+        const sutraStats = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT sutra_name, SUM(chant_count) as count, SUM(duration) as duration, COUNT(DISTINCT record_date) as days
       FROM meditation_records
-      WHERE username = ?
+      WHERE ${scope.where}
       GROUP BY sutra_name
       ORDER BY count DESC
-    `).bind(auth.username).all();
+    `,
+            params: [...scope.params]
+        }));
 
         return jsonResponse({
             success: true,
@@ -1054,15 +1220,18 @@ export async function handleGetStats(request, env, db) {
 }
 
 // 计算连续修行天数
-async function calculateConsecutiveDays(db, username, today) {
+async function calculateConsecutiveDays(db, auth, today) {
     try {
-        const result = await db.prepare(`
+        const result = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT DISTINCT record_date
       FROM meditation_records
-      WHERE username = ?
+      WHERE ${scope.where}
       ORDER BY record_date DESC
       LIMIT 365
-    `).bind(username).all();
+    `,
+            params: [...scope.params]
+        }));
 
         if (!result.results || result.results.length === 0) {
             return 0;
@@ -1104,13 +1273,20 @@ export async function handleGetWeeklyStats(request, env, db) {
         const weekAgo = new Date(today);
         weekAgo.setDate(weekAgo.getDate() - 6);
 
-        const result = await db.prepare(`
+        const result = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT record_date, SUM(chant_count) as count, SUM(duration) as duration
       FROM meditation_records
-      WHERE username = ? AND record_date >= ? AND record_date <= ?
+      WHERE ${scope.where} AND record_date >= ? AND record_date <= ?
       GROUP BY record_date
       ORDER BY record_date ASC
-    `).bind(auth.username, weekAgo.toISOString().split('T')[0], today.toISOString().split('T')[0]).all();
+    `,
+            params: [
+                ...scope.params,
+                weekAgo.toISOString().split('T')[0],
+                today.toISOString().split('T')[0]
+            ]
+        }));
 
         // 填充缺失的日期
         const weekData = [];
@@ -1153,13 +1329,20 @@ export async function handleGetMonthlyStats(request, env, db) {
         const today = new Date();
         const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
-        const result = await db.prepare(`
+        const result = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT record_date, SUM(chant_count) as count, SUM(duration) as duration
       FROM meditation_records
-      WHERE username = ? AND record_date >= ? AND record_date <= ?
+      WHERE ${scope.where} AND record_date >= ? AND record_date <= ?
       GROUP BY record_date
       ORDER BY record_date ASC
-    `).bind(auth.username, monthStart.toISOString().split('T')[0], today.toISOString().split('T')[0]).all();
+    `,
+            params: [
+                ...scope.params,
+                monthStart.toISOString().split('T')[0],
+                today.toISOString().split('T')[0]
+            ]
+        }));
 
         const monthTotal = result.results?.reduce((sum, d) => sum + d.count, 0) || 0;
 
@@ -1194,10 +1377,13 @@ export async function handleSetGoal(request, env, db) {
         const now = new Date().toISOString();
 
         // 检查是否已有同功课的活跃目标
-        const existing = await db.prepare(`
+        const existing = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT id, current_count FROM meditation_goals
-      WHERE username = ? AND sutra_name = ? AND status = 'active'
-    `).bind(auth.username, sutra).first();
+      WHERE ${scope.where} AND sutra_name = ? AND status = 'active'
+    `,
+            params: [...scope.params, sutra]
+        }), 'first');
 
         if (existing) {
             // 更新现有目标
@@ -1208,10 +1394,24 @@ export async function handleSetGoal(request, env, db) {
       `).bind(targetCount, dedication, now, existing.id).run();
         } else {
             // 创建新目标
-            await db.prepare(`
+            const insertWithoutUserId = () => db.prepare(`
         INSERT INTO meditation_goals (username, sutra_name, target_count, dedication, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `).bind(auth.username, sutra, targetCount, dedication, now, now).run();
+
+            if (hasStableUserId(auth)) {
+                try {
+                    await db.prepare(`
+        INSERT INTO meditation_goals (username, user_id, sutra_name, target_count, dedication, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).bind(auth.username, auth.userId, sutra, targetCount, dedication, now, now).run();
+                } catch (error) {
+                    if (!isMissingUserIdColumnError(error)) throw error;
+                    await insertWithoutUserId();
+                }
+            } else {
+                await insertWithoutUserId();
+            }
         }
 
         return jsonResponse({ success: true, message: '发愿目标已设置' });
@@ -1232,12 +1432,15 @@ export async function handleGetGoals(request, env, db) {
         const url = new URL(request.url);
         const status = url.searchParams.get('status') || 'active';
 
-        const result = await db.prepare(`
+        const result = await withUserScope(db, auth, (scope) => ({
+            sql: `
       SELECT id, sutra_name, target_count, current_count, dedication, status, created_at, completed_at
       FROM meditation_goals
-      WHERE username = ? AND status = ?
+      WHERE ${scope.where} AND status = ?
       ORDER BY created_at DESC
-    `).bind(auth.username, status).all();
+    `,
+            params: [...scope.params, status]
+        }));
 
         const goals = (result.results || []).map(goal => ({
             ...goal,
@@ -1263,11 +1466,14 @@ export async function handleMeditationSettings(request, env, db) {
 
     if (request.method === 'GET') {
         try {
-            const settings = await db.prepare(`
+            const settings = await withUserScope(db, auth, (scope) => ({
+                sql: `
         SELECT default_sutra, default_duration, reminder_enabled, reminder_time
         FROM meditation_settings
-        WHERE username = ?
-      `).bind(auth.username).first();
+        WHERE ${scope.where}
+      `,
+                params: [...scope.params]
+            }), 'first');
 
             return jsonResponse({
                 success: true,
@@ -1290,16 +1496,47 @@ export async function handleMeditationSettings(request, env, db) {
             const now = new Date().toISOString();
 
             // Upsert设置
-            await db.prepare(`
+            const existing = await withUserScope(db, auth, (scope) => ({
+                sql: `
+        SELECT id
+        FROM meditation_settings
+        WHERE ${scope.where}
+        LIMIT 1
+      `,
+                params: [...scope.params]
+            }), 'first');
+
+            if (existing?.id) {
+                await db.prepare(`
+        UPDATE meditation_settings
+        SET username = ?,
+            default_sutra = ?,
+            default_duration = ?,
+            reminder_enabled = ?,
+            reminder_time = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).bind(auth.username, defaultSutra, defaultDuration, reminderEnabled ? 1 : 0, reminderTime, now, existing.id).run();
+            } else {
+                const insertWithoutUserId = () => db.prepare(`
         INSERT INTO meditation_settings (username, default_sutra, default_duration, reminder_enabled, reminder_time, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(username) DO UPDATE SET
-          default_sutra = excluded.default_sutra,
-          default_duration = excluded.default_duration,
-          reminder_enabled = excluded.reminder_enabled,
-          reminder_time = excluded.reminder_time,
-          updated_at = excluded.updated_at
       `).bind(auth.username, defaultSutra, defaultDuration, reminderEnabled ? 1 : 0, reminderTime, now, now).run();
+
+                if (hasStableUserId(auth)) {
+                    try {
+                        await db.prepare(`
+        INSERT INTO meditation_settings (username, user_id, default_sutra, default_duration, reminder_enabled, reminder_time, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(auth.username, auth.userId, defaultSutra, defaultDuration, reminderEnabled ? 1 : 0, reminderTime, now, now).run();
+                    } catch (error) {
+                        if (!isMissingUserIdColumnError(error)) throw error;
+                        await insertWithoutUserId();
+                    }
+                } else {
+                    await insertWithoutUserId();
+                }
+            }
 
             return jsonResponse({ success: true, message: '设置已保存' });
         } catch (e) {
