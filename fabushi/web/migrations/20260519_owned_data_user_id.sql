@@ -1,6 +1,69 @@
 -- Backfill stable users.id ownership columns for mutable-username data.
 -- This migration is for D1 databases that already ran the earlier username-key
 -- social/sync/content migrations before users.id became the durable account key.
+--
+-- Some long-lived environments still predate a subset of the later legacy table
+-- rollouts. Bootstrap those table shells first so this backfill can keep moving
+-- instead of stopping at the first missing table.
+
+CREATE TABLE IF NOT EXISTS content_favorites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_id TEXT NOT NULL,
+  content_type TEXT NOT NULL DEFAULT 'text',
+  username TEXT,
+  title TEXT,
+  file_path TEXT,
+  description TEXT,
+  created_at TEXT NOT NULL,
+  sync_version INTEGER DEFAULT 1,
+  UNIQUE(content_id, username)
+);
+
+CREATE TABLE IF NOT EXISTS user_follows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  follower_username TEXT NOT NULL,
+  following_username TEXT NOT NULL,
+  sync_version INTEGER DEFAULT 1,
+  created_at TEXT NOT NULL,
+  UNIQUE(follower_username, following_username)
+);
+
+CREATE TABLE IF NOT EXISTS user_practice_privacy (
+  username TEXT PRIMARY KEY,
+  is_private INTEGER DEFAULT 0 NOT NULL,
+  show_practice_name INTEGER DEFAULT 1 NOT NULL,
+  show_duration INTEGER DEFAULT 1 NOT NULL,
+  show_chant_count INTEGER DEFAULT 1 NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  type TEXT NOT NULL,
+  content TEXT NOT NULL,
+  related_content_id TEXT,
+  related_username TEXT,
+  is_read INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sync_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  record_id INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  sync_version INTEGER NOT NULL,
+  data_snapshot TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_sync_state (
+  username TEXT PRIMARY KEY,
+  last_sync_version INTEGER DEFAULT 0,
+  last_sync_at TEXT
+);
 
 ALTER TABLE content_likes ADD COLUMN account_user_id INTEGER;
 ALTER TABLE content_favorites ADD COLUMN user_id INTEGER;
