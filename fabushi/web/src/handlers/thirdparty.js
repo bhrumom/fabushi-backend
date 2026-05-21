@@ -96,6 +96,12 @@ export async function handleAlipayLogin(request, env) {
   return await withFullUserResponse(response, env);
 }
 
+// 支付宝 OAuth 回调（Web/移动端网页登录共用入口）
+export async function handleAlipayCallback(request, env) {
+  const { handleAlipayCallback } = await import('../../alipay-login-functions.js');
+  return await handleAlipayCallback(request, env);
+}
+
 // macOS支付宝回调
 export async function handleMacOSAlipayCallback(request, env) {
   const { handleMacOSAlipayCallback } = await import('../../alipay-login-functions.js');

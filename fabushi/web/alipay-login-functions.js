@@ -58,13 +58,18 @@ async function generateAlipayLoginUrl(env, platform) {
       redirectUri = encodeURIComponent(`${workerUrl}/api/auth/alipay/macos-callback`);
       console.log('macOS应用专用回调地址:', redirectUri);
     } else if (isMobileApp) {
-      // 移动端应用（iOS/Android）使用专用的回调地址，会重定向回App
-      redirectUri = encodeURIComponent(`${workerUrl}/api/auth/alipay/mobile-callback`);
-      console.log('移动端应用专用回调地址:', redirectUri);
+      // 支付宝开放平台白名单按 redirect_uri 校验。移动端网页登录也先使用标准
+      // OAuth 回调，再由 state.type=mobile 分流到 App Scheme。
+      redirectUri = encodeURIComponent(`${workerUrl}/api/auth/alipay/callback`);
+      console.log('移动端应用使用标准OAuth回调地址:', redirectUri);
     } else {
       // Web应用使用标准回调地址
       redirectUri = encodeURIComponent(`${workerUrl}/api/auth/alipay/callback`);
       console.log('Web应用标准回调地址:', redirectUri);
+    }
+
+    if (!redirectUri) {
+      redirectUri = encodeURIComponent(`${workerUrl}/api/auth/alipay/callback`);
     }
 
     const authUrl = `https://openauth.alipay.com/oauth2/publicAppAuthorize.htm?app_id=${appId}&scope=auth_user&redirect_uri=${redirectUri}&state=${state}`;
@@ -672,6 +677,21 @@ async function handleAlipayCallback(request, env) {
         redirectUrl.hash = 'error=invalid_state&error_message=登录状态无效，请重新登录';
         return Response.redirect(redirectUrl.toString(), 302);
       }
+
+      try {
+        const stateData = JSON.parse(storedState.state_data);
+        if (stateData.type === 'mobile') {
+          console.log('标准OAuth回调检测到移动端state，转入移动端回调处理');
+          return await handleMobileAlipayCallback(request, env);
+        }
+        if (stateData.type === 'macos') {
+          console.log('标准OAuth回调检测到macOS state，转入macOS回调处理');
+          return await handleMacOSAlipayCallback(request, env);
+        }
+      } catch (parseError) {
+        console.warn('解析state数据失败，继续按Web回调处理:', parseError);
+      }
+
       await env.DB.prepare('DELETE FROM alipay_states WHERE state = ?').bind(state).run();
     }
 
