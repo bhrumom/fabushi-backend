@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
   algo TEXT,
   email_verified INTEGER DEFAULT 0,
   alipay_user_id TEXT UNIQUE,
+  alipay_open_id TEXT,
   alipay_nickname TEXT,
   alipay_avatar TEXT,
   alipay_bound_at TEXT,
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_alipay_user_id ON users(alipay_user_id);
+CREATE INDEX IF NOT EXISTS idx_users_alipay_open_id ON users(alipay_open_id);
 CREATE INDEX IF NOT EXISTS idx_users_wechat_openid ON users(wechat_openid);
 CREATE INDEX IF NOT EXISTS idx_users_phone_number ON users(phone_number);
 CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid);
