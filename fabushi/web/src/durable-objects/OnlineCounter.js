@@ -231,6 +231,7 @@ export class OnlineCounter {
         await this.ensureAlarm();
 
         console.log(`Session ${sessionId} joined via HTTP. Total: ${this.sessions.size}`);
+        this.broadcastCount();
 
         return this.jsonResponse({
             success: true,
@@ -278,6 +279,7 @@ export class OnlineCounter {
         const existed = this.sessions.delete(sessionId);
 
         console.log(`Session ${sessionId} left via HTTP. Total: ${this.sessions.size}`);
+        this.broadcastCount();
 
         return this.jsonResponse({
             success: true,
