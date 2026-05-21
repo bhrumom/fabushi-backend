@@ -11,6 +11,7 @@ import { handleMigrateKvToD1 } from './handlers/migration.js';
 import { handleCheckAdminStatus, handleListRedeemCodes, handleDeleteRedeemCode, handleGetAdminPrice } from './handlers/admin.js';
 import { handleGetAssetsList, handleR2List, handleR2Proxy } from './handlers/assets.js';
 import { handleSearch, handleGetTextContent, handleGetCategories } from './handlers/search.js';
+import { handleGetCbetaSendTexts, handleProxyCbetaRequest } from './handlers/cbeta.js';
 import { handleGetLeaderboard, handleGetLeaderboardRecords, handleGetPracticeLeaderboard, handleUpdateTransferData } from './handlers/leaderboard.js';
 import { handleToggleLike, handleGetLikeCount, handleBatchGetLikeCounts, handleGetMyLikes, handleGetReceivedLikeCount } from './handlers/likes.js';
 import { handleToggleFavorite, handleGetMyFavorites, handleBatchCheckFavorites } from './handlers/favorites.js';
@@ -167,6 +168,8 @@ export async function route(request, env, db, ctx) {
   if (pathname === '/api/search' && method === 'GET') return await handleSearch(request, env, db);
   if (pathname === '/api/search/content' && method === 'GET') return await handleGetTextContent(request, env, db);
   if (pathname === '/api/search/categories' && method === 'GET') return await handleGetCategories(request, env, db);
+  if (pathname === '/api/cbeta/send-texts' && method === 'GET') return await handleGetCbetaSendTexts(request, env);
+  if (pathname.startsWith('/api/cbeta/') && (method === 'GET' || method === 'HEAD')) return await handleProxyCbetaRequest(request, env);
 
   if (pathname === '/api/leaderboard' && method === 'GET') return await handleGetLeaderboard(request, env, db);
   if (pathname === '/api/leaderboard/practice' && method === 'GET') return await handleGetPracticeLeaderboard(request, env, db);
