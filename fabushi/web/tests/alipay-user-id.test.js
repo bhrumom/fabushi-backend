@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { registerAlipayUser, sendRegistrationCaptcha } from '../alipay-login-functions.js';
+import { generateAlipayLoginUrl, registerAlipayUser, sendRegistrationCaptcha } from '../alipay-login-functions.js';
 import { verifyToken } from '../auth-utils.js';
 
 function createDbEnv() {
@@ -88,6 +88,25 @@ test('one-click Alipay registration stores user_id in mappings and token', async
   assert.equal(state.alipayBindings[0].userId, 100);
   assert.equal(tokenPayload.userId, 100);
   assert.equal(tokenPayload.username, payload.username);
+});
+
+test('mobile Alipay OAuth URL uses the standard whitelisted callback', async () => {
+  for (const platform of ['android', 'ios']) {
+    const { env } = createDbEnv();
+    env.ALIPAY_APP_ID = 'test-app-id';
+    env.WORKER_URL = 'https://api.ombhrum.com';
+
+    const response = await generateAlipayLoginUrl(env, platform);
+    const payload = await response.json();
+    const authUrl = new URL(payload.authUrl);
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.platform, 'mobile');
+    assert.equal(
+      authUrl.searchParams.get('redirect_uri'),
+      'https://api.ombhrum.com/api/auth/alipay/callback',
+    );
+  }
 });
 
 test('manual Alipay registration stores user_id in mappings and token', async () => {
