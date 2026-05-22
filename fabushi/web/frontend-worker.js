@@ -2,6 +2,18 @@
 // API traffic belongs on https://api.ombhrum.com and is intentionally not
 // handled here.
 
+const PRIVATE_ASSET_PATTERNS = [
+  /^\/(?:src|tests|migrations|dist)\//,
+  /^\/(?:agent|docs)\//,
+  /^\/\.(?:wranglerignore|last_build_id)$/i,
+  /^\/(?:package(?:-lock)?\.json|wrangler(?:-web)?\.toml)$/i,
+  /^\/(?:schema(?:[_-].*)?\.sql|migration.*\.sql)$/i,
+  /^\/(?:worker|frontend-worker|migrate|retry|deploy|find-and-retry).*\.js$/i,
+  /^\/(?:retry|deploy|migrate).*\.(?:sh|bash)$/i,
+  /^\/(?:auth-utils|alipay-config|alipay-login-functions|alipay-utils|assets-json)\.js$/i,
+  /^\/.*\.md$/i,
+];
+
 const FRONTEND_ONLY_API_RESPONSE = {
   success: false,
   error: 'Frontend worker only',
@@ -31,6 +43,15 @@ export default {
     const url = new URL(request.url);
     const pathname = url.pathname;
 
+    if (isPrivateAssetPath(pathname)) {
+      return new Response('Not Found', {
+        status: 404,
+        headers: {
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
+
     if (pathname.startsWith('/api/') || pathname === '/r2' || pathname === '/health') {
       return new Response(JSON.stringify(FRONTEND_ONLY_API_RESPONSE), {
         status: 404,
@@ -50,3 +71,7 @@ export default {
     return withFrontendHeaders(response, pathname);
   }
 };
+
+function isPrivateAssetPath(pathname) {
+  return PRIVATE_ASSET_PATTERNS.some((pattern) => pattern.test(pathname));
+}

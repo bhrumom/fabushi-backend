@@ -90,7 +90,7 @@ test('one-click Alipay registration stores user_id in mappings and token', async
   assert.equal(tokenPayload.username, payload.username);
 });
 
-test('mobile Alipay OAuth URL uses the standard whitelisted callback', async () => {
+test('mobile Alipay OAuth URL uses the backend callback directly', async () => {
   for (const platform of ['android', 'ios']) {
     const { env } = createDbEnv();
     env.ALIPAY_APP_ID = 'test-app-id';
@@ -107,6 +107,20 @@ test('mobile Alipay OAuth URL uses the standard whitelisted callback', async () 
       'https://api.ombhrum.com/api/auth/alipay/callback',
     );
   }
+});
+
+test('mobile Alipay OAuth URL honors explicit redirect override', async () => {
+  const { env } = createDbEnv();
+  env.ALIPAY_APP_ID = 'test-app-id';
+  env.WORKER_URL = 'https://api.ombhrum.com';
+  env.ALIPAY_MOBILE_AUTH_REDIRECT_URL = 'https://example.com/alipay-callback';
+
+  const response = await generateAlipayLoginUrl(env, 'android');
+  const payload = await response.json();
+  const authUrl = new URL(payload.authUrl);
+
+  assert.equal(response.status, 200);
+  assert.equal(authUrl.searchParams.get('redirect_uri'), 'https://example.com/alipay-callback');
 });
 
 test('manual Alipay registration stores user_id in mappings and token', async () => {

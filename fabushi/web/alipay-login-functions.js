@@ -4,6 +4,37 @@ import { generateToken, verifyToken, jsonResponse, verifyPassword, createPasswor
 import { importPrivateKey, importPublicKey, generateSign, verifySign } from './alipay-utils.js';
 import { calculateTrialEndDate } from './stripe-config.js';
 
+const DEFAULT_WORKER_URL = 'https://api.ombhrum.com';
+
+function trimTrailingSlash(value) {
+  return String(value || '').replace(/\/+$/, '');
+}
+
+function buildUrl(baseUrl, path) {
+  return `${trimTrailingSlash(baseUrl)}${path}`;
+}
+
+function getWorkerUrl(env) {
+  return trimTrailingSlash(env.WORKER_URL || DEFAULT_WORKER_URL);
+}
+
+function getAlipayOAuthRedirectUrl(env, callbackType) {
+  if (callbackType === 'mobile') {
+    return env.ALIPAY_MOBILE_AUTH_REDIRECT_URL ||
+      env.ALIPAY_AUTH_REDIRECT_URL ||
+      buildUrl(getWorkerUrl(env), '/api/auth/alipay/callback');
+  }
+
+  if (callbackType === 'macos') {
+    return env.ALIPAY_MACOS_AUTH_REDIRECT_URL ||
+      buildUrl(getWorkerUrl(env), '/api/auth/alipay/macos-callback');
+  }
+
+  return env.ALIPAY_WEB_AUTH_REDIRECT_URL ||
+    env.ALIPAY_AUTH_REDIRECT_URL ||
+    buildUrl(getWorkerUrl(env), '/api/auth/alipay/callback');
+}
+
 // 生成支付宝登录URL
 async function generateAlipayLoginUrl(env, platform) {
   try {
@@ -48,29 +79,12 @@ async function generateAlipayLoginUrl(env, platform) {
       return jsonResponse({ error: '支付宝应用ID未配置' }, 500);
     }
 
-    const workerUrl = env.WORKER_URL || 'https://your-worker-url.workers.dev';
+    const workerUrl = getWorkerUrl(env);
     console.log('使用worker URL:', workerUrl);
 
-    // 根据平台类型选择不同的回调地址
-    let redirectUri;
-    if (isMacOSApp) {
-      // macOS应用使用专用的回调地址
-      redirectUri = encodeURIComponent(`${workerUrl}/api/auth/alipay/macos-callback`);
-      console.log('macOS应用专用回调地址:', redirectUri);
-    } else if (isMobileApp) {
-      // 支付宝开放平台白名单按 redirect_uri 校验。移动端网页登录也先使用标准
-      // OAuth 回调，再由 state.type=mobile 分流到 App Scheme。
-      redirectUri = encodeURIComponent(`${workerUrl}/api/auth/alipay/callback`);
-      console.log('移动端应用使用标准OAuth回调地址:', redirectUri);
-    } else {
-      // Web应用使用标准回调地址
-      redirectUri = encodeURIComponent(`${workerUrl}/api/auth/alipay/callback`);
-      console.log('Web应用标准回调地址:', redirectUri);
-    }
-
-    if (!redirectUri) {
-      redirectUri = encodeURIComponent(`${workerUrl}/api/auth/alipay/callback`);
-    }
+    const alipayRedirectUrl = getAlipayOAuthRedirectUrl(env, callbackType);
+    const redirectUri = encodeURIComponent(alipayRedirectUrl);
+    console.log('OAuth redirect_uri:', alipayRedirectUrl);
 
     const authUrl = `https://openauth.alipay.com/oauth2/publicAppAuthorize.htm?app_id=${appId}&scope=auth_user&redirect_uri=${redirectUri}&state=${state}`;
 
