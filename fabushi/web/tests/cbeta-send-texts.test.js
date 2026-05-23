@@ -105,7 +105,7 @@ test('CBETA send texts falls back when Oracle returns empty juan content', async
     const parsed = new URL(url);
     attemptedHosts.push(parsed.host);
 
-    if (parsed.host === '144.24.17.21:3000') {
+    if (parsed.host === '144.24.17.21.sslip.io:3000') {
       return new Response(JSON.stringify({ num_found: 0, results: [] }), { status: 200 });
     }
 
@@ -131,9 +131,9 @@ test('CBETA send texts falls back when Oracle returns empty juan content', async
     assert.equal(body.items[0].sourceApi, 'https://api.cbetaonline.cn');
     assert.match(body.items[0].content, /觀自在菩薩/);
     assert.deepEqual(attemptedHosts, [
-      '144.24.17.21:3000',
-      '144.24.17.21:3000',
-      '144.24.17.21:3000',
+      '144.24.17.21.sslip.io:3000',
+      '144.24.17.21.sslip.io:3000',
+      '144.24.17.21.sslip.io:3000',
       'api.cbetaonline.cn',
     ]);
   } finally {

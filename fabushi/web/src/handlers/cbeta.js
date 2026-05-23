@@ -2,7 +2,7 @@ import { CORS_HEADERS } from '../config/constants.js';
 import { jsonResponse } from '../utils/response.js';
 
 const CBETA_PUBLIC_API_ROOT = 'https://api.ombhrum.com/api/cbeta';
-const CBETA_ORACLE_API_ROOT = 'http://144.24.17.21:3000';
+const CBETA_ORACLE_API_ROOT = 'http://144.24.17.21.sslip.io:3000';
 const CBETA_FALLBACK_API_ROOT = 'https://api.cbetaonline.cn';
 const CBETA_API_ROOTS = [CBETA_ORACLE_API_ROOT, CBETA_FALLBACK_API_ROOT];
 const DEFAULT_SEND_WORKS = [
