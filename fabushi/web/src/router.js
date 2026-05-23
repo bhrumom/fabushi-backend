@@ -23,6 +23,7 @@ import { handleToggleFollow, handleGetFollowList, handleGetFollowSummary, handle
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
 import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
 import { handleSubmitFeedback } from './handlers/feedback.js';
+import { handleAppVersionPolicy } from './handlers/app-version.js';
 import { routeAuthRequest } from './routes/auth-routes.js';
 import { routeMembershipRequest } from './routes/membership-routes.js';
 import { routeMeditationRequest } from './routes/meditation-routes.js';
@@ -84,6 +85,10 @@ export async function route(request, env, db, ctx) {
 
   if (pathname === '/health') {
     return jsonResponse({ status: 'ok', timestamp: new Date().toISOString() });
+  }
+
+  if (pathname === '/api/app/version-policy' && method === 'GET') {
+    return await handleAppVersionPolicy(request, env);
   }
 
   const normalizedMeditationAuth = await normalizeMeditationAuthRequest(request, env, pathname);
