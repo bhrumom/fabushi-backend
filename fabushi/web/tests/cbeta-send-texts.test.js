@@ -58,8 +58,8 @@ test('CBETA send texts returns real stripped scripture content and detailed part
     assert.equal(body.success, true);
     assert.equal(body.count, 1);
     assert.equal(body.errors.length, 1);
-    assert.equal(body.errors[0].attempts.length, 3);
-    assert.equal(failAttempts, 3);
+    assert.equal(body.errors[0].attempts.length, 6);
+    assert.equal(failAttempts, 6);
 
     const item = body.items[0];
     assert.equal(item.work, 'T0251');
@@ -90,9 +90,52 @@ test('CBETA send texts reports full upstream errors when no scripture can be fet
     assert.equal(body.success, false);
     assert.equal(body.count, 0);
     assert.equal(body.errors.length, 1);
-    assert.match(body.errors[0].message, /failed after 3 attempts/);
+    assert.match(body.errors[0].message, /failed after 6 attempts/);
+    assert.equal(body.errors[0].attempts.length, 6);
     assert.equal(body.errors[0].attempts[0].status, 502);
     assert.match(body.errors[0].attempts[0].body, /bad gateway/);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test('CBETA send texts falls back when Oracle returns empty juan content', async () => {
+  const attemptedHosts = [];
+  const restoreFetch = installFetchMock(async url => {
+    const parsed = new URL(url);
+    attemptedHosts.push(parsed.host);
+
+    if (parsed.host === '144.24.17.21:3000') {
+      return new Response(JSON.stringify({ num_found: 0, results: [] }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({
+      results: [sampleHtml],
+      work_info: {
+        work: 'T0251',
+        title: '般若波羅蜜多心經',
+        byline: '唐 玄奘譯',
+        category: '般若部類',
+      },
+    }), { status: 200 });
+  });
+
+  try {
+    const response = await handleGetCbetaSendTexts(
+      new Request('https://api.ombhrum.com/api/cbeta/send-texts?works=T0251&limit=1'),
+    );
+    assert.equal(response.status, 200);
+
+    const body = await response.json();
+    assert.equal(body.count, 1);
+    assert.equal(body.items[0].sourceApi, 'https://api.cbetaonline.cn');
+    assert.match(body.items[0].content, /觀自在菩薩/);
+    assert.deepEqual(attemptedHosts, [
+      '144.24.17.21:3000',
+      '144.24.17.21:3000',
+      '144.24.17.21:3000',
+      'api.cbetaonline.cn',
+    ]);
   } finally {
     restoreFetch();
   }

@@ -1,7 +1,10 @@
 import { CORS_HEADERS } from '../config/constants.js';
 import { jsonResponse } from '../utils/response.js';
 
-const CBETA_API_ROOT = 'https://api.cbetaonline.cn';
+const CBETA_PUBLIC_API_ROOT = 'https://api.ombhrum.com/api/cbeta';
+const CBETA_ORACLE_API_ROOT = 'http://144.24.17.21:3000';
+const CBETA_FALLBACK_API_ROOT = 'https://api.cbetaonline.cn';
+const CBETA_API_ROOTS = [CBETA_ORACLE_API_ROOT, CBETA_FALLBACK_API_ROOT];
 const DEFAULT_SEND_WORKS = [
   'T0365',
   'T0251',
@@ -23,8 +26,8 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function buildCbetaUrl(path, params = {}) {
-  const url = new URL(path.replace(/^\/+/, ''), `${CBETA_API_ROOT}/`);
+function buildCbetaUrl(path, params = {}, apiRoot = CBETA_ORACLE_API_ROOT) {
+  const url = new URL(path.replace(/^\/+/, ''), `${apiRoot}/`);
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && `${value}` !== '') {
       url.searchParams.set(key, `${value}`);
@@ -38,72 +41,115 @@ function summarizeBody(body) {
   return body.length > 600 ? `${body.slice(0, 600)}...` : body;
 }
 
+function hasUsableCbetaPayload(path, data) {
+  if (!data || typeof data !== 'object') return true;
+  if (data.error) return false;
+
+  const normalizedPath = path.replace(/^\/+/, '');
+  if (normalizedPath.startsWith('juans')) {
+    const results = Array.isArray(data.results) ? data.results : [];
+    return results.some(item => {
+      if (typeof item === 'string') return item.trim() !== '';
+      if (item && typeof item === 'object' && typeof item.html === 'string') {
+        return item.html.trim() !== '';
+      }
+      return false;
+    });
+  }
+
+  return true;
+}
+
+function describeUnusablePayload(path, data) {
+  if (data?.error) return `CBETA payload error: ${data.error}`;
+  if (path.replace(/^\/+/, '').startsWith('juans')) return 'CBETA returned empty juan content';
+  return 'CBETA returned unusable payload';
+}
+
 async function fetchJsonWithRetry(path, params = {}, options = {}) {
   const retries = options.retries ?? DEFAULT_RETRY_COUNT;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const url = buildCbetaUrl(path, params);
+  const apiRoots = options.apiRoots ?? CBETA_API_ROOTS;
   const attempts = [];
 
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    const startedAt = Date.now();
+  for (const apiRoot of apiRoots) {
+    const url = buildCbetaUrl(path, params, apiRoot);
 
-    try {
-      const response = await fetch(url.toString(), {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-        },
-        signal: controller.signal,
-      });
-      const bodyText = await response.text();
-      const detail = {
-        attempt,
-        url: url.toString(),
-        status: response.status,
-        statusText: response.statusText,
-        durationMs: Date.now() - startedAt,
-      };
-
-      if (!response.ok) {
-        attempts.push({
-          ...detail,
-          body: summarizeBody(bodyText),
-        });
-        if (attempt < retries) await sleep(250 * attempt);
-        continue;
-      }
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const startedAt = Date.now();
 
       try {
-        return {
-          data: JSON.parse(bodyText),
-          attempts: [...attempts, detail],
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+          },
+          signal: controller.signal,
+        });
+        const bodyText = await response.text();
+        const detail = {
+          attempt,
+          apiRoot,
+          url: url.toString(),
+          status: response.status,
+          statusText: response.statusText,
+          durationMs: Date.now() - startedAt,
         };
+
+        if (!response.ok) {
+          attempts.push({
+            ...detail,
+            body: summarizeBody(bodyText),
+          });
+          if (attempt < retries) await sleep(250 * attempt);
+          continue;
+        }
+
+        try {
+          const data = JSON.parse(bodyText);
+          if (!hasUsableCbetaPayload(path, data)) {
+            attempts.push({
+              ...detail,
+              error: describeUnusablePayload(path, data),
+              body: summarizeBody(bodyText),
+            });
+            if (attempt < retries) await sleep(250 * attempt);
+            continue;
+          }
+
+          return {
+            data,
+            attempts: [...attempts, detail],
+            apiRoot,
+          };
+        } catch (error) {
+          attempts.push({
+            ...detail,
+            error: `JSON parse failed: ${error.message}`,
+            body: summarizeBody(bodyText),
+          });
+          if (attempt < retries) await sleep(250 * attempt);
+        }
       } catch (error) {
         attempts.push({
-          ...detail,
-          error: `JSON parse failed: ${error.message}`,
-          body: summarizeBody(bodyText),
+          attempt,
+          apiRoot,
+          url: url.toString(),
+          durationMs: Date.now() - startedAt,
+          error: error?.name === 'AbortError'
+            ? `Request timed out after ${timeoutMs}ms`
+            : error?.message || String(error),
         });
         if (attempt < retries) await sleep(250 * attempt);
+      } finally {
+        clearTimeout(timeoutId);
       }
-    } catch (error) {
-      attempts.push({
-        attempt,
-        url: url.toString(),
-        durationMs: Date.now() - startedAt,
-        error: error?.name === 'AbortError'
-          ? `Request timed out after ${timeoutMs}ms`
-          : error?.message || String(error),
-      });
-      if (attempt < retries) await sleep(250 * attempt);
-    } finally {
-      clearTimeout(timeoutId);
     }
   }
 
-  const error = new Error(`CBETA request failed after ${retries} attempts`);
+  const error = new Error(`CBETA request failed after ${attempts.length} attempts`);
   error.details = attempts;
   throw error;
 }
@@ -185,7 +231,7 @@ function parseLimit(value, fallback) {
   return Math.min(Math.max(parsed, 1), 24);
 }
 
-function toCbetaItem(work, juan, payload, attempts) {
+function toCbetaItem(work, juan, payload, attempts, apiRoot) {
   const html = Array.isArray(payload?.results) ? payload.results[0] : '';
   const workInfo = payload?.work_info || {};
   const title = workInfo.title || extractTitleFromHtml(html) || work;
@@ -205,13 +251,13 @@ function toCbetaItem(work, juan, payload, attempts) {
     content,
     contentLength: content.length,
     source: 'CBETA',
-    sourceApi: CBETA_API_ROOT,
+    sourceApi: apiRoot,
     sourceUrl: buildCbetaUrl('juans', {
       work: workInfo.work || work,
       juan,
       work_info: 1,
       toc: 1,
-    }).toString(),
+    }, apiRoot).toString(),
     fetchAttempts: attempts,
   };
 }
@@ -237,13 +283,13 @@ export async function handleGetCbetaSendTexts(request) {
 
   for (const work of selectedWorks) {
     try {
-      const { data, attempts } = await fetchJsonWithRetry('juans', {
+      const { data, attempts, apiRoot } = await fetchJsonWithRetry('juans', {
         work,
         juan,
         work_info: 1,
         toc: 1,
       });
-      items.push(toCbetaItem(work, juan, data, attempts));
+      items.push(toCbetaItem(work, juan, data, attempts, apiRoot));
     } catch (error) {
       errors.push(normalizeError(work, juan, error));
     }
@@ -252,7 +298,9 @@ export async function handleGetCbetaSendTexts(request) {
   const payload = {
     success: items.length > 0,
     source: 'CBETA',
-    api: CBETA_API_ROOT,
+    api: CBETA_PUBLIC_API_ROOT,
+    primaryApi: CBETA_ORACLE_API_ROOT,
+    fallbackApi: CBETA_FALLBACK_API_ROOT,
     requested: selectedWorks.length,
     count: items.length,
     items,
@@ -262,24 +310,94 @@ export async function handleGetCbetaSendTexts(request) {
   return jsonResponse(payload, items.length > 0 ? 200 : 502);
 }
 
+function canUseProxyResponse(path, method, bodyText, contentType) {
+  if (method === 'HEAD') return true;
+  if (!contentType?.toLowerCase().includes('application/json')) return true;
+
+  try {
+    return hasUsableCbetaPayload(path, JSON.parse(bodyText));
+  } catch {
+    return false;
+  }
+}
+
 export async function handleProxyCbetaRequest(request) {
   const sourceUrl = new URL(request.url);
   const cbetaPath = sourceUrl.pathname.replace(/^\/api\/cbeta\/?/, '');
-  const targetUrl = buildCbetaUrl(cbetaPath || '/', Object.fromEntries(sourceUrl.searchParams));
-  const response = await fetch(targetUrl.toString(), {
-    method: request.method,
-    headers: {
-      Accept: request.headers.get('Accept') || 'application/json',
-    },
-  });
+  const params = Object.fromEntries(sourceUrl.searchParams);
+  const attempts = [];
+  let lastOkResponse = null;
 
-  const headers = new Headers(CORS_HEADERS);
-  const contentType = response.headers.get('Content-Type');
-  if (contentType) headers.set('Content-Type', contentType);
+  for (const apiRoot of CBETA_API_ROOTS) {
+    const targetUrl = buildCbetaUrl(cbetaPath || '/', params, apiRoot);
+    const startedAt = Date.now();
 
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+    try {
+      const response = await fetch(targetUrl.toString(), {
+        method: request.method,
+        headers: {
+          Accept: request.headers.get('Accept') || 'application/json',
+        },
+      });
+      const bodyText = request.method === 'HEAD' ? '' : await response.text();
+      const contentType = response.headers.get('Content-Type');
+      const detail = {
+        apiRoot,
+        url: targetUrl.toString(),
+        status: response.status,
+        statusText: response.statusText,
+        durationMs: Date.now() - startedAt,
+      };
+
+      if (response.ok && canUseProxyResponse(cbetaPath, request.method, bodyText, contentType)) {
+        const headers = new Headers(CORS_HEADERS);
+        if (contentType) headers.set('Content-Type', contentType);
+        headers.set('X-CBETA-Upstream', apiRoot);
+
+        return new Response(request.method === 'HEAD' ? null : bodyText, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+
+      if (response.ok) {
+        lastOkResponse = {
+          bodyText,
+          contentType,
+          status: response.status,
+          statusText: response.statusText,
+        };
+      }
+
+      attempts.push({
+        ...detail,
+        body: summarizeBody(bodyText),
+      });
+    } catch (error) {
+      attempts.push({
+        apiRoot,
+        url: targetUrl.toString(),
+        durationMs: Date.now() - startedAt,
+        error: error?.message || String(error),
+      });
+    }
+  }
+
+  if (lastOkResponse) {
+    const headers = new Headers(CORS_HEADERS);
+    if (lastOkResponse.contentType) headers.set('Content-Type', lastOkResponse.contentType);
+
+    return new Response(request.method === 'HEAD' ? null : lastOkResponse.bodyText, {
+      status: lastOkResponse.status,
+      statusText: lastOkResponse.statusText,
+      headers,
+    });
+  }
+
+  return jsonResponse({
+    success: false,
+    error: 'CBETA upstream unavailable',
+    attempts,
+  }, 502);
 }
