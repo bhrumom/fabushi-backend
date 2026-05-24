@@ -451,6 +451,492 @@ function parseGroupSearchQuery(query) {
     };
 }
 
+function normalizePlainText(text) {
+    return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function normalizeForMatching(text) {
+    return String(text || '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/[\u0000-\u001f]/g, ' ')
+        .replace(/\s+/g, '')
+        .trim();
+}
+
+function firstTextLine(text, fallback = '功课本') {
+    const line = normalizePlainText(text)
+        .split('\n')
+        .map((item) => item.trim())
+        .find((item) => item.length > 0);
+    if (!line) return fallback;
+    const cleaned = line.replace(/^[#>\s]+/, '').trim();
+    if (!cleaned) return fallback;
+    return cleaned.length > 32 ? cleaned.slice(0, 32) : cleaned;
+}
+
+async function sha256Hex(text) {
+    const bytes = new TextEncoder().encode(String(text || ''));
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return [...new Uint8Array(digest)]
+        .map((byte) => byte.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+function ownerObjectSegment(auth) {
+    const value = hasStableUserId(auth) ? `u-${auth.userId}` : `name-${auth.username}`;
+    return String(value).replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+function parseIsoOrNow(value, fallback = new Date()) {
+    const parsed = value ? new Date(value) : null;
+    return parsed && !Number.isNaN(parsed.getTime())
+        ? parsed.toISOString()
+        : fallback.toISOString();
+}
+
+function toPracticeBookRow(row, content = {}) {
+    return {
+        id: row.id,
+        practiceTitle: row.practice_title,
+        title: row.title,
+        sourceType: row.source_type,
+        sourceUrl: row.source_url || null,
+        sourceFileName: row.source_file_name || null,
+        contentHash: row.content_hash,
+        plainText: content.plainText || '',
+        normalizedText: content.normalizedText || row.normalized_text || '',
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        syncStatus: 'synced',
+        remoteObjectKey: row.remote_object_key || null,
+        isActive: row.is_active === 1 || row.is_active === true
+    };
+}
+
+async function readPracticeBookContent(env, objectKey) {
+    if (!env.R2_BUCKET || !objectKey) return {};
+    const object = await env.R2_BUCKET.get(objectKey);
+    if (!object) return {};
+    try {
+        return JSON.parse(await object.text());
+    } catch (_) {
+        return {};
+    }
+}
+
+async function buildPracticeBookFromBody(body, auth, fallback = {}) {
+    const now = new Date();
+    const id = String(body.id || fallback.id || crypto.randomUUID());
+    const practiceTitle = String(body.practiceTitle || body.practice_title || fallback.practiceTitle || '').trim();
+    const plainText = normalizePlainText(body.plainText || body.plain_text || fallback.plainText || '');
+    const title = String(body.title || fallback.title || firstTextLine(plainText)).trim();
+    const sourceType = String(body.sourceType || body.source_type || fallback.sourceType || 'manual');
+    const normalizedText = normalizeForMatching(body.normalizedText || body.normalized_text || plainText);
+    const contentHash = String(body.contentHash || body.content_hash || await sha256Hex(plainText));
+    const remoteObjectKey = String(
+        body.remoteObjectKey ||
+        body.remote_object_key ||
+        `practice-books/${ownerObjectSegment(auth)}/${id}.json`
+    );
+
+    if (!practiceTitle) {
+        throw new Error('practiceTitle required');
+    }
+    if (!title) {
+        throw new Error('title required');
+    }
+    if (plainText.length < 2 || normalizedText.length < 2) {
+        throw new Error('plainText required');
+    }
+
+    return {
+        id,
+        practiceTitle,
+        title,
+        sourceType,
+        sourceUrl: body.sourceUrl || body.source_url || fallback.sourceUrl || null,
+        sourceFileName: body.sourceFileName || body.source_file_name || fallback.sourceFileName || null,
+        contentHash,
+        plainText,
+        normalizedText,
+        createdAt: parseIsoOrNow(body.createdAt || body.created_at || fallback.createdAt, now),
+        updatedAt: now.toISOString(),
+        remoteObjectKey,
+        isActive: body.isActive !== false && body.is_active !== 0
+    };
+}
+
+async function savePracticeBookForAuth(db, env, auth, book) {
+    if (!env.R2_BUCKET) {
+        throw new Error('R2_BUCKET not configured');
+    }
+
+    const objectPayload = {
+        id: book.id,
+        practiceTitle: book.practiceTitle,
+        title: book.title,
+        sourceType: book.sourceType,
+        sourceUrl: book.sourceUrl,
+        sourceFileName: book.sourceFileName,
+        contentHash: book.contentHash,
+        plainText: book.plainText,
+        normalizedText: book.normalizedText,
+        createdAt: book.createdAt,
+        updatedAt: book.updatedAt
+    };
+
+    await env.R2_BUCKET.put(book.remoteObjectKey, JSON.stringify(objectPayload), {
+        httpMetadata: { contentType: 'application/json; charset=utf-8' }
+    });
+
+    const scope = userScope(auth);
+    await db.prepare(`
+      UPDATE practice_books
+      SET is_active = 0,
+          updated_at = ?
+      WHERE ${scope.where} AND practice_title = ?
+    `).bind(book.updatedAt, ...scope.params, book.practiceTitle).run();
+
+    const nextVersion = await getNextSyncVersion(db, auth.username);
+    await db.prepare(`
+      INSERT INTO practice_books (
+        id, username, user_id, practice_title, title, source_type,
+        source_url, source_file_name, content_hash, normalized_text,
+        remote_object_key, is_active, created_at, updated_at, sync_version
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        username = excluded.username,
+        user_id = excluded.user_id,
+        practice_title = excluded.practice_title,
+        title = excluded.title,
+        source_type = excluded.source_type,
+        source_url = excluded.source_url,
+        source_file_name = excluded.source_file_name,
+        content_hash = excluded.content_hash,
+        normalized_text = excluded.normalized_text,
+        remote_object_key = excluded.remote_object_key,
+        is_active = excluded.is_active,
+        updated_at = excluded.updated_at,
+        sync_version = excluded.sync_version
+    `).bind(
+        book.id,
+        auth.username,
+        auth.userId,
+        book.practiceTitle,
+        book.title,
+        book.sourceType,
+        book.sourceUrl,
+        book.sourceFileName,
+        book.contentHash,
+        book.normalizedText,
+        book.remoteObjectKey,
+        book.isActive ? 1 : 0,
+        book.createdAt,
+        book.updatedAt,
+        nextVersion
+    ).run();
+
+    return { ...book, syncStatus: 'synced' };
+}
+
+function decodeHtmlEntities(text) {
+    const named = {
+        amp: '&',
+        lt: '<',
+        gt: '>',
+        quot: '"',
+        apos: "'",
+        nbsp: ' '
+    };
+    return String(text || '').replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (_, entity) => {
+        if (entity.startsWith('#x') || entity.startsWith('#X')) {
+            return String.fromCodePoint(parseInt(entity.slice(2), 16));
+        }
+        if (entity.startsWith('#')) {
+            return String.fromCodePoint(parseInt(entity.slice(1), 10));
+        }
+        return named[entity] || ' ';
+    });
+}
+
+function htmlToText(html) {
+    return normalizePlainText(
+        decodeHtmlEntities(
+            String(html || '')
+                .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/<\/(p|div|section|article|h[1-6]|li)>/gi, '\n')
+                .replace(/<[^>]+>/g, ' ')
+        ).replace(/[ \t]{2,}/g, ' ')
+    );
+}
+
+function extractElementById(html, id) {
+    const startPattern = new RegExp(`<([a-zA-Z0-9]+)[^>]*id=["']${id}["'][^>]*>`, 'i');
+    const start = startPattern.exec(html);
+    if (!start) return null;
+
+    const tag = start[1];
+    const contentStart = start.index + start[0].length;
+    const tagPattern = new RegExp(`</?${tag}\\b[^>]*>`, 'ig');
+    tagPattern.lastIndex = contentStart;
+    let depth = 1;
+    let match;
+    while ((match = tagPattern.exec(html)) !== null) {
+        if (match[0][1] === '/') {
+            depth -= 1;
+            if (depth === 0) {
+                return html.slice(contentStart, match.index);
+            }
+        } else {
+            depth += 1;
+        }
+    }
+    return html.slice(contentStart);
+}
+
+function extractHtmlTitle(html) {
+    const candidates = [
+        /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["'][^>]*>/i,
+        /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["'][^>]*>/i,
+        /var\s+msg_title\s*=\s*["']([^"']+)["']/i,
+        /<title[^>]*>([\s\S]*?)<\/title>/i
+    ];
+    for (const pattern of candidates) {
+        const match = pattern.exec(html);
+        if (match?.[1]) {
+            return htmlToText(match[1]).slice(0, 80);
+        }
+    }
+    return '功课本';
+}
+
+function extractArticleText(html, url) {
+    const host = new URL(url).hostname;
+    const candidates = [];
+
+    if (host.includes('mp.weixin.qq.com')) {
+        const wechatContent = extractElementById(html, 'js_content');
+        if (wechatContent) candidates.push(wechatContent);
+    }
+
+    const richMedia = extractElementById(html, 'img-content') ||
+        extractElementById(html, 'js_article') ||
+        extractElementById(html, 'article-content');
+    if (richMedia) candidates.push(richMedia);
+
+    const articleMatch = /<article[^>]*>([\s\S]*?)<\/article>/i.exec(html);
+    if (articleMatch?.[1]) candidates.push(articleMatch[1]);
+
+    const bodyMatch = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
+    if (bodyMatch?.[1]) candidates.push(bodyMatch[1]);
+
+    return candidates
+        .map(htmlToText)
+        .sort((a, b) => b.length - a.length)[0] || '';
+}
+
+// 功课本列表 GET /api/meditation/practice-books
+export async function handleGetPracticeBooks(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        const url = new URL(request.url);
+        const practiceTitle = url.searchParams.get('practiceTitle');
+        const result = await withUserScope(db, auth, (scope) => {
+            let sql = `
+      SELECT id, username, user_id, practice_title, title, source_type,
+             source_url, source_file_name, content_hash, normalized_text,
+             remote_object_key, is_active, created_at, updated_at
+      FROM practice_books
+      WHERE ${scope.where}
+    `;
+            const params = [...scope.params];
+            if (practiceTitle) {
+                sql += ' AND practice_title = ?';
+                params.push(practiceTitle);
+            }
+            sql += ' ORDER BY updated_at DESC';
+            return { sql, params };
+        });
+
+        const books = [];
+        for (const row of result.results || []) {
+            const content = await readPracticeBookContent(env, row.remote_object_key);
+            books.push(toPracticeBookRow(row, content));
+        }
+
+        return jsonResponse({ success: true, data: { books } });
+    } catch (e) {
+        console.error('获取功课本失败:', e);
+        return jsonResponse({ success: false, error: '获取功课本失败' }, 500);
+    }
+}
+
+// 保存功课本 POST /api/meditation/practice-books
+export async function handleSavePracticeBook(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        const body = await request.json();
+        const book = await buildPracticeBookFromBody(body, auth);
+        const saved = await savePracticeBookForAuth(db, env, auth, book);
+        return jsonResponse({ success: true, data: { book: saved } });
+    } catch (e) {
+        console.error('保存功课本失败:', e);
+        return jsonResponse({ success: false, error: '保存功课本失败: ' + e.message }, 500);
+    }
+}
+
+// 删除功课本 DELETE /api/meditation/practice-books?id=...
+export async function handleDeletePracticeBook(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        const url = new URL(request.url);
+        const id = url.searchParams.get('id');
+        if (!id) {
+            return jsonResponse({ success: false, error: 'id required' }, 400);
+        }
+
+        const row = await withUserScope(db, auth, (scope) => ({
+            sql: `
+      SELECT id, remote_object_key
+      FROM practice_books
+      WHERE id = ? AND ${scope.where}
+    `,
+            params: [id, ...scope.params]
+        }), 'first');
+
+        if (!row) {
+            return jsonResponse({ success: false, error: '功课本不存在' }, 404);
+        }
+
+        await db.prepare('DELETE FROM practice_books WHERE id = ?').bind(id).run();
+        if (env.R2_BUCKET && row.remote_object_key) {
+            await env.R2_BUCKET.delete(row.remote_object_key);
+        }
+
+        return jsonResponse({ success: true });
+    } catch (e) {
+        console.error('删除功课本失败:', e);
+        return jsonResponse({ success: false, error: '删除功课本失败' }, 500);
+    }
+}
+
+// 导入链接 POST /api/meditation/practice-books/import-url
+export async function handleImportPracticeBookUrl(request, env, db) {
+    const auth = await authenticateUser(request, db);
+    if (auth.error) {
+        return jsonResponse({ success: false, error: auth.error }, auth.status);
+    }
+
+    try {
+        const body = await request.json();
+        const sourceUrl = String(body.url || body.sourceUrl || '').trim();
+        const practiceTitle = String(body.practiceTitle || '').trim();
+        if (!/^https?:\/\//i.test(sourceUrl)) {
+            return jsonResponse({ success: false, error: '请输入 http/https 链接' }, 400);
+        }
+
+        const remote = await fetch(sourceUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 MicroMessenger/8.0 FabushiPracticeBookImporter',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
+        });
+        if (!remote.ok) {
+            return jsonResponse({
+                success: false,
+                error: `链接抓取失败: HTTP ${remote.status}`,
+                needsWebViewFallback: true
+            }, 422);
+        }
+
+        const html = await remote.text();
+        const plainText = extractArticleText(html, sourceUrl);
+        if (plainText.length < 40) {
+            return jsonResponse({
+                success: false,
+                error: '云端未能提取正文，可改用 App 内页面提取',
+                needsWebViewFallback: true
+            }, 422);
+        }
+
+        const book = await buildPracticeBookFromBody({
+            practiceTitle,
+            title: extractHtmlTitle(html) || firstTextLine(plainText),
+            sourceType: 'url',
+            sourceUrl,
+            plainText
+        }, auth);
+        const saved = await savePracticeBookForAuth(db, env, auth, book);
+        return jsonResponse({ success: true, data: { book: saved } });
+    } catch (e) {
+        console.error('链接导入功课本失败:', e);
+        return jsonResponse({
+            success: false,
+            error: '链接解析失败',
+            needsWebViewFallback: true
+        }, 422);
+    }
+}
+
+// 离线 ASR 模型包 manifest GET /api/meditation/asr-model-manifest
+export async function handleAsrModelManifest(request, env) {
+    const modelId = 'streaming-paraformer-zh-en';
+    const makeR2Url = (fileName) => {
+        const url = new URL('/r2', request.url);
+        url.searchParams.set('file', `asr-models/${modelId}/${fileName}`);
+        return url.toString();
+    };
+
+    return jsonResponse({
+        success: true,
+        id: modelId,
+        version: '2026-05-24-paraformer-int8',
+        provider: 'sherpa_onnx_paraformer',
+        offline: true,
+        files: [
+            {
+                name: 'encoder.int8.onnx',
+                url: makeR2Url('encoder.int8.onnx'),
+                minBytes: 1048576,
+                sha256: env.ASR_PARA_FORMER_ENCODER_SHA256 || null
+            },
+            {
+                name: 'decoder.int8.onnx',
+                url: makeR2Url('decoder.int8.onnx'),
+                minBytes: 524288,
+                sha256: env.ASR_PARA_FORMER_DECODER_SHA256 || null
+            },
+            {
+                name: 'tokens.txt',
+                url: makeR2Url('tokens.txt'),
+                minBytes: 1024,
+                sha256: env.ASR_PARA_FORMER_TOKENS_SHA256 || null
+            }
+        ]
+    });
+}
+
 // 同步修行记录 POST /api/meditation/record
 export async function handleSyncRecord(request, env, db) {
     const auth = await authenticateUser(request, db);

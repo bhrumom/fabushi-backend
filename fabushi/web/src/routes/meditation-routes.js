@@ -14,6 +14,11 @@ import {
   handleGetMeditationGroupDetail,
   handleReviewMeditationGroupJoin,
   handleSyncRecord,
+  handleGetPracticeBooks,
+  handleSavePracticeBook,
+  handleDeletePracticeBook,
+  handleImportPracticeBookUrl,
+  handleAsrModelManifest,
 } from '../handlers/meditation.js';
 import { generateSnowflakeUserId as generateSnowflakeGroupId } from '../services/database.js';
 import {
@@ -420,6 +425,21 @@ async function handleJoinMeditationGroupWithStableUserId(request, env, db) {
 }
 
 export async function routeMeditationRequest({ pathname, method, request, env, db }) {
+  if (pathname === '/api/meditation/asr-model-manifest' && method === 'GET') {
+    return await handleAsrModelManifest(request, env);
+  }
+  if (pathname === '/api/meditation/practice-books' && method === 'GET') {
+    return await handleGetPracticeBooks(request, env, db);
+  }
+  if (pathname === '/api/meditation/practice-books' && method === 'POST') {
+    return await handleSavePracticeBook(request, env, db);
+  }
+  if (pathname === '/api/meditation/practice-books' && method === 'DELETE') {
+    return await handleDeletePracticeBook(request, env, db);
+  }
+  if (pathname === '/api/meditation/practice-books/import-url' && method === 'POST') {
+    return await handleImportPracticeBookUrl(request, env, db);
+  }
   if (pathname === '/api/meditation/record' && method === 'POST') {
     return await handleSyncRecord(request, env, db);
   }
