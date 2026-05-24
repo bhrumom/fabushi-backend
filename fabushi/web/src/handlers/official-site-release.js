@@ -305,7 +305,8 @@ function buildReleaseEntry(payload, fallbackPublishedAt) {
     title: `Fabushi ${latestVersion}${latestBuildNumber > 0 ? `+${latestBuildNumber}` : ''}`,
     publishedAt,
     htmlUrl: '',
-    summary
+    summary,
+    buildNumber: latestBuildNumber
   };
 }
 
@@ -325,7 +326,7 @@ function buildReleaseEntries(auditRows, currentPolicies) {
 
   const merged = new Map();
   for (const entry of entries) {
-    const key = `${entry.tag}:${entry.publishedAt}`;
+    const key = entry.tag;
     const existing = merged.get(key);
     if (!existing) {
       merged.set(key, {
@@ -335,12 +336,40 @@ function buildReleaseEntries(auditRows, currentPolicies) {
       continue;
     }
 
-    existing.summary = uniqueLines([...existing.summary, ...entry.summary]);
+    const incomingBuildNumber = parseInteger(entry.buildNumber, 0);
+    const existingBuildNumber = parseInteger(existing.buildNumber, 0);
+    const incomingPublishedAt = String(entry.publishedAt || '');
+    const existingPublishedAt = String(existing.publishedAt || '');
+    const incomingIsNewer =
+      incomingBuildNumber > existingBuildNumber ||
+      (incomingBuildNumber === existingBuildNumber && incomingPublishedAt > existingPublishedAt);
+
+    if (incomingIsNewer) {
+      merged.set(key, {
+        ...entry,
+        summary:
+          incomingBuildNumber === existingBuildNumber
+            ? uniqueLines([...existing.summary, ...entry.summary])
+            : uniqueLines(entry.summary)
+      });
+      continue;
+    }
+
+    if (incomingBuildNumber === existingBuildNumber) {
+      existing.summary = uniqueLines([...existing.summary, ...entry.summary]);
+    }
   }
 
   return Array.from(merged.values())
-    .sort((left, right) => String(right.publishedAt).localeCompare(String(left.publishedAt)))
-    .slice(0, 5);
+    .sort((left, right) => {
+      const buildDelta = parseInteger(right.buildNumber, 0) - parseInteger(left.buildNumber, 0);
+      if (buildDelta !== 0) {
+        return buildDelta;
+      }
+      return String(right.publishedAt || '').localeCompare(String(left.publishedAt || ''));
+    })
+    .slice(0, 5)
+    .map(({ buildNumber, ...entry }) => entry);
 }
 
 function buildCollection(policies, auditRows) {
