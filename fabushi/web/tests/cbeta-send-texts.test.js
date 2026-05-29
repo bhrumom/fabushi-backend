@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 
 import { handleGetCbetaSendTexts } from '../src/handlers/cbeta.js';
 
+const SELF_HOSTED_API = 'http://144.24.17.21.sslip.io:3000';
+
 const sampleHtml = `
-  <html><head><title>般若波羅蜜多心經</title></head><body>
+  <html><head><title>Heart Sutra</title></head><body>
     <div id="body">
       <span class="lb">T08n0251_p0848c06</span>
-      <p class="juan"><span class="t">般若波羅蜜多心經</span></p>
-      <p><span class="lineInfo"></span><span class="t">觀自在菩薩行深般若波羅蜜多時</span></p>
-      <p><span class="t">照見五蘊皆空，度一切苦厄。</span></p>
+      <p class="juan"><span class="t">Heart Sutra</span></p>
+      <p><span class="lineInfo">line</span><span class="t">Avalokitesvara deeply practiced prajna.</span></p>
+      <p><span class="t">He saw the five aggregates are empty.</span></p>
     </div>
     <div id="back"><div class="footnote">footnote</div></div>
     <div id="cbeta-copyright"><p>copyright</p></div>
@@ -34,9 +36,9 @@ test('CBETA send texts returns real stripped scripture content and detailed part
         results: [sampleHtml],
         work_info: {
           work: 'T0251',
-          title: '般若波羅蜜多心經',
-          byline: '唐 玄奘譯',
-          category: '般若部類',
+          title: 'Heart Sutra',
+          byline: 'Xuanzang',
+          category: 'Prajna',
         },
       }), { status: 200 });
     }
@@ -57,14 +59,17 @@ test('CBETA send texts returns real stripped scripture content and detailed part
     const body = await response.json();
     assert.equal(body.success, true);
     assert.equal(body.count, 1);
+    assert.equal(body.primaryApi, SELF_HOSTED_API);
+    assert.equal(body.fallbackApi, null);
     assert.equal(body.errors.length, 1);
-    assert.equal(body.errors[0].attempts.length, 6);
-    assert.equal(failAttempts, 6);
+    assert.equal(body.errors[0].attempts.length, 3);
+    assert.equal(failAttempts, 3);
 
     const item = body.items[0];
     assert.equal(item.work, 'T0251');
+    assert.equal(item.sourceApi, SELF_HOSTED_API);
     assert.match(item.fileName, /^T0251_1_/);
-    assert.match(item.content, /觀自在菩薩/);
+    assert.match(item.content, /Avalokitesvara deeply practiced prajna/);
     assert.doesNotMatch(item.content, /T08n0251/);
     assert.doesNotMatch(item.content, /copyright/);
   } finally {
@@ -89,9 +94,10 @@ test('CBETA send texts reports full upstream errors when no scripture can be fet
     const body = await response.json();
     assert.equal(body.success, false);
     assert.equal(body.count, 0);
+    assert.equal(body.fallbackApi, null);
     assert.equal(body.errors.length, 1);
-    assert.match(body.errors[0].message, /failed after 6 attempts/);
-    assert.equal(body.errors[0].attempts.length, 6);
+    assert.match(body.errors[0].message, /failed after 3 attempts/);
+    assert.equal(body.errors[0].attempts.length, 3);
     assert.equal(body.errors[0].attempts[0].status, 502);
     assert.match(body.errors[0].attempts[0].body, /bad gateway/);
   } finally {
@@ -99,42 +105,28 @@ test('CBETA send texts reports full upstream errors when no scripture can be fet
   }
 });
 
-test('CBETA send texts falls back when Oracle returns empty juan content', async () => {
+test('CBETA send texts never falls back to official API when self-hosted returns empty content', async () => {
   const attemptedHosts = [];
   const restoreFetch = installFetchMock(async url => {
     const parsed = new URL(url);
     attemptedHosts.push(parsed.host);
-
-    if (parsed.host === '144.24.17.21.sslip.io:3000') {
-      return new Response(JSON.stringify({ num_found: 0, results: [] }), { status: 200 });
-    }
-
-    return new Response(JSON.stringify({
-      results: [sampleHtml],
-      work_info: {
-        work: 'T0251',
-        title: '般若波羅蜜多心經',
-        byline: '唐 玄奘譯',
-        category: '般若部類',
-      },
-    }), { status: 200 });
+    return new Response(JSON.stringify({ num_found: 0, results: [] }), { status: 200 });
   });
 
   try {
     const response = await handleGetCbetaSendTexts(
       new Request('https://api.ombhrum.com/api/cbeta/send-texts?works=T0251&limit=1'),
     );
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 502);
 
     const body = await response.json();
-    assert.equal(body.count, 1);
-    assert.equal(body.items[0].sourceApi, 'https://api.cbetaonline.cn');
-    assert.match(body.items[0].content, /觀自在菩薩/);
+    assert.equal(body.count, 0);
+    assert.equal(body.fallbackApi, null);
+    assert.equal(body.errors.length, 1);
     assert.deepEqual(attemptedHosts, [
       '144.24.17.21.sslip.io:3000',
       '144.24.17.21.sslip.io:3000',
       '144.24.17.21.sslip.io:3000',
-      'api.cbetaonline.cn',
     ]);
   } finally {
     restoreFetch();

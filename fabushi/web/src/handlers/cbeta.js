@@ -2,9 +2,8 @@ import { CORS_HEADERS } from '../config/constants.js';
 import { jsonResponse } from '../utils/response.js';
 
 const CBETA_PUBLIC_API_ROOT = 'https://api.ombhrum.com/api/cbeta';
-const CBETA_ORACLE_API_ROOT = 'http://144.24.17.21.sslip.io:3000';
-const CBETA_FALLBACK_API_ROOT = 'https://api.cbetaonline.cn';
-const CBETA_API_ROOTS = [CBETA_ORACLE_API_ROOT, CBETA_FALLBACK_API_ROOT];
+const CBETA_SELF_HOSTED_API_ROOT = 'http://144.24.17.21.sslip.io:3000';
+const CBETA_API_ROOTS = [CBETA_SELF_HOSTED_API_ROOT];
 const DEFAULT_SEND_WORKS = [
   'T0365',
   'T0251',
@@ -26,7 +25,7 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function buildCbetaUrl(path, params = {}, apiRoot = CBETA_ORACLE_API_ROOT) {
+function buildCbetaUrl(path, params = {}, apiRoot = CBETA_SELF_HOSTED_API_ROOT) {
   const url = new URL(path.replace(/^\/+/, ''), `${apiRoot}/`);
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && `${value}` !== '') {
@@ -299,8 +298,8 @@ export async function handleGetCbetaSendTexts(request) {
     success: items.length > 0,
     source: 'CBETA',
     api: CBETA_PUBLIC_API_ROOT,
-    primaryApi: CBETA_ORACLE_API_ROOT,
-    fallbackApi: CBETA_FALLBACK_API_ROOT,
+    primaryApi: CBETA_SELF_HOSTED_API_ROOT,
+    fallbackApi: null,
     requested: selectedWorks.length,
     count: items.length,
     items,
