@@ -76,12 +76,77 @@ export class DatabaseService {
   constructor(db) {
     this.db = db;
     this.state = db?.state;
+    this.tableColumnsCache = new Map();
     if (typeof db?.transaction === 'function') this.transaction = db.transaction.bind(db);
     if (typeof db?.batch === 'function') this.batch = db.batch.bind(db);
   }
 
   prepare(query) {
     return this.db.prepare(query);
+  }
+
+  async getTableColumns(tableName) {
+    if (this.tableColumnsCache.has(tableName)) {
+      return this.tableColumnsCache.get(tableName);
+    }
+
+    const result = await this.db.prepare(`PRAGMA table_info(${tableName})`).all();
+    const columns = new Set((result.results || []).map((column) => column.name));
+    this.tableColumnsCache.set(tableName, columns);
+    return columns;
+  }
+
+  async insertKnownColumns(tableName, valuesByColumn) {
+    const columns = await this.getTableColumns(tableName);
+    const insertColumns = Object.keys(valuesByColumn)
+      .filter((column) => columns.has(column) && valuesByColumn[column] !== undefined);
+
+    if (insertColumns.length === 0) {
+      throw new Error(`No known columns available for ${tableName}`);
+    }
+
+    const placeholders = insertColumns.map(() => '?').join(', ');
+    const values = insertColumns.map((column) => valuesByColumn[column]);
+    await this.db.prepare(`
+      INSERT INTO ${tableName} (${insertColumns.join(', ')})
+      VALUES (${placeholders})
+    `).bind(...values).run();
+  }
+
+  async getIdentityValues(username, userId = null) {
+    const values = [];
+    if (username) values.push(username);
+    if (userId !== undefined && userId !== null) values.push(userId, String(userId));
+    if (username && userId === null) {
+      const user = await this.getUser(username);
+      if (user?.id !== undefined && user?.id !== null) values.push(user.id, String(user.id));
+    }
+    return [...new Map(values.map((value) => [String(value), value])).values()];
+  }
+
+  async buildUserHistoryFilter(tableName, username, userId = null) {
+    const columns = await this.getTableColumns(tableName);
+    const conditions = [];
+    const params = [];
+
+    if (columns.has('username') && username) {
+      conditions.push('username = ?');
+      params.push(username);
+    }
+
+    if (columns.has('user_id')) {
+      const identities = await this.getIdentityValues(username, userId);
+      if (identities.length > 0) {
+        conditions.push(`user_id IN (${identities.map(() => '?').join(', ')})`);
+        params.push(...identities);
+      }
+    }
+
+    if (conditions.length === 0) {
+      return { where: '1 = 0', params: [] };
+    }
+
+    return { where: `(${conditions.join(' OR ')})`, params };
   }
 
   async getUser(username) {
@@ -243,23 +308,20 @@ export class DatabaseService {
     const username = orderData.username || user?.username || orderData.userId;
     const accountUserId = orderData.accountUserId ?? user?.id ?? null;
 
-    await this.db.prepare(`
-      INSERT INTO orders (
-        order_id, username, account_user_id, plan, amount, original_amount,
-        is_admin_order, status, platform, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      orderData.orderId,
+    await this.insertKnownColumns('orders', {
+      order_id: orderData.orderId,
+      user_id: username,
       username,
-      accountUserId,
-      orderData.plan,
-      String(orderData.amount),
-      orderData.originalAmount == null ? null : String(orderData.originalAmount),
-      orderData.isAdminOrder ? 1 : 0,
-      orderData.status,
-      orderData.platform || null,
-      orderData.createdAt
-    ).run();
+      account_user_id: accountUserId,
+      plan: orderData.plan,
+      amount: String(orderData.amount),
+      original_amount: orderData.originalAmount == null ? null : String(orderData.originalAmount),
+      is_admin_order: orderData.isAdminOrder ? 1 : 0,
+      status: orderData.status,
+      platform: orderData.platform || null,
+      created_at: orderData.createdAt,
+      updated_at: orderData.createdAt,
+    });
   }
 
   async getOrder(orderId) {
@@ -329,78 +391,75 @@ export class DatabaseService {
 
   async addPurchaseHistory(data) {
     const user = data.username ? await this.getUser(data.username) : null;
-    await this.db.prepare(`
-      INSERT INTO purchase_history (
-        username, user_id, order_id, plan, amount, currency, status,
-        payment_method, purchased_at, valid_from, valid_to
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      data.username,
-      data.userId ?? user?.id ?? null,
-      data.orderId,
-      data.plan,
-      String(data.amount),
-      data.currency || 'CNY',
-      data.status,
-      data.paymentMethod,
-      data.purchasedAt,
-      data.validFrom,
-      data.validTo
-    ).run();
+    const columns = await this.getTableColumns('purchase_history');
+    const hasUsernameColumn = columns.has('username');
+    await this.insertKnownColumns('purchase_history', {
+      username: data.username,
+      user_id: hasUsernameColumn ? (data.userId ?? user?.id ?? null) : (data.username || data.userId || user?.id),
+      order_id: data.orderId,
+      plan: data.plan,
+      amount: String(data.amount),
+      currency: data.currency || 'CNY',
+      status: data.status,
+      payment_method: data.paymentMethod,
+      purchased_at: data.purchasedAt,
+      valid_from: data.validFrom,
+      valid_to: data.validTo,
+      created_at: data.purchasedAt,
+    });
   }
 
-  async getPurchaseHistory(username) {
+  async getPurchaseHistory(username, userId = null) {
+    const filter = await this.buildUserHistoryFilter('purchase_history', username, userId);
     const result = await this.db.prepare(`
       SELECT *
       FROM purchase_history
-      WHERE username = ?
-         OR user_id = (SELECT id FROM users WHERE username = ?)
+      WHERE ${filter.where}
       ORDER BY purchased_at DESC
-    `).bind(username, username).all();
+    `).bind(...filter.params).all();
     return result.results || [];
   }
 
   async addRedeemHistory(data) {
     const user = data.username ? await this.getUser(data.username) : null;
-    await this.db.prepare(`
-      INSERT INTO redeem_history (
-        username, user_id, code, type, days, redeemed_at, valid_from, valid_to
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      data.username,
-      data.userId ?? user?.id ?? null,
-      data.code,
-      data.type,
-      data.days,
-      data.redeemedAt,
-      data.validFrom,
-      data.validTo
-    ).run();
+    const columns = await this.getTableColumns('redeem_history');
+    const hasUsernameColumn = columns.has('username');
+    await this.insertKnownColumns('redeem_history', {
+      username: data.username,
+      user_id: hasUsernameColumn ? (data.userId ?? user?.id ?? null) : (data.username || data.userId || user?.id),
+      code: data.code,
+      type: data.type,
+      name: data.name || data.type || '',
+      days: data.days,
+      redeemed_at: data.redeemedAt,
+      valid_from: data.validFrom,
+      valid_to: data.validTo,
+      previous_expiry_date: data.previousExpiryDate || null,
+      created_at: data.redeemedAt,
+    });
   }
 
-  async getRedeemHistory(username) {
+  async getRedeemHistory(username, userId = null) {
+    const filter = await this.buildUserHistoryFilter('redeem_history', username, userId);
     const result = await this.db.prepare(`
       SELECT *
       FROM redeem_history
-      WHERE username = ?
-         OR user_id = (SELECT id FROM users WHERE username = ?)
+      WHERE ${filter.where}
       ORDER BY redeemed_at DESC
-    `).bind(username, username).all();
+    `).bind(...filter.params).all();
     return result.results || [];
   }
 
-  async hasCompletedPurchase(username, productId) {
+  async hasCompletedPurchase(username, productId, userId = null) {
+    const filter = await this.buildUserHistoryFilter('purchase_history', username, userId);
     const row = await this.db.prepare(`
       SELECT id
       FROM purchase_history
       WHERE plan = ?
         AND status = 'completed'
-        AND (
-          username = ?
-          OR user_id = (SELECT id FROM users WHERE username = ?)
-        )
+        AND ${filter.where}
       LIMIT 1
-    `).bind(productId, username, username).first();
+    `).bind(productId, ...filter.params).first();
     return !!row;
   }
 

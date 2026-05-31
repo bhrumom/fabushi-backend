@@ -95,6 +95,7 @@ export async function handleUseRedeemCode(request, env, db) {
     username: tokenData.username,
     code: code.toUpperCase(),
     type: redeemCode.type,
+    name: redeemCode.name,
     days: redeemCode.days,
     redeemedAt: now.toISOString(),
     validFrom: now.toISOString(),
@@ -122,7 +123,7 @@ export async function handleGetPurchaseHistory(request, env, db) {
     return jsonResponse({ error: '认证失败' }, 401);
   }
 
-  const purchases = await db.getPurchaseHistory(tokenData.username);
+  const purchases = await db.getPurchaseHistory(tokenData.username, tokenData.userId);
   return jsonResponse({
     success: true,
     purchases,
@@ -143,7 +144,7 @@ export async function handleGetRedeemHistory(request, env, db) {
     return jsonResponse({ error: '认证失败' }, 401);
   }
 
-  const redeems = await db.getRedeemHistory(tokenData.username);
+  const redeems = await db.getRedeemHistory(tokenData.username, tokenData.userId);
   return jsonResponse({
     success: true,
     redeems,

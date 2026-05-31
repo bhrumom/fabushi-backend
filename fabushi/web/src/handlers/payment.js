@@ -47,6 +47,7 @@ export async function handleCreateAlipayOrder(request, env, db) {
   await db.createOrder({
     orderId: outTradeNo,
     username: tokenData.username,
+    accountUserId: user.id,
     plan,
     amount: finalAmount,
     originalAmount: planDetails.price,
@@ -190,7 +191,7 @@ export async function handleCheckPurchaseEntitlement(request, env, db) {
     return jsonResponse({ error: '无效的付费项目' }, 400);
   }
 
-  const unlocked = await db.hasCompletedPurchase(tokenData.username, product);
+  const unlocked = await db.hasCompletedPurchase(tokenData.username, product, tokenData.userId);
   return jsonResponse({
     success: true,
     product,
