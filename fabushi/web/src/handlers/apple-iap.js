@@ -4,6 +4,65 @@ import { APPLE_IAP_PRODUCTS } from '../config/constants.js';
 
 const PERMANENT_ENTITLEMENT_VALID_TO = '9999-12-31T23:59:59.999Z';
 
+function normalizeAppleEnv(env) {
+  return {
+    issuerId: String(env.APPLE_ISSUER_ID || '').trim(),
+    keyId: String(env.APPLE_KEY_ID || '').trim(),
+    privateKey: String(env.APPLE_PRIVATE_KEY || '').trim().replace(/\\n/g, '\n'),
+    bundleId: String(env.APPLE_BUNDLE_ID || '').trim()
+  };
+}
+
+async function resolveAuthenticatedUser(db, tokenData) {
+  if (tokenData.userId !== undefined && tokenData.userId !== null && typeof db.getUserById === 'function') {
+    const user = await db.getUserById(tokenData.userId);
+    if (user) return user;
+  }
+
+  if (tokenData.username && typeof db.getUser === 'function') {
+    return await db.getUser(tokenData.username);
+  }
+
+  return null;
+}
+
+function sameUserPurchase(purchase, user) {
+  if (!purchase || !user) return false;
+
+  const purchaseUserId = purchase.account_user_id ?? purchase.user_id;
+  if (purchaseUserId != null && user.id != null && String(purchaseUserId) === String(user.id)) {
+    return true;
+  }
+  if (purchaseUserId != null && user.username != null && String(purchaseUserId) === String(user.username)) {
+    return true;
+  }
+
+  return purchase.username != null && user.username != null && purchase.username === user.username;
+}
+
+async function restoreMembershipFromPurchaseIfNewer(db, user, purchase) {
+  const purchaseValidTo = purchase?.valid_to || purchase?.validTo;
+  if (!purchaseValidTo) {
+    return user?.membership_expires_at || null;
+  }
+
+  const restoredExpiry = new Date(purchaseValidTo);
+  if (Number.isNaN(restoredExpiry.getTime())) {
+    return user?.membership_expires_at || null;
+  }
+
+  const currentExpiry = user?.membership_expires_at ? new Date(user.membership_expires_at) : null;
+  if (!currentExpiry || Number.isNaN(currentExpiry.getTime()) || restoredExpiry > currentExpiry) {
+    await db.updateUser(user.username, {
+      membership_type: 'paid',
+      membership_expires_at: restoredExpiry.toISOString()
+    });
+    return restoredExpiry.toISOString();
+  }
+
+  return user.membership_expires_at;
+}
+
 /**
  * 将 Base64Url 转换为 Uint8Array
  */
@@ -63,7 +122,12 @@ function bufferToBase64Url(buffer) {
  * 生成 App Store Server API 所需的 ES256 JWT
  */
 async function generateAppleJWT(env) {
-  const { APPLE_ISSUER_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY, APPLE_BUNDLE_ID } = env;
+  const {
+    issuerId: APPLE_ISSUER_ID,
+    keyId: APPLE_KEY_ID,
+    privateKey: APPLE_PRIVATE_KEY,
+    bundleId: APPLE_BUNDLE_ID
+  } = normalizeAppleEnv(env);
 
   console.log('🍎 generateAppleJWT: 检查环境变量...');
   console.log(`  APPLE_ISSUER_ID: ${APPLE_ISSUER_ID ? APPLE_ISSUER_ID.substring(0, 8) + '...' : '❌ 未设置'}`);
@@ -157,7 +221,7 @@ async function fetchTransactionInfo(transactionId, env) {
   let response = await fetch(sandboxUrl, { method: 'GET', headers });
   console.log(`🍎 fetchTransactionInfo: Sandbox 响应状态: ${response.status}`);
   
-  if (response.status === 404) {
+  if ([401, 404].includes(response.status)) {
     // Sandbox 没有这条交易，尝试 Production
     console.log(`🍎 fetchTransactionInfo: Sandbox 未找到，尝试 Production: ${prodUrl}`);
     response = await fetch(prodUrl, { method: 'GET', headers });
@@ -210,7 +274,9 @@ export async function handleVerifyAppleReceipt(request, env, db) {
   }
 
   // 检查系统环境变量是否已配置 Apple credentials
-  if (!env.APPLE_PRIVATE_KEY) {
+  const appleEnv = normalizeAppleEnv(env);
+
+  if (!appleEnv.privateKey) {
      console.error('Apple Server API isn\'t configured in Cloudflare Worker.');
      return jsonResponse({ error: '服务器 IAP 验证暂未配置，请联系客服' }, 500);
   }
@@ -228,7 +294,7 @@ export async function handleVerifyAppleReceipt(request, env, db) {
     
     // 4. 验证交易真实性
     // 首先确认这是我们的内购项，并且交易是扣款成功的
-    if (transactionInfo.bundleId !== env.APPLE_BUNDLE_ID) {
+    if (transactionInfo.bundleId !== appleEnv.bundleId) {
         return jsonResponse({ error: 'Bundle ID 不匹配，非法凭证' }, 403);
     }
     
@@ -248,13 +314,19 @@ export async function handleVerifyAppleReceipt(request, env, db) {
     // 我们检查此 transactionId 是否已被处理：
     const existingPurchase = await db.prepare('SELECT * FROM purchase_history WHERE order_id = ?').bind(transactionId).first();
     if (existingPurchase) {
-       const user = await db.getUser(tokenData.username);
+       const user = await resolveAuthenticatedUser(db, tokenData);
+       if (!sameUserPurchase(existingPurchase, user)) {
+          return jsonResponse({ error: 'Transaction already belongs to another account' }, 409);
+       }
+       const expiresAt = planInfo.productType === 'membership'
+          ? await restoreMembershipFromPurchaseIfNewer(db, user, existingPurchase)
+          : user?.membership_expires_at || null;
        // 重复验证，直接返回当前状态但不走充值逻辑
        return jsonResponse({ 
            success: true, 
            message: '交易已处理', 
-           membershipType: user?.membership_type || 'paid',
-           expiresAt: user?.membership_expires_at || null,
+           membershipType: planInfo.productType === 'membership' ? 'paid' : user?.membership_type,
+           expiresAt,
            productType: planInfo.productType || 'membership',
            unlocked: planInfo.productType === 'asset_unlock',
            alreadyProcessed: true 
@@ -262,7 +334,7 @@ export async function handleVerifyAppleReceipt(request, env, db) {
     }
 
     // 6. 验证成功，为用户发货
-    const user = await db.getUser(tokenData.username);
+    const user = await resolveAuthenticatedUser(db, tokenData);
     if (!user) {
       return jsonResponse({ error: '用户不存在' }, 404);
     }
@@ -275,6 +347,7 @@ export async function handleVerifyAppleReceipt(request, env, db) {
     if (planInfo.productType === 'asset_unlock') {
       await db.addPurchaseHistory({
         username: user.username,
+        userId: user.id,
         orderId: transactionId,
         plan,
         amount: planInfo.price,
@@ -336,6 +409,7 @@ export async function handleVerifyAppleReceipt(request, env, db) {
     // Apple 价格是本地化和分层的，这里我们可以固定按套餐原价登记或仅标识来源
     await db.addPurchaseHistory({
       username: user.username,
+      userId: user.id,
       orderId: transactionId,         // App Store 交易号
       plan: plan,
       amount: planInfo.price,        // 我们记账按套餐预设，具体结算看苹果后台
