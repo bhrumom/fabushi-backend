@@ -236,6 +236,174 @@ export class DatabaseService {
     return createdUser;
   }
 
+  async createOrder(orderData) {
+    const user = orderData.userId
+      ? await this.getUser(orderData.userId)
+      : null;
+    const username = orderData.username || user?.username || orderData.userId;
+    const accountUserId = orderData.accountUserId ?? user?.id ?? null;
+
+    await this.db.prepare(`
+      INSERT INTO orders (
+        order_id, username, account_user_id, plan, amount, original_amount,
+        is_admin_order, status, platform, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      orderData.orderId,
+      username,
+      accountUserId,
+      orderData.plan,
+      String(orderData.amount),
+      orderData.originalAmount == null ? null : String(orderData.originalAmount),
+      orderData.isAdminOrder ? 1 : 0,
+      orderData.status,
+      orderData.platform || null,
+      orderData.createdAt
+    ).run();
+  }
+
+  async getOrder(orderId) {
+    return await this.db.prepare('SELECT * FROM orders WHERE order_id = ?').bind(orderId).first();
+  }
+
+  async updateOrder(orderId, updates) {
+    const fields = Object.keys(updates).map((k) => `${k} = ?`).join(', ');
+    const values = Object.values(updates);
+    await this.db.prepare(`UPDATE orders SET ${fields} WHERE order_id = ?`)
+      .bind(...values, orderId)
+      .run();
+  }
+
+  async createRedeemCode(codeData) {
+    await this.db.prepare(`
+      INSERT INTO redeem_codes (
+        code, type, days, name, description, created_by, created_at, used
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    `).bind(
+      codeData.code,
+      codeData.type,
+      codeData.days,
+      codeData.name,
+      codeData.description,
+      codeData.createdBy,
+      codeData.createdAt
+    ).run();
+  }
+
+  async getRedeemCode(code) {
+    return await this.db.prepare('SELECT * FROM redeem_codes WHERE code = ? AND used = 0').bind(code).first();
+  }
+
+  async useRedeemCode(code, username) {
+    await this.db.prepare('UPDATE redeem_codes SET used = 1, used_by = ?, used_at = ? WHERE code = ?')
+      .bind(username, new Date().toISOString(), code)
+      .run();
+  }
+
+  async listRedeemCodes(status, page, limit) {
+    let query = 'SELECT * FROM redeem_codes';
+    const params = [];
+    if (status === 'used') {
+      query += ' WHERE used = 1';
+    } else if (status === 'unused') {
+      query += ' WHERE used = 0';
+    }
+    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, (page - 1) * limit);
+
+    const result = await this.db.prepare(query).bind(...params).all();
+    const countResult = await this.db.prepare('SELECT COUNT(*) AS total FROM redeem_codes').first();
+    const total = Number(countResult?.total) || 0;
+    return {
+      codes: result.results || [],
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async deleteRedeemCode(code) {
+    await this.db.prepare('DELETE FROM redeem_codes WHERE code = ?').bind(code).run();
+  }
+
+  async addPurchaseHistory(data) {
+    const user = data.username ? await this.getUser(data.username) : null;
+    await this.db.prepare(`
+      INSERT INTO purchase_history (
+        username, user_id, order_id, plan, amount, currency, status,
+        payment_method, purchased_at, valid_from, valid_to
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      data.username,
+      data.userId ?? user?.id ?? null,
+      data.orderId,
+      data.plan,
+      String(data.amount),
+      data.currency || 'CNY',
+      data.status,
+      data.paymentMethod,
+      data.purchasedAt,
+      data.validFrom,
+      data.validTo
+    ).run();
+  }
+
+  async getPurchaseHistory(username) {
+    const result = await this.db.prepare(`
+      SELECT *
+      FROM purchase_history
+      WHERE username = ?
+         OR user_id = (SELECT id FROM users WHERE username = ?)
+      ORDER BY purchased_at DESC
+    `).bind(username, username).all();
+    return result.results || [];
+  }
+
+  async addRedeemHistory(data) {
+    const user = data.username ? await this.getUser(data.username) : null;
+    await this.db.prepare(`
+      INSERT INTO redeem_history (
+        username, user_id, code, type, days, redeemed_at, valid_from, valid_to
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      data.username,
+      data.userId ?? user?.id ?? null,
+      data.code,
+      data.type,
+      data.days,
+      data.redeemedAt,
+      data.validFrom,
+      data.validTo
+    ).run();
+  }
+
+  async getRedeemHistory(username) {
+    const result = await this.db.prepare(`
+      SELECT *
+      FROM redeem_history
+      WHERE username = ?
+         OR user_id = (SELECT id FROM users WHERE username = ?)
+      ORDER BY redeemed_at DESC
+    `).bind(username, username).all();
+    return result.results || [];
+  }
+
+  async hasCompletedPurchase(username, productId) {
+    const row = await this.db.prepare(`
+      SELECT id
+      FROM purchase_history
+      WHERE plan = ?
+        AND status = 'completed'
+        AND (
+          username = ?
+          OR user_id = (SELECT id FROM users WHERE username = ?)
+        )
+      LIMIT 1
+    `).bind(productId, username, username).first();
+    return !!row;
+  }
+
   async getCreatedUser(userId, userNo) {
     const userById = await this.getUserById(userId);
     if (userById) return userById;

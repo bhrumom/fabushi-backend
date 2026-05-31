@@ -44,6 +44,7 @@ export async function handleCreateRedeemCode(request, env, db) {
   }
 
   return jsonResponse({
+    success: true,
     message: `成功生成${quantity}个兑换码`,
     codes,
     type: codeType.name
@@ -101,6 +102,7 @@ export async function handleUseRedeemCode(request, env, db) {
   });
 
   return jsonResponse({
+    success: true,
     message: `兑换成功！获得${redeemCode.name}`,
     expiresAt: newExpiryDate.toISOString(),
     daysAdded: redeemCode.days
@@ -122,6 +124,7 @@ export async function handleGetPurchaseHistory(request, env, db) {
 
   const purchases = await db.getPurchaseHistory(tokenData.username);
   return jsonResponse({
+    success: true,
     purchases,
     total: purchases.length
   });
@@ -142,6 +145,7 @@ export async function handleGetRedeemHistory(request, env, db) {
 
   const redeems = await db.getRedeemHistory(tokenData.username);
   return jsonResponse({
+    success: true,
     redeems,
     total: redeems.length
   });

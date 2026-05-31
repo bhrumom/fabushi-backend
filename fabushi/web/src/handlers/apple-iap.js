@@ -2,6 +2,8 @@ import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
 import { APPLE_IAP_PRODUCTS } from '../config/constants.js';
 
+const PERMANENT_ENTITLEMENT_VALID_TO = '9999-12-31T23:59:59.999Z';
+
 /**
  * 将 Base64Url 转换为 Uint8Array
  */
@@ -246,22 +248,52 @@ export async function handleVerifyAppleReceipt(request, env, db) {
     // 我们检查此 transactionId 是否已被处理：
     const existingPurchase = await db.prepare('SELECT * FROM purchase_history WHERE order_id = ?').bind(transactionId).first();
     if (existingPurchase) {
+       const user = await db.getUser(tokenData.username);
        // 重复验证，直接返回当前状态但不走充值逻辑
        return jsonResponse({ 
            success: true, 
            message: '交易已处理', 
-           membershipType: 'paid', // 简化处理，实际要查 user 表
+           membershipType: user?.membership_type || 'paid',
+           expiresAt: user?.membership_expires_at || null,
+           productType: planInfo.productType || 'membership',
+           unlocked: planInfo.productType === 'asset_unlock',
            alreadyProcessed: true 
        });
     }
 
-    // 6. 验证成功，为用户发货 (延长会员时长)
+    // 6. 验证成功，为用户发货
     const user = await db.getUser(tokenData.username);
     if (!user) {
       return jsonResponse({ error: '用户不存在' }, 404);
     }
 
     const now = new Date();
+    const purchasedAt = transactionInfo.purchaseDate
+      ? new Date(transactionInfo.purchaseDate).toISOString()
+      : now.toISOString();
+
+    if (planInfo.productType === 'asset_unlock') {
+      await db.addPurchaseHistory({
+        username: user.username,
+        orderId: transactionId,
+        plan,
+        amount: planInfo.price,
+        currency: 'CNY',
+        status: 'completed',
+        paymentMethod: 'apple_iap',
+        purchasedAt,
+        validFrom: now.toISOString(),
+        validTo: PERMANENT_ENTITLEMENT_VALID_TO
+      });
+
+      return jsonResponse({
+        success: true,
+        message: '禅室佛像素材已解锁',
+        productType: 'asset_unlock',
+        unlocked: true
+      });
+    }
+
     let startDate = now;
     
     // 检测是否为 Sandbox 环境（Sandbox transactionId 以 2000000 开头）
@@ -310,7 +342,7 @@ export async function handleVerifyAppleReceipt(request, env, db) {
       currency: 'CNY',
       status: 'completed',
       paymentMethod: 'apple_iap',
-      purchasedAt: new Date(transactionInfo.purchaseDate).toISOString(),
+      purchasedAt,
       validFrom: startDate.toISOString(),
       validTo: endDate.toISOString()
     });
@@ -319,7 +351,8 @@ export async function handleVerifyAppleReceipt(request, env, db) {
         success: true,
         message: '会员激活成功',
         membershipType: 'paid',
-        expiresAt: endDate.toISOString()
+        expiresAt: endDate.toISOString(),
+        productType: 'membership'
     });
 
   } catch (e) {

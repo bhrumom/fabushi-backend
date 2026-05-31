@@ -1,8 +1,20 @@
 import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
-import { MEMBERSHIP_PLANS } from '../config/constants.js';
+import { ASSET_PRODUCTS, MEMBERSHIP_PLANS } from '../config/constants.js';
 import { isAdmin } from '../utils/helpers.js';
 import { importPrivateKey, generateSign } from '../../alipay-utils.js';
+
+const PERMANENT_ENTITLEMENT_VALID_TO = '9999-12-31T23:59:59.999Z';
+
+function getPaidProduct(plan) {
+  if (MEMBERSHIP_PLANS[plan]) {
+    return { ...MEMBERSHIP_PLANS[plan], productType: 'membership' };
+  }
+  if (ASSET_PRODUCTS[plan]) {
+    return ASSET_PRODUCTS[plan];
+  }
+  return null;
+}
 
 // 创建支付宝订单
 export async function handleCreateAlipayOrder(request, env, db) {
@@ -18,9 +30,9 @@ export async function handleCreateAlipayOrder(request, env, db) {
   }
 
   const { plan = 'monthly', platform = 'app' } = await request.json();
-  const planDetails = MEMBERSHIP_PLANS[plan];
+  const planDetails = getPaidProduct(plan);
   if (!planDetails) {
-    return jsonResponse({ error: '无效的会员计划' }, 400);
+    return jsonResponse({ error: '无效的付费项目' }, 400);
   }
 
   const user = await db.getUser(tokenData.username);
@@ -34,7 +46,7 @@ export async function handleCreateAlipayOrder(request, env, db) {
 
   await db.createOrder({
     orderId: outTradeNo,
-    userId: tokenData.username,
+    username: tokenData.username,
     plan,
     amount: finalAmount,
     originalAmount: planDetails.price,
@@ -85,6 +97,7 @@ export async function handleCreateAlipayOrder(request, env, db) {
       orderId: outTradeNo,
       amount: finalAmount,
       plan,
+      productType: planDetails.productType,
       paymentUrl
     });
   }
@@ -128,6 +141,7 @@ export async function handleCreateAlipayOrder(request, env, db) {
     orderId: outTradeNo,
     amount: finalAmount,
     plan,
+    productType: planDetails.productType,
     orderString
   });
 }
@@ -147,12 +161,40 @@ export async function handleQueryAlipayOrder(request, env, db) {
   }
 
   return jsonResponse({
+    success: true,
     orderId: order.order_id,
-    userId: order.user_id,
+    userId: order.username || order.user_id,
     plan: order.plan,
     amount: order.amount,
     status: order.status,
+    productType: getPaidProduct(order.plan)?.productType || 'unknown',
     createdAt: order.created_at
+  });
+}
+
+export async function handleCheckPurchaseEntitlement(request, env, db) {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return jsonResponse({ error: '未提供认证信息' }, 401);
+  }
+
+  const token = authHeader.substring(7);
+  const tokenData = await verifyToken(token, env);
+  if (!tokenData) {
+    return jsonResponse({ error: '认证失败' }, 401);
+  }
+
+  const url = new URL(request.url);
+  const product = url.searchParams.get('product');
+  if (!product || !ASSET_PRODUCTS[product]) {
+    return jsonResponse({ error: '无效的付费项目' }, 400);
+  }
+
+  const unlocked = await db.hasCompletedPurchase(tokenData.username, product);
+  return jsonResponse({
+    success: true,
+    product,
+    unlocked,
   });
 }
 
@@ -182,9 +224,31 @@ export async function handleAlipayNotify(request, env, db) {
       trade_no: params.trade_no
     });
 
-    const user = await db.getUser(order.user_id);
-    const planDetails = MEMBERSHIP_PLANS[order.plan];
+    const username = order.username || order.user_id;
+    const user = await db.getUser(username);
+    const planDetails = getPaidProduct(order.plan);
     const now = new Date();
+
+    if (!user || !planDetails) {
+      return new Response('failure', { status: 400 });
+    }
+
+    if (planDetails.productType === 'asset_unlock') {
+      await db.addPurchaseHistory({
+        username,
+        orderId: outTradeNo,
+        plan: order.plan,
+        amount: order.amount || planDetails.price,
+        currency: 'CNY',
+        status: 'completed',
+        paymentMethod: 'alipay',
+        purchasedAt: now.toISOString(),
+        validFrom: now.toISOString(),
+        validTo: PERMANENT_ENTITLEMENT_VALID_TO
+      });
+
+      return new Response('success', { status: 200 });
+    }
 
     let startDate = now;
     if (user.membership_expires_at && new Date(user.membership_expires_at) > now) {
@@ -193,16 +257,16 @@ export async function handleAlipayNotify(request, env, db) {
 
     const endDate = new Date(startDate.getTime() + planDetails.duration);
 
-    await db.updateUser(order.user_id, {
+    await db.updateUser(username, {
       membership_type: 'paid',
       membership_expires_at: endDate.toISOString()
     });
 
     await db.addPurchaseHistory({
-      username: order.user_id,
+      username,
       orderId: outTradeNo,
       plan: order.plan,
-      amount: planDetails.price,
+      amount: order.amount || planDetails.price,
       currency: 'CNY',
       status: 'completed',
       paymentMethod: 'alipay',

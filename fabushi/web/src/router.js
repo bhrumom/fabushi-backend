@@ -3,7 +3,7 @@ import { handleSendSmsCode, handleSmsLogin } from './handlers/sms.js';
 import { handleGetComments, handlePostComment, handleDeleteComment, handleGetTaggedPosts, handleGetHotFeed, handleGetPostDetail, handleBatchGetCommentCounts } from './handlers/comments.js';
 import { handleSendVerificationCode, handleForgotPassword, handleResetPassword } from './handlers/verification.js';
 import { handleGetWechatLoginUrl, handleGetAlipayLoginUrl, handleAlipayLogin, handleAlipayCallback, handleAlipayRegister, handleBindEmail, handleMacOSAlipayCallback, handleMobileAlipayCallback, handleGetAlipayAuthString, handleAlipaySDKLogin } from './handlers/thirdparty.js';
-import { handleCreateAlipayOrder, handleQueryAlipayOrder, handleAlipayNotify } from './handlers/payment.js';
+import { handleCreateAlipayOrder, handleQueryAlipayOrder, handleAlipayNotify, handleCheckPurchaseEntitlement } from './handlers/payment.js';
 import { handleVerifyAppleReceipt } from './handlers/apple-iap.js';
 import { handleCreateRedeemCode, handleUseRedeemCode, handleGetPurchaseHistory, handleGetRedeemHistory } from './handlers/redeem.js';
 import { handleCheckMembershipStatus, handleCheckAlipayMembership } from './handlers/membership.js';
@@ -165,6 +165,7 @@ export async function route(request, env, db, ctx) {
   if (pathname === '/api/alipay/query-order' && method === 'GET') return await handleQueryAlipayOrder(request, env, db);
   if (pathname === '/api/alipay/notify' && method === 'POST') return await handleAlipayNotify(request, env, db);
   if (pathname === '/api/alipay/check-membership' && method === 'GET') return await handleCheckAlipayMembership(request, env, db);
+  if (pathname === '/api/purchases/entitlement' && method === 'GET') return await handleCheckPurchaseEntitlement(request, env, db);
   if (pathname === '/api/apple/verify-receipt' && method === 'POST') return await handleVerifyAppleReceipt(request, env, db);
 
   if (pathname === '/api/stripe/membership-status' && method === 'GET') return await handleCheckMembershipStatus(request, env, db);
