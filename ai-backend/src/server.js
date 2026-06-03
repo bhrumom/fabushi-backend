@@ -4,6 +4,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import Database from 'better-sqlite3';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -11,6 +13,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import pino from 'pino';
+import { z } from 'zod';
 
 dotenv.config();
 
@@ -195,6 +198,13 @@ function monthKey(date = new Date()) {
 
 function jsonResponse(res, status, payload) {
   res.status(status).json(payload);
+}
+
+function textToolResult(text, structuredContent = {}) {
+  return {
+    structuredContent,
+    content: [{ type: 'text', text }],
+  };
 }
 
 function sseHeaders(res) {
@@ -1845,6 +1855,200 @@ function persistDownloadedResource(user, content) {
   });
   return { id, fileName, filePath };
 }
+
+function createLibreChatMcpServer() {
+  const server = new McpServer({
+    name: 'dacheng-ai-tools',
+    version: '0.1.0',
+  });
+
+  server.registerTool(
+    'search_dharma_resources',
+    {
+      title: 'Search dharma resources',
+      description:
+        'Search for legally shareable Buddhist scripture, text, web, or audio resources that can be prepared for Fabushi sharing.',
+      inputSchema: {
+        query: z.string().min(2).max(200),
+        limit: z.number().int().min(1).max(12).optional(),
+      },
+      outputSchema: {
+        query: z.string(),
+        items: z.array(
+          z.object({
+            id: z.string(),
+            title: z.string(),
+            sourceName: z.string(),
+            url: z.string(),
+            snippet: z.string(),
+            resourceType: z.string(),
+            work: z.string().optional(),
+            juan: z.number().optional(),
+          }),
+        ),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ query, limit }) => {
+      const items = await findResourceCandidates(query, limit ?? 8);
+      return textToolResult(`Found ${items.length} candidate resources for "${query}".`, {
+        query,
+        items,
+      });
+    },
+  );
+
+  server.registerTool(
+    'download_dharma_resource',
+    {
+      title: 'Download dharma resource',
+      description:
+        'Download and extract a selected resource. Use the url/work/juan returned by search_dharma_resources whenever possible.',
+      inputSchema: {
+        url: z.string().min(1).max(1000),
+        title: z.string().max(300).optional(),
+        sourceName: z.string().max(120).optional(),
+        work: z.string().max(40).optional(),
+        juan: z.number().int().min(1).optional(),
+        identifier: z.string().max(300).optional(),
+      },
+      outputSchema: {
+        title: z.string(),
+        sourceName: z.string(),
+        url: z.string(),
+        fileName: z.string(),
+        downloadId: z.string(),
+        contentText: z.string(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (input) => {
+      const user = { userId: 'librechat:mcp' };
+      const cbeta = parseCbetaResource(input);
+      const internetArchive = parseInternetArchiveResource(input);
+      const content = cbeta
+        ? await downloadCbetaResource({ ...input, ...cbeta })
+        : internetArchive
+          ? await downloadInternetArchiveAudio({ ...input, ...internetArchive })
+          : await downloadWebResource(input);
+      const persisted = persistDownloadedResource(user, content);
+      const { binaryContent: _binaryContent, ...publicContent } = content;
+      return textToolResult(`Downloaded ${publicContent.title} as ${publicContent.fileName}.`, {
+        ...publicContent,
+        downloadId: persisted.id,
+      });
+    },
+  );
+
+  server.registerTool(
+    'prepare_dharma_share_text',
+    {
+      title: 'Prepare dharma sharing text',
+      description:
+        'Prepare a text payload for the Fabushi app to confirm and add to global dharma sharing. This returns a clientAction; it does not start sending.',
+      inputSchema: {
+        title: z.string().min(1).max(120),
+        text: z.string().min(1).max(20000),
+      },
+      outputSchema: {
+        clientAction: z.object({
+          type: z.literal('prepare_dharma_share_text'),
+          title: z.string(),
+          text: z.string(),
+        }),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ title, text }) =>
+      textToolResult(`Prepared "${title}" for user confirmation in the Fabushi app.`, {
+        clientAction: {
+          type: 'prepare_dharma_share_text',
+          title: safeUserText(title).slice(0, 120),
+          text: String(text || '').trim().slice(0, 20000),
+        },
+      }),
+  );
+
+  server.registerTool(
+    'prepare_practice_book_item',
+    {
+      title: 'Prepare practice book item',
+      description:
+        'Prepare a scripture, chant, or practice item for the Fabushi app practice book. This returns a clientAction; it does not mutate the app by itself.',
+      inputSchema: {
+        title: z.string().min(1).max(120),
+        sourceName: z.string().max(120).optional(),
+        text: z.string().min(1).max(20000),
+      },
+      outputSchema: {
+        clientAction: z.object({
+          type: z.literal('prepare_practice_book_item'),
+          title: z.string(),
+          sourceName: z.string(),
+          text: z.string(),
+        }),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ title, sourceName, text }) =>
+      textToolResult(`Prepared "${title}" for the Fabushi practice book confirmation flow.`, {
+        clientAction: {
+          type: 'prepare_practice_book_item',
+          title: safeUserText(title).slice(0, 120),
+          sourceName: safeUserText(sourceName || '大乘 AI').slice(0, 120),
+          text: String(text || '').trim().slice(0, 20000),
+        },
+      }),
+  );
+
+  return server;
+}
+
+async function handleMcpRequest(req, res) {
+  const server = createLibreChatMcpServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+
+  res.on('close', () => {
+    transport.close();
+    server.close();
+  });
+
+  await server.connect(transport);
+  await transport.handleRequest(req, res, req.body);
+}
+
+app.all('/mcp', async (req, res) => {
+  try {
+    await handleMcpRequest(req, res);
+  } catch (error) {
+    logger.error({ error: error.stack || String(error) }, 'MCP request failed');
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'MCP request failed',
+        message: publicAiErrorMessage(error),
+      });
+    }
+  }
+});
 
 app.post(
   '/api/resources/download',

@@ -1,0 +1,54 @@
+version: 1.3.12
+
+cache: true
+
+interface:
+  remoteAgents:
+    use: true
+    create: true
+  agents: true
+  fileSearch: true
+  webSearch: true
+  mcpServers:
+    use: true
+    create: true
+    share: false
+    public: false
+
+endpoints:
+  custom:
+    - name: "DeepSeek"
+      apiKey: "${DEEPSEEK_API_KEY}"
+      baseURL: "https://api.deepseek.com/v1"
+      models:
+        default:
+          - "deepseek-chat"
+          - "deepseek-reasoner"
+      titleConvo: true
+      titleModel: "deepseek-chat"
+      summarize: false
+      forcePrompt: false
+      modelDisplayLabel: "DeepSeek"
+  agents:
+    disableBuilder: false
+    capabilities:
+      - "file_search"
+      - "web_search"
+      - "artifacts"
+      - "context"
+      - "tools"
+      - "actions"
+      - "skills"
+      - "subagents"
+
+mcpSettings:
+  allowedAddresses:
+    - "127.0.0.1:8788"
+    - "host.docker.internal:8788"
+
+mcpServers:
+  dacheng-ai:
+    type: streamable-http
+    url: "http://host.docker.internal:8788/mcp"
+    timeout: 120000
+    chatMenu: false
