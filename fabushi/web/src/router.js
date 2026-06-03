@@ -23,6 +23,7 @@ import { handleToggleFollow, handleGetFollowList, handleGetFollowSummary, handle
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
 import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
 import { handleSubmitFeedback } from './handlers/feedback.js';
+import { handleDachengAiProxy, isDachengAiPath } from './handlers/dacheng-ai.js';
 import {
   handleAppVersionPolicy,
   handleAdminUpsertAppVersionPolicy,
@@ -90,6 +91,10 @@ export async function route(request, env, db, ctx) {
 
   if (pathname === '/health') {
     return jsonResponse({ status: 'ok', timestamp: new Date().toISOString() });
+  }
+
+  if (isDachengAiPath(pathname)) {
+    return await handleDachengAiProxy(request, env);
   }
 
   if (pathname === '/api/app/version-policy' && method === 'GET') {
