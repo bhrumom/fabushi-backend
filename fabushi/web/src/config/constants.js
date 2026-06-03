@@ -30,7 +30,7 @@ export const MEMBERSHIP_PLANS = {
 
 export const ASSET_PRODUCTS = {
   'zen_buddha_asset': {
-    name: '禅室佛像素材',
+    name: '3D佛像素材',
     price: '33.00',
     adminPrice: '0.01',
     productType: 'asset_unlock'
@@ -67,7 +67,7 @@ export const APPLE_IAP_PRODUCTS = {
     productType: 'membership'
   },
   'zen_buddha_asset': {
-    name: '禅室佛像素材',
+    name: '3D佛像素材',
     price: '33.00',
     plan: 'zen_buddha_asset',
     productType: 'asset_unlock'

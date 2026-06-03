@@ -18,9 +18,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const dataDir = process.env.DATA_DIR || path.join(rootDir, 'data');
 const resourcesDir = path.join(dataDir, 'resources');
+const codexHomeDir = process.env.CODEX_HOME || path.join(dataDir, 'codex-home');
+const codexTempDir = process.env.CODEX_TMPDIR || path.join(dataDir, 'codex-tmp');
+const codexRuntimeDir = process.env.XDG_RUNTIME_DIR || path.join(dataDir, 'codex-runtime');
 const dbPath = process.env.SQLITE_PATH || path.join(dataDir, 'dacheng-ai.sqlite');
 
 fs.mkdirSync(resourcesDir, { recursive: true });
+fs.mkdirSync(codexHomeDir, { recursive: true });
+fs.mkdirSync(codexTempDir, { recursive: true });
+fs.mkdirSync(codexRuntimeDir, { recursive: true });
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -159,17 +165,24 @@ const statements = {
 const deepseekApiKey = process.env.DEEPSEEK_API_KEY || '';
 const deepseekBaseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
 const deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
-const cbetaApiRoot = (process.env.CBETA_API_ROOT || 'http://144.24.17.21.sslip.io:3000').replace(/\/+$/, '');
-const fabushiApiBaseUrl = (process.env.FABUSHI_API_BASE_URL || 'https://api.ombhrum.com').replace(/\/+$/, '');
+const cbetaApiRoot = (process.env.CBETA_API_ROOT || 'https://144.24.17.21.sslip.io').replace(/\/+$/, '');
+const fabushiApiBaseUrl = (process.env.FABUSHI_API_BASE_URL || 'http://141.148.140.39').replace(/\/+$/, '');
 const memberMonthlyLimit = Number(process.env.MEMBER_MONTHLY_TOKEN_LIMIT || 1_000_000);
 const freeMonthlyLimit = Number(process.env.FREE_MONTHLY_TOKEN_LIMIT || 50_000);
 const maxResourceTextChars = Number(process.env.MAX_RESOURCE_TEXT_CHARS || 80_000);
+const enableCodexSdkChat = process.env.ENABLE_CODEX_SDK_CHAT === 'true';
+const codexDeepSeekProviderId = 'deepseek-chat-completions';
+const codexResponsesBaseUrl = (
+  process.env.CODEX_DEEPSEEK_RESPONSES_BASE_URL ||
+  `http://127.0.0.1:${process.env.PORT || 8788}/codex-deepseek/v1`
+).replace(/\/+$/, '');
 
 const systemPrompt = [
   '你是“大乘”App 的 AI 助手。',
   '你的核心任务是帮助用户查找、整理、理解并全球法布施合法可分享的佛法资源。',
   '回答要庄重、简洁、可执行；涉及经典、仪轨或资源时，提醒用户尊重版权、来源和当地法规。',
-  '如果用户想找资源，优先建议使用 + 菜单里的“查找下载资源”。',
+  '如果用户想找资源、下载经文、寻找音频或准备可分享资料，你必须先在后端自动执行搜索、验证和下载步骤；不要要求用户去前端 + 菜单手动查找。',
+  '你可以把执行进度总结给用户，但不要输出隐藏推理原文。',
 ].join('\n');
 
 function nowIso() {
@@ -182,6 +195,20 @@ function monthKey(date = new Date()) {
 
 function jsonResponse(res, status, payload) {
   res.status(status).json(payload);
+}
+
+function sseHeaders(res) {
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+}
+
+function writeSse(res, event, payload) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
 function asyncHandler(fn) {
@@ -382,13 +409,488 @@ async function callDeepSeek(messages) {
   };
 }
 
+async function callDeepSeekStream(messages, callbacks = {}) {
+  if (!deepseekApiKey) {
+    const error = new Error('DeepSeek API key is not configured');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const response = await fetch(`${deepseekBaseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Accept: 'text/event-stream',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${deepseekApiKey}`,
+    },
+    body: JSON.stringify({
+      model: deepseekModel,
+      messages,
+      temperature: 0.4,
+      max_tokens: 1400,
+      stream: true,
+      stream_options: { include_usage: true },
+    }),
+    signal: callbacks.signal || AbortSignal.timeout(90_000),
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text();
+    let payload;
+    try {
+      payload = bodyText ? JSON.parse(bodyText) : {};
+    } catch {
+      payload = { error: bodyText };
+    }
+    const upstreamMessage = payload?.error?.message || payload?.message || '';
+    const friendlyMessage =
+      response.status === 402 || /insufficient\s+balance/i.test(upstreamMessage)
+        ? '大乘 AI 服务额度暂不可用，请联系管理员充值 DeepSeek 账户后重试。'
+        : upstreamMessage || `DeepSeek request failed: ${response.status}`;
+    const error = new Error(friendlyMessage);
+    error.statusCode = response.status;
+    throw error;
+  }
+
+  let buffer = '';
+  let message = '';
+  let usage = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+  };
+  const decoder = new TextDecoder();
+
+  for await (const chunk of response.body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice('data:'.length).trim();
+      if (!data || data === '[DONE]') continue;
+
+      let payload;
+      try {
+        payload = JSON.parse(data);
+      } catch {
+        continue;
+      }
+
+      const delta = payload?.choices?.[0]?.delta?.content || '';
+      if (delta) {
+        message += delta;
+        callbacks.onToken?.(delta);
+      }
+
+      if (payload?.usage) {
+        usage = {
+          promptTokens: Number(payload.usage.prompt_tokens || usage.promptTokens || 0),
+          completionTokens: Number(payload.usage.completion_tokens || usage.completionTokens || 0),
+          totalTokens: Number(payload.usage.total_tokens || usage.totalTokens || 0),
+        };
+      }
+    }
+  }
+
+  message = message.trim();
+  if (!message) {
+    const error = new Error('DeepSeek returned an empty response');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return { message, usage };
+}
+
+function createCodexDeepSeekRuntime() {
+  if (!enableCodexSdkChat || !deepseekApiKey) {
+    return {
+      enabled: false,
+      provider: 'deepseek-direct',
+      reason: enableCodexSdkChat ? 'DeepSeek API key is not configured' : 'ENABLE_CODEX_SDK_CHAT is not true',
+    };
+  }
+
+  return {
+    enabled: true,
+    provider: 'codex-sdk-deepseek',
+    options: {
+      apiKey: deepseekApiKey,
+      baseUrl: deepseekBaseUrl,
+      env: {
+        ...process.env,
+        DEEPSEEK_API_KEY: deepseekApiKey,
+        HOME: codexHomeDir,
+        CODEX_HOME: codexHomeDir,
+        TMPDIR: codexTempDir,
+        XDG_RUNTIME_DIR: codexRuntimeDir,
+        XDG_CACHE_HOME: path.join(codexHomeDir, '.cache'),
+        XDG_CONFIG_HOME: path.join(codexHomeDir, '.config'),
+        XDG_DATA_HOME: path.join(codexHomeDir, '.local', 'share'),
+        PATH: process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      },
+      config: {
+        model_provider: codexDeepSeekProviderId,
+        model_providers: {
+          [codexDeepSeekProviderId]: {
+            name: 'DeepSeek Chat Completions',
+            base_url: codexResponsesBaseUrl,
+            env_key: 'DEEPSEEK_API_KEY',
+            wire_api: 'responses',
+            query_params: {},
+          },
+        },
+      },
+    },
+    threadOptions: {
+      model: deepseekModel,
+      approvalPolicy: 'never',
+      sandboxMode: 'read-only',
+      skipGitRepoCheck: true,
+      networkAccessEnabled: true,
+    },
+  };
+}
+
+function codexPromptFromMessages(messages) {
+  return messages
+    .map((message) => {
+      const role = String(message.role || 'user').toUpperCase();
+      return `${role}:\n${message.content}`;
+    })
+    .join('\n\n');
+}
+
+function responseContentText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      if (!part || typeof part !== 'object') return '';
+      return String(part.text || part.input_text || part.output_text || '');
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function codexResponsesPrompt(body) {
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const userItems = input.filter((item) => item?.role === 'user');
+  const source = userItems[userItems.length - 1] || input[input.length - 1];
+  const prompt = responseContentText(source?.content).trim();
+  if (prompt) return prompt;
+  if (typeof body?.input === 'string') return body.input.trim();
+  return '';
+}
+
+function writeResponsesEvent(res, event, data) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function responseUsage(usage = {}) {
+  return {
+    input_tokens: Number(usage.promptTokens || usage.input_tokens || 0),
+    cached_input_tokens: 0,
+    output_tokens: Number(usage.completionTokens || usage.output_tokens || 0),
+    reasoning_output_tokens: 0,
+    total_tokens: Number(usage.totalTokens || usage.total_tokens || 0),
+  };
+}
+
+function isDeepSeekQuotaError(error) {
+  const message = String(error?.message || error || '');
+  return /额度|insufficient\s+balance|balance/i.test(message);
+}
+
+function publicAiErrorMessage(error) {
+  if (isDeepSeekQuotaError(error)) {
+    return '大乘 AI 服务额度暂不可用，请联系管理员充值 DeepSeek 账户后重试。';
+  }
+  return error?.message || 'Internal Server Error';
+}
+
+function responsesPayload({
+  responseId,
+  itemId,
+  status,
+  model,
+  text = '',
+  usage = null,
+  error = null,
+}) {
+  return {
+    id: responseId,
+    object: 'response',
+    status,
+    model,
+    output:
+      status === 'completed'
+        ? [
+            {
+              id: itemId,
+              type: 'message',
+              role: 'assistant',
+              status: 'completed',
+              content: [{ type: 'output_text', text }],
+            },
+          ]
+        : [],
+    ...(usage ? { usage: responseUsage(usage) } : {}),
+    ...(error
+      ? {
+          error: {
+            message: error.message || String(error),
+            type: 'server_error',
+          },
+        }
+      : {}),
+  };
+}
+
+async function callCodexSdkDeepSeek(messages, callbacks = {}) {
+  const codexRuntime = createCodexDeepSeekRuntime();
+  if (!codexRuntime.enabled) {
+    const error = new Error(codexRuntime.reason || 'Codex SDK chat is not enabled');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const { Codex } = await import('@openai/codex-sdk');
+  const codex = new Codex(codexRuntime.options);
+  const thread = codex.startThread(codexRuntime.threadOptions);
+  const prompt = codexPromptFromMessages(messages);
+
+  if (callbacks.onToken || callbacks.onStep) {
+    const { events } = await thread.runStreamed(prompt, { signal: callbacks.signal });
+    let finalResponse = '';
+    let usage = null;
+
+    for await (const event of events) {
+      if (event.type === 'item.completed') {
+        const item = event.item;
+        if (item.type === 'agent_message') {
+          finalResponse = item.text || finalResponse;
+          callbacks.onToken?.(item.text || '');
+        } else if (item.type === 'todo_list') {
+          callbacks.onStep?.({
+            title: 'Codex SDK 执行计划',
+            message: item.items.map((todo) => `${todo.completed ? '✓' : '•'} ${todo.text}`).join('\n'),
+          });
+        } else if (item.type === 'command_execution') {
+          callbacks.onStep?.({
+            title: 'Codex SDK 执行命令',
+            message: item.command,
+          });
+        } else if (item.type === 'mcp_tool_call') {
+          callbacks.onStep?.({
+            title: 'Codex SDK 调用工具',
+            message: `${item.server}.${item.tool}`,
+          });
+        }
+      } else if (event.type === 'turn.completed') {
+        usage = event.usage;
+      } else if (event.type === 'turn.failed') {
+        throw new Error(event.error?.message || 'Codex SDK turn failed');
+      } else if (event.type === 'error') {
+        throw new Error(event.message || 'Codex SDK stream failed');
+      }
+    }
+
+    if (!finalResponse.trim()) {
+      const error = new Error('Codex SDK returned an empty response');
+      error.statusCode = 502;
+      throw error;
+    }
+
+    return {
+      message: finalResponse.trim(),
+      usage: {
+        promptTokens: Number(usage?.input_tokens || 0),
+        completionTokens: Number(usage?.output_tokens || 0),
+        totalTokens: Number((usage?.input_tokens || 0) + (usage?.output_tokens || 0)),
+      },
+    };
+  }
+
+  const turn = await thread.run(prompt);
+  if (!turn.finalResponse?.trim()) {
+    const error = new Error('Codex SDK returned an empty response');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return {
+    message: turn.finalResponse.trim(),
+    usage: {
+      promptTokens: Number(turn.usage?.input_tokens || 0),
+      completionTokens: Number(turn.usage?.output_tokens || 0),
+      totalTokens: Number((turn.usage?.input_tokens || 0) + (turn.usage?.output_tokens || 0)),
+    },
+  };
+}
+
+app.post(
+  '/codex-deepseek/v1/responses',
+  asyncHandler(async (req, res) => {
+    const bearer = bearerToken(req);
+    if (!deepseekApiKey || bearer !== deepseekApiKey) {
+      res.status(401).json({
+        error: { message: 'Unauthorized Codex DeepSeek adapter request' },
+      });
+      return;
+    }
+
+    const prompt = codexResponsesPrompt(req.body);
+    if (!prompt) {
+      res.status(400).json({ error: { message: 'Responses input is required' } });
+      return;
+    }
+
+    const model = String(req.body?.model || deepseekModel);
+    const responseId = `resp_${crypto.randomUUID().replaceAll('-', '')}`;
+    const itemId = `msg_${crypto.randomUUID().replaceAll('-', '')}`;
+    const wantsStream =
+      req.body?.stream !== false ||
+      String(req.get('accept') || '').includes('text/event-stream');
+    const messages = [{ role: 'user', content: prompt }];
+
+    if (!wantsStream) {
+      const result = await callDeepSeek(messages);
+      res.json(
+        responsesPayload({
+          responseId,
+          itemId,
+          status: 'completed',
+          model,
+          text: result.message,
+          usage: result.usage,
+        }),
+      );
+      return;
+    }
+
+    res.status(200);
+    res.set({
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders?.();
+
+    writeResponsesEvent(res, 'response.created', {
+      type: 'response.created',
+      response: responsesPayload({
+        responseId,
+        itemId,
+        status: 'in_progress',
+        model,
+      }),
+    });
+    writeResponsesEvent(res, 'response.output_item.added', {
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: {
+        id: itemId,
+        type: 'message',
+        role: 'assistant',
+        status: 'in_progress',
+        content: [],
+      },
+    });
+    writeResponsesEvent(res, 'response.content_part.added', {
+      type: 'response.content_part.added',
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      part: { type: 'output_text', text: '' },
+    });
+
+    let text = '';
+    try {
+      const result = await callDeepSeekStream(messages, {
+        onToken: (delta) => {
+          text += delta;
+          writeResponsesEvent(res, 'response.output_text.delta', {
+            type: 'response.output_text.delta',
+            item_id: itemId,
+            output_index: 0,
+            content_index: 0,
+            delta,
+          });
+        },
+      });
+      text = result.message || text;
+      writeResponsesEvent(res, 'response.output_text.done', {
+        type: 'response.output_text.done',
+        item_id: itemId,
+        output_index: 0,
+        content_index: 0,
+        text,
+      });
+      writeResponsesEvent(res, 'response.content_part.done', {
+        type: 'response.content_part.done',
+        item_id: itemId,
+        output_index: 0,
+        content_index: 0,
+        part: { type: 'output_text', text },
+      });
+      writeResponsesEvent(res, 'response.output_item.done', {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: {
+          id: itemId,
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text }],
+        },
+      });
+      writeResponsesEvent(res, 'response.completed', {
+        type: 'response.completed',
+        response: responsesPayload({
+          responseId,
+          itemId,
+          status: 'completed',
+          model,
+          text,
+          usage: result.usage,
+        }),
+      });
+      res.end();
+    } catch (error) {
+      writeResponsesEvent(res, 'response.failed', {
+        type: 'response.failed',
+        response: responsesPayload({
+          responseId,
+          itemId,
+          status: 'failed',
+          model,
+          text,
+          error,
+        }),
+      });
+      res.end();
+    }
+  }),
+);
+
 app.get('/health', (_req, res) => {
+  const codexRuntime = createCodexDeepSeekRuntime();
   jsonResponse(res, 200, {
     status: 'ok',
     service: 'dacheng-ai-backend',
     provider: 'deepseek',
     model: deepseekModel,
     codexSdkAvailable: true,
+    codexSdkChatEnabled: codexRuntime.enabled,
+    codexSdkProvider: codexRuntime.provider,
+    cbetaApiRoot,
     timestamp: nowIso(),
   });
 });
@@ -437,13 +939,31 @@ app.post(
       createdAt,
     });
 
+    const skillResult = await runResourceFinderSkill({ message, user });
+    const skillContext = resourceContextMessage(skillResult);
     const historyRows = statements.listMessages.all(conversationId).slice(-14);
     const modelMessages = [
       { role: 'system', content: systemPrompt },
+      ...(skillContext ? [{ role: 'system', content: skillContext }] : []),
       ...normalizeMessages(historyRows),
     ];
 
-    const aiResult = await callDeepSeek(modelMessages);
+    const codexRuntime = createCodexDeepSeekRuntime();
+    let provider = 'deepseek';
+    let aiResult;
+    try {
+      if (codexRuntime.enabled) {
+        provider = codexRuntime.provider;
+        aiResult = await callCodexSdkDeepSeek(modelMessages);
+      } else {
+        aiResult = await callDeepSeek(modelMessages);
+      }
+    } catch (error) {
+      if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
+      logger.warn({ error: String(error) }, 'Codex SDK chat failed, falling back to DeepSeek direct');
+      provider = 'deepseek';
+      aiResult = await callDeepSeek(modelMessages);
+    }
     const usage = {
       promptTokens: aiResult.usage.promptTokens || estimateTokens(JSON.stringify(modelMessages)),
       completionTokens: aiResult.usage.completionTokens || estimateTokens(aiResult.message),
@@ -476,7 +996,7 @@ app.post(
     jsonResponse(res, 200, {
       success: true,
       conversationId,
-      provider: 'deepseek',
+      provider,
       model: deepseekModel,
       message: aiResult.message,
       usage: {
@@ -487,6 +1007,154 @@ app.post(
     });
   }),
 );
+
+app.post('/api/ai/chat/stream', async (req, res) => {
+  sseHeaders(res);
+
+  try {
+    const message = safeUserText(req.body?.message);
+    if (!message) {
+      writeSse(res, 'error', { message: 'message is required' });
+      res.end();
+      return;
+    }
+
+    const user = await resolveUser(req, req.body || {});
+    const estimated = estimateTokens(message) + 600;
+    const budget = enforceTokenBudget(user, estimated);
+    const createdAt = nowIso();
+    const conversationId = safeUserText(req.body?.conversationId) || crypto.randomUUID();
+    let conversation = statements.getConversation.get(conversationId, user.userId);
+    const isNewConversation = !conversation;
+
+    if (isNewConversation) {
+      conversation = {
+        id: conversationId,
+        user_id: user.userId,
+        title: titleFromMessage(message),
+      };
+      statements.insertConversation.run({
+        id: conversationId,
+        userId: user.userId,
+        title: conversation.title,
+        provider: 'deepseek',
+        model: deepseekModel,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    }
+
+    statements.insertMessage.run({
+      id: crypto.randomUUID(),
+      conversationId,
+      role: 'user',
+      content: message,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      createdAt,
+    });
+
+    const codexRuntime = createCodexDeepSeekRuntime();
+    let provider = codexRuntime.enabled ? codexRuntime.provider : 'deepseek';
+    writeSse(res, 'meta', {
+      conversationId,
+      provider,
+      model: deepseekModel,
+    });
+    writeSse(res, 'step', {
+      title: '连接后端 AI',
+      message: '大乘后端已直连 VPS，并使用 DeepSeek OpenAI-compatible API。',
+    });
+
+    const skillResult = await runResourceFinderSkill({
+      message,
+      user,
+      onStep: (step) => writeSse(res, 'step', step),
+    });
+    const skillContext = resourceContextMessage(skillResult);
+    const historyRows = statements.listMessages.all(conversationId).slice(-14);
+    const modelMessages = [
+      { role: 'system', content: systemPrompt },
+      ...(skillContext ? [{ role: 'system', content: skillContext }] : []),
+      ...normalizeMessages(historyRows),
+    ];
+
+    let aiResult;
+    try {
+      if (codexRuntime.enabled) {
+        aiResult = await callCodexSdkDeepSeek(modelMessages, {
+          onToken: (token) => writeSse(res, 'delta', { text: token }),
+          onStep: (step) => writeSse(res, 'step', step),
+        });
+      } else {
+        aiResult = await callDeepSeekStream(modelMessages, {
+          onToken: (token) => writeSse(res, 'delta', { text: token }),
+        });
+      }
+    } catch (error) {
+      if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
+      logger.warn({ error: String(error) }, 'Codex SDK streaming chat failed, falling back to DeepSeek direct');
+      provider = 'deepseek';
+      writeSse(res, 'step', {
+        title: 'Codex SDK 暂不可用',
+        message: '已自动回退为 DeepSeek 直连流式返回。',
+      });
+      aiResult = await callDeepSeekStream(modelMessages, {
+        onToken: (token) => writeSse(res, 'delta', { text: token }),
+      });
+    }
+
+    const usage = {
+      promptTokens: aiResult.usage.promptTokens || estimateTokens(JSON.stringify(modelMessages)),
+      completionTokens: aiResult.usage.completionTokens || estimateTokens(aiResult.message),
+      totalTokens:
+        aiResult.usage.totalTokens ||
+        estimateTokens(JSON.stringify(modelMessages)) + estimateTokens(aiResult.message),
+    };
+    recordUsage(user.userId, usage.totalTokens);
+
+    const answeredAt = nowIso();
+    statements.insertMessage.run({
+      id: crypto.randomUUID(),
+      conversationId,
+      role: 'assistant',
+      content: aiResult.message,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+      createdAt: answeredAt,
+    });
+    statements.updateConversation.run({
+      id: conversationId,
+      userId: user.userId,
+      title: isNewConversation ? titleFromMessage(message) : conversation.title,
+      updatedAt: answeredAt,
+    });
+
+    const latestUsage = usageFor(user.userId);
+    const monthlyLimit = budget.limit;
+    writeSse(res, 'done', {
+      conversationId,
+      provider,
+      model: deepseekModel,
+      message: aiResult.message,
+      usage: {
+        ...usage,
+        monthlyLimit,
+        remainingTokens: Math.max(0, monthlyLimit - latestUsage.used),
+      },
+    });
+    res.end();
+  } catch (error) {
+    logger.error({ error: error.stack || String(error) }, 'streaming chat failed');
+    writeSse(res, 'error', {
+      message: publicAiErrorMessage(error),
+      details: error.details,
+    });
+    res.end();
+  }
+});
 
 app.get(
   '/api/ai/conversations',
@@ -529,7 +1197,13 @@ app.get(
 function buildUrl(base, endpoint, params = {}) {
   const url = new URL(endpoint, `${base}/`);
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== '') {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item !== undefined && item !== null && item !== '') {
+          url.searchParams.append(key, String(item));
+        }
+      }
+    } else if (value !== undefined && value !== null && value !== '') {
       url.searchParams.set(key, String(value));
     }
   }
@@ -685,6 +1359,65 @@ function directUrlResource(query) {
   };
 }
 
+function looksLikeAudioQuery(query) {
+  return /音乐|音樂|音频|音訊|mp3|audio|念诵|念誦|诵经|誦經|唱诵|唱誦|读诵|讀誦/.test(
+    safeUserText(query).toLowerCase(),
+  );
+}
+
+function archiveSearchTerm(query) {
+  return (
+    safeUserText(query)
+      .replace(/下载|查找|寻找|找一?个|资源|音频|音訊|音乐|音樂|mp3|audio|念诵|念誦|诵经|誦經|唱诵|唱誦|读诵|讀誦/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || safeUserText(query)
+  );
+}
+
+function solrPhrase(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+async function searchInternetArchiveAudio(query, limit) {
+  if (!looksLikeAudioQuery(query)) return [];
+  const term = archiveSearchTerm(query);
+  if (!term) return [];
+  const variants = Array.from(
+    new Set([
+      term,
+      term.replaceAll('金刚经', '金剛經'),
+      term.replaceAll('金剛經', '金刚经'),
+    ].filter(Boolean)),
+  );
+  const phraseQuery = variants
+    .flatMap((item) => [`title:"${solrPhrase(item)}"`, `description:"${solrPhrase(item)}"`])
+    .join(' OR ');
+  const url = buildUrl('https://archive.org', 'advancedsearch.php', {
+    q: `(${phraseQuery}) AND mediatype:audio`,
+    rows: Math.min(Math.max(limit, 1), 10),
+    output: 'json',
+    'fl[]': ['identifier', 'title', 'description'],
+  });
+  const data = await fetchJson(url);
+  const docs = Array.isArray(data?.response?.docs) ? data.response.docs : [];
+  return docs
+    .map((item) => {
+      const identifier = firstText(item, ['identifier']);
+      const title = firstText(item, ['title']) || identifier;
+      if (!identifier || !title) return null;
+      return {
+        id: `ia-audio-${identifier}`,
+        title,
+        sourceName: 'Internet Archive 音频',
+        url: `ia:${identifier}`,
+        snippet: compactText(firstText(item, ['description'])) || '公开可访问的音频资源，将下载第一个可用 MP3 文件。',
+        resourceType: 'audio',
+        identifier,
+      };
+    })
+    .filter(Boolean);
+}
+
 const curatedCbetaWorks = [
   {
     work: 'T0235',
@@ -794,6 +1527,151 @@ function uniqueResources(items, limit) {
   return results;
 }
 
+async function findResourceCandidates(query, limit) {
+  const direct = directUrlResource(query);
+  const results = [];
+  if (direct) results.push(direct);
+  try {
+    results.push(...(await searchInternetArchiveAudio(query, limit)));
+  } catch (error) {
+    logger.warn({ error: String(error), query }, 'Internet Archive audio search skipped');
+  }
+  results.push(...localCbetaResults(query, limit));
+
+  const [titleResults, contentResults] = await Promise.allSettled([
+    searchCbetaTitle(query, limit),
+    searchCbetaContent(query, limit),
+  ]);
+  if (titleResults.status === 'fulfilled') results.push(...titleResults.value);
+  if (contentResults.status === 'fulfilled') results.push(...contentResults.value);
+
+  return uniqueResources(results, limit);
+}
+
+function looksLikeResourceTask(message) {
+  const text = safeUserText(message).toLowerCase();
+  if (!text) return false;
+  return /下载|查找|寻找|找一?个|资源|經文|经文|佛经|佛經|仪轨|儀軌|音乐|音樂|mp3|audio|念诵|念誦|诵经|誦經/.test(text);
+}
+
+function extractResourceQuery(message) {
+  const text = safeUserText(message)
+    .replace(/请|請|帮我|幫我|麻烦|麻煩|可以|能不能|需要|我要|想要/g, ' ')
+    .replace(/下载|下載|查找|寻找|尋找|找一个|找一個|找|资源|資源|并|並|然后|然後|用于|用於|全球法布施|加入功课本|加入功課本/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text || safeUserText(message);
+}
+
+function resourceContextMessage(skillResult) {
+  if (!skillResult) return '';
+  const lines = [
+    `后端已调用 skill: ${skillResult.skillName}`,
+    `执行目标: ${skillResult.query}`,
+  ];
+  if (skillResult.selected) {
+    lines.push(`候选资源: ${skillResult.selected.title}`);
+    lines.push(`来源: ${skillResult.selected.sourceName}`);
+    lines.push(`资源地址: ${skillResult.selected.url}`);
+  }
+  if (skillResult.downloaded) {
+    lines.push(`下载标题: ${skillResult.downloaded.title}`);
+    lines.push(`下载文件: ${skillResult.downloaded.fileName}`);
+    const text = safeUserText(skillResult.downloaded.contentText);
+    if (text) {
+      lines.push('下载正文摘录:');
+      lines.push(text.slice(0, 8000));
+    }
+  }
+  return lines.join('\n');
+}
+
+async function runResourceFinderSkill({ message, user, onStep }) {
+  if (!looksLikeResourceTask(message)) return null;
+
+  const skillName = 'resource-finder-downloader';
+  const query = extractResourceQuery(message);
+  const audioTask = looksLikeAudioQuery(message) || looksLikeAudioQuery(query);
+  onStep?.({
+    type: 'skill.step',
+    skillName,
+    stage: 'start',
+    title: '调用资源查找下载 skill',
+    message: `识别到资源任务: ${query}`,
+  });
+
+  onStep?.({
+    type: 'skill.step',
+    skillName,
+    stage: 'search',
+    title: '搜索可分享资源',
+    message: audioTask
+      ? '优先检索公开可访问音频资源，失败时再回落到佛典正文资源。'
+      : '优先检索 CBETA 佛典正文接口，搜索索引不可用时使用内置经典映射。',
+  });
+  const candidates = await findResourceCandidates(query, 8);
+  if (candidates.length === 0) {
+    onStep?.({
+      type: 'skill.step',
+      skillName,
+      stage: 'empty',
+      title: '没有找到可下载资源',
+      message: '后端没有找到明确可下载且可分享的资源。',
+    });
+    return {
+      skillName,
+      query,
+      candidates: [],
+      selected: null,
+      downloaded: null,
+    };
+  }
+
+  const selected = candidates[0];
+  onStep?.({
+    type: 'skill.step',
+    skillName,
+    stage: 'select',
+    title: '选择可信候选资源',
+    message: `${selected.title} / ${selected.sourceName}`,
+  });
+
+  onStep?.({
+    type: 'skill.step',
+    skillName,
+    stage: 'download',
+    title: '下载并提取资源',
+    message: selected.url,
+  });
+  const cbeta = parseCbetaResource(selected);
+  const internetArchive = parseInternetArchiveResource(selected);
+  const downloaded = cbeta
+    ? await downloadCbetaResource({ ...selected, ...cbeta })
+    : internetArchive
+      ? await downloadInternetArchiveAudio({ ...selected, ...internetArchive })
+      : await downloadWebResource(selected);
+  const persisted = persistDownloadedResource(user, downloaded);
+
+  onStep?.({
+    type: 'skill.step',
+    skillName,
+    stage: 'done',
+    title: '资源已准备完成',
+    message: downloaded.fileName,
+  });
+
+  return {
+    skillName,
+    query,
+    candidates,
+    selected,
+    downloaded: {
+      ...downloaded,
+      downloadId: persisted.id,
+    },
+  };
+}
+
 app.post(
   '/api/resources/search',
   asyncHandler(async (req, res) => {
@@ -803,22 +1681,12 @@ app.post(
       return jsonResponse(res, 400, { success: false, message: 'query is required' });
     }
 
-    const direct = directUrlResource(query);
-    const results = [];
-    if (direct) results.push(direct);
-    results.push(...localCbetaResults(query, limit));
-
-    const [titleResults, contentResults] = await Promise.allSettled([
-      searchCbetaTitle(query, limit),
-      searchCbetaContent(query, limit),
-    ]);
-    if (titleResults.status === 'fulfilled') results.push(...titleResults.value);
-    if (contentResults.status === 'fulfilled') results.push(...contentResults.value);
+    const items = await findResourceCandidates(query, limit);
 
     jsonResponse(res, 200, {
       success: true,
-      source: 'cbeta',
-      items: uniqueResources(results, limit),
+      source: 'resource-index',
+      items,
     });
   }),
 );
@@ -835,6 +1703,14 @@ function parseCbetaResource(input) {
     work: match[1].toUpperCase(),
     juan: Number(match[2] || 1),
   };
+}
+
+function parseInternetArchiveResource(input) {
+  const url = safeUserText(input.url);
+  const match = /^ia:([^:]+)$/i.exec(url);
+  const identifier = match?.[1] || safeUserText(input.identifier);
+  if (!identifier) return null;
+  return { identifier };
 }
 
 function safeFileName(value) {
@@ -877,6 +1753,48 @@ async function downloadCbetaResource(resource) {
   };
 }
 
+async function downloadInternetArchiveAudio(resource) {
+  const identifier = safeUserText(resource.identifier);
+  if (!identifier) throw new Error('Internet Archive identifier is required');
+  const metadata = await fetchJson(`https://archive.org/metadata/${encodeURIComponent(identifier)}`);
+  const title = safeUserText(metadata?.metadata?.title) || safeUserText(resource.title) || identifier;
+  const files = Array.isArray(metadata?.files) ? metadata.files : [];
+  const audioFile = files.find((file) => {
+    const name = safeUserText(file?.name);
+    const format = safeUserText(file?.format).toLowerCase();
+    return /\.(mp3|m4a|ogg)$/i.test(name) || format.includes('mp3');
+  });
+  if (!audioFile?.name) {
+    throw new Error('Internet Archive audio item has no downloadable audio file');
+  }
+  const sourceFileName = audioFile.name;
+  const fileUrl = `https://archive.org/download/${encodeURIComponent(identifier)}/${sourceFileName
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/')}`;
+  const response = await fetch(fileUrl, {
+    headers: {
+      Accept: 'audio/mpeg, audio/*;q=0.9, */*;q=0.5',
+      'User-Agent': 'DachengResourceDownloader/1.0 (+https://ombhrum.com)',
+    },
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Internet Archive audio download failed: ${response.status}`);
+  }
+  const binaryContent = Buffer.from(await response.arrayBuffer());
+  if (!binaryContent.length) throw new Error('Internet Archive audio returned empty content');
+  const sizeMb = (binaryContent.length / 1024 / 1024).toFixed(1);
+  return {
+    title,
+    sourceName: 'Internet Archive 音频',
+    url: fileUrl,
+    contentText: `已下载音频资源: ${title}\n文件名: ${sourceFileName}\n大小: ${sizeMb} MB\n来源: ${fileUrl}`,
+    binaryContent,
+    fileName: safeFileName(sourceFileName),
+  };
+}
+
 async function downloadWebResource(input) {
   const url = safeUserText(input.url);
   const parsed = new URL(url);
@@ -910,7 +1828,11 @@ function persistDownloadedResource(user, content) {
   const id = crypto.randomUUID();
   const fileName = `${id}-${safeFileName(content.fileName)}`;
   const filePath = path.join(resourcesDir, fileName);
-  fs.writeFileSync(filePath, content.contentText, 'utf8');
+  if (content.binaryContent) {
+    fs.writeFileSync(filePath, content.binaryContent);
+  } else {
+    fs.writeFileSync(filePath, content.contentText, 'utf8');
+  }
   statements.insertResourceDownload.run({
     id,
     userId: user.userId,
@@ -921,6 +1843,7 @@ function persistDownloadedResource(user, content) {
     filePath,
     createdAt: nowIso(),
   });
+  return { id, fileName, filePath };
 }
 
 app.post(
@@ -928,13 +1851,18 @@ app.post(
   asyncHandler(async (req, res) => {
     const user = await resolveUser(req, req.body || {});
     const cbeta = parseCbetaResource(req.body || {});
+    const internetArchive = parseInternetArchiveResource(req.body || {});
     const content = cbeta
       ? await downloadCbetaResource({ ...req.body, ...cbeta })
-      : await downloadWebResource(req.body || {});
-    persistDownloadedResource(user, content);
+      : internetArchive
+        ? await downloadInternetArchiveAudio({ ...req.body, ...internetArchive })
+        : await downloadWebResource(req.body || {});
+    const persisted = persistDownloadedResource(user, content);
+    const { binaryContent: _binaryContent, ...publicContent } = content;
     jsonResponse(res, 200, {
       success: true,
-      ...content,
+      downloadId: persisted.id,
+      ...publicContent,
     });
   }),
 );
@@ -953,12 +1881,19 @@ app.post(
       return jsonResponse(res, 400, { success: false, message: 'prompt is required' });
     }
     const { Codex } = await import('@openai/codex-sdk');
-    const codex = new Codex();
-    const thread = codex.startThread();
+    const codexRuntime = createCodexDeepSeekRuntime();
+    const codex = new Codex(codexRuntime.enabled ? codexRuntime.options : {});
+    const thread = codex.startThread(
+      codexRuntime.enabled
+        ? codexRuntime.threadOptions
+        : { skipGitRepoCheck: true, networkAccessEnabled: true },
+    );
     const result = await thread.run(prompt);
     jsonResponse(res, 200, {
       success: true,
       threadId: thread.id,
+      provider: codexRuntime.provider,
+      model: deepseekModel,
       result,
     });
   }),

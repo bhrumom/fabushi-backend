@@ -361,7 +361,7 @@ export async function handleVerifyAppleReceipt(request, env, db) {
 
       return jsonResponse({
         success: true,
-        message: '禅室佛像素材已解锁',
+        message: '3D佛像素材已解锁',
         productType: 'asset_unlock',
         unlocked: true
       });
