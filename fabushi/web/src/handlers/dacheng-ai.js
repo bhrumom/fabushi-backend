@@ -1,7 +1,7 @@
 import { CORS_HEADERS } from '../config/constants.js';
 import { jsonResponse } from '../utils/response.js';
 
-const DEFAULT_DACHENG_AI_BACKEND_URL = 'http://141.148.140.39';
+const DEFAULT_DACHENG_AI_BACKEND_URL = 'http://141.148.140.39.sslip.io';
 
 export function isDachengAiPath(pathname) {
   return (
