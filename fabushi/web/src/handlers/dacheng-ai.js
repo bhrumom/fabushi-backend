@@ -2,6 +2,7 @@ import { CORS_HEADERS } from '../config/constants.js';
 import { jsonResponse } from '../utils/response.js';
 
 const DEFAULT_DACHENG_AI_BACKEND_URL = 'http://141.148.140.39.sslip.io';
+const DEFAULT_DACHENG_AI_BACKEND_TIMEOUT_MS = 8000;
 
 export function isDachengAiPath(pathname) {
   return (
@@ -13,6 +14,7 @@ export function isDachengAiPath(pathname) {
 
 export async function handleDachengAiProxy(request, env) {
   const origin = (env.DACHENG_AI_BACKEND_URL || DEFAULT_DACHENG_AI_BACKEND_URL).replace(/\/+$/, '');
+  const timeoutMs = Number(env.DACHENG_AI_BACKEND_TIMEOUT_MS || DEFAULT_DACHENG_AI_BACKEND_TIMEOUT_MS);
   const incomingUrl = new URL(request.url);
   const targetUrl = new URL(`${incomingUrl.pathname}${incomingUrl.search}`, origin);
 
@@ -30,6 +32,10 @@ export async function handleDachengAiProxy(request, env) {
   if (!['GET', 'HEAD'].includes(request.method)) {
     init.body = request.body;
   }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  init.signal = controller.signal;
 
   try {
     const upstream = await fetch(targetUrl, init);
@@ -52,5 +58,7 @@ export async function handleDachengAiProxy(request, env) {
       },
       502,
     );
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
