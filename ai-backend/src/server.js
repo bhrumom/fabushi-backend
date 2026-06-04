@@ -105,6 +105,44 @@ db.exec(`
     file_path TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    openclaw_run_id TEXT,
+    openclaw_session_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    tool_call_count INTEGER NOT NULL DEFAULT 0,
+    cost_microusd INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    failed_at TEXT,
+    error_code TEXT,
+    error_message TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_user_started
+    ON agent_runs (user_id, started_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_status_started
+    ON agent_runs (status, started_at DESC);
+
+  CREATE TABLE IF NOT EXISTS agent_message_feedback (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    rating TEXT NOT NULL,
+    reason TEXT,
+    comment TEXT,
+    created_at TEXT NOT NULL
+  );
 `);
 
 const statements = {
@@ -163,6 +201,36 @@ const statements = {
       @id, @userId, @title, @sourceName, @sourceUrl, @fileName, @filePath, @createdAt
     )
   `),
+  insertAgentRun: db.prepare(`
+    INSERT INTO agent_runs (
+      id, user_id, conversation_id, message_id, openclaw_run_id, openclaw_session_key,
+      status, mode, provider, model, started_at
+    )
+    VALUES (
+      @id, @userId, @conversationId, @messageId, @openClawRunId, @openClawSessionKey,
+      @status, @mode, @provider, @model, @startedAt
+    )
+  `),
+  getAgentRun: db.prepare(`
+    SELECT * FROM agent_runs WHERE id = ? AND user_id = ? LIMIT 1
+  `),
+  updateAgentRunStatus: db.prepare(`
+    UPDATE agent_runs
+    SET status = @status,
+      openclaw_run_id = COALESCE(@openClawRunId, openclaw_run_id),
+      input_tokens = COALESCE(@inputTokens, input_tokens),
+      output_tokens = COALESCE(@outputTokens, output_tokens),
+      tool_call_count = COALESCE(@toolCallCount, tool_call_count),
+      completed_at = @completedAt,
+      failed_at = @failedAt,
+      error_code = @errorCode,
+      error_message = @errorMessage
+    WHERE id = @id AND user_id = @userId
+  `),
+  insertAgentFeedback: db.prepare(`
+    INSERT INTO agent_message_feedback (id, message_id, user_id, rating, reason, comment, created_at)
+    VALUES (@id, @messageId, @userId, @rating, @reason, @comment, @createdAt)
+  `),
 };
 
 const deepseekApiKey = process.env.DEEPSEEK_API_KEY || '';
@@ -180,6 +248,11 @@ const libreChatAgentsBaseUrl = (
 const libreChatAgentApiKey = process.env.LIBRECHAT_AGENT_API_KEY || '';
 const libreChatAgentId = process.env.LIBRECHAT_AGENT_ID || '';
 const enableCodexSdkChat = process.env.ENABLE_CODEX_SDK_CHAT === 'true';
+const enableOpenClawAgentChat = process.env.ENABLE_OPENCLAW_AGENT_CHAT === 'true';
+const openClawGatewayUrl = (process.env.OPENCLAW_GATEWAY_URL || 'http://127.0.0.1:18789').replace(/\/+$/, '');
+const openClawGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+const openClawAgentId = process.env.OPENCLAW_AGENT_ID || 'fabushi-public-agent';
+const openClawRunsEndpoint = process.env.OPENCLAW_RUNS_ENDPOINT || '';
 const codexDeepSeekProviderId = 'deepseek-chat-completions';
 const codexResponsesBaseUrl = (
   process.env.CODEX_DEEPSEEK_RESPONSES_BASE_URL ||
@@ -914,6 +987,206 @@ async function callCodexSdkDeepSeek(messages, callbacks = {}) {
   };
 }
 
+const activeAgentRuns = new Map();
+
+function normalizeAgentMode(value) {
+  const mode = safeUserText(value || 'dharma_guide');
+  return /^[a-z][a-z0-9_:-]{0,48}$/i.test(mode) ? mode : 'dharma_guide';
+}
+
+function openClawSessionKey(user, conversationId) {
+  const env = process.env.NODE_ENV === 'production' ? 'prod' : 'dev';
+  return `fabushi:env:${env}:user:${user.userId}:conversation:${conversationId}`;
+}
+
+function createOpenClawRuntime() {
+  if (!enableOpenClawAgentChat || !openClawGatewayToken || !openClawGatewayUrl) {
+    return {
+      enabled: false,
+      provider: 'openclaw-gateway',
+      reason: !enableOpenClawAgentChat
+        ? 'ENABLE_OPENCLAW_AGENT_CHAT is not true'
+        : !openClawGatewayToken
+          ? 'OPENCLAW_GATEWAY_TOKEN is not configured'
+          : 'OPENCLAW_GATEWAY_URL is not configured',
+    };
+  }
+
+  return {
+    enabled: true,
+    provider: 'openclaw-gateway',
+    model: openClawAgentId,
+    runsUrl: openClawRunsEndpoint || `${openClawGatewayUrl}/v1/agents/${encodeURIComponent(openClawAgentId)}/runs`,
+  };
+}
+
+function extractOpenClawText(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const candidates = [
+    payload.message,
+    payload.content,
+    payload.output_text,
+    payload.finalResponse,
+    payload.final_response,
+    payload.result?.message,
+    payload.result?.content,
+    payload.output?.message,
+    payload.output?.content,
+    payload.choices?.[0]?.message?.content,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return '';
+}
+
+function extractOpenClawUsage(payload) {
+  const usage = payload?.usage || payload?.result?.usage || {};
+  return {
+    promptTokens: Number(usage.input_tokens || usage.prompt_tokens || usage.promptTokens || 0),
+    completionTokens: Number(usage.output_tokens || usage.completion_tokens || usage.completionTokens || 0),
+    totalTokens: Number(usage.total_tokens || usage.totalTokens || 0),
+  };
+}
+
+async function callOpenClawAgent({ messages, user, conversationId, mode, signal }) {
+  const runtime = createOpenClawRuntime();
+  if (!runtime.enabled) {
+    const error = new Error(runtime.reason || 'OpenClaw Agent chat is not enabled');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const sessionKey = openClawSessionKey(user, conversationId);
+  const response = await fetch(runtime.runsUrl, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${openClawGatewayToken}`,
+    },
+    body: JSON.stringify({
+      agentId: openClawAgentId,
+      sessionKey,
+      mode,
+      stream: false,
+      input: { messages },
+      messages,
+      metadata: {
+        app: 'fabushi',
+        userId: user.userId,
+        conversationId,
+        toolPolicy: 'public-user-read-mostly',
+      },
+    }),
+    signal: signal || AbortSignal.timeout(180_000),
+  });
+
+  const bodyText = await response.text();
+  let payload;
+  try {
+    payload = bodyText ? JSON.parse(bodyText) : {};
+  } catch {
+    payload = { message: bodyText };
+  }
+
+  if (!response.ok) {
+    const error = new Error(payload?.error?.message || payload?.message || `OpenClaw request failed: ${response.status}`);
+    error.statusCode = response.status;
+    throw error;
+  }
+
+  const message = extractOpenClawText(payload);
+  if (!message) {
+    const error = new Error('OpenClaw returned an empty response');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return {
+    message,
+    runId: payload.runId || payload.id || payload.result?.runId || null,
+    provider: runtime.provider,
+    model: runtime.model,
+    usage: extractOpenClawUsage(payload),
+  };
+}
+
+async function runAgentModel({ messages, user, conversationId, mode, callbacks = {}, signal }) {
+  const openClawRuntime = createOpenClawRuntime();
+  if (openClawRuntime.enabled && !callbacks.onToken) {
+    return await callOpenClawAgent({ messages, user, conversationId, mode, signal });
+  }
+
+  const codexRuntime = createCodexDeepSeekRuntime();
+  const libreChatRuntime = createLibreChatAgentRuntime();
+  let provider = libreChatRuntime.enabled
+    ? libreChatRuntime.provider
+    : codexRuntime.enabled
+      ? codexRuntime.provider
+      : 'deepseek';
+  let model = libreChatRuntime.enabled ? libreChatRuntime.model : deepseekModel;
+
+  try {
+    if (libreChatRuntime.enabled) {
+      const result = callbacks.onToken
+        ? await callLibreChatAgentStream(messages, { ...callbacks, signal })
+        : await callLibreChatAgent(messages);
+      return { ...result, provider, model };
+    }
+    if (codexRuntime.enabled) {
+      const result = await callCodexSdkDeepSeek(messages, { ...callbacks, signal });
+      return { ...result, provider, model };
+    }
+    const result = callbacks.onToken
+      ? await callDeepSeekStream(messages, { ...callbacks, signal })
+      : await callDeepSeek(messages);
+    return { ...result, provider, model };
+  } catch (error) {
+    if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
+    logger.warn({ error: String(error) }, 'Agent model failed, falling back to DeepSeek direct');
+    const result = callbacks.onToken
+      ? await callDeepSeekStream(messages, { ...callbacks, signal })
+      : await callDeepSeek(messages);
+    return { ...result, provider: 'deepseek', model: deepseekModel };
+  }
+}
+
+function updateAgentRunStatus(run, status, fields = {}) {
+  statements.updateAgentRunStatus.run({
+    id: run.id,
+    userId: run.user_id || run.userId,
+    status,
+    openClawRunId: fields.openClawRunId ?? null,
+    inputTokens: fields.inputTokens ?? null,
+    outputTokens: fields.outputTokens ?? null,
+    toolCallCount: fields.toolCallCount ?? null,
+    completedAt: status === 'completed' || status === 'cancelled' ? nowIso() : null,
+    failedAt: status === 'failed' ? nowIso() : null,
+    errorCode: fields.errorCode ?? null,
+    errorMessage: fields.errorMessage ?? null,
+  });
+}
+
+function buildAgentMessages(conversationId) {
+  const historyRows = statements.listMessages.all(conversationId).slice(-14);
+  return [{ role: 'system', content: systemPrompt }, ...normalizeMessages(historyRows)];
+}
+
+function agentUsagePayload(usage, user, budget) {
+  const promptTokens = usage.promptTokens || usage.inputTokens || 0;
+  const completionTokens = usage.completionTokens || usage.outputTokens || 0;
+  const totalTokens = usage.totalTokens || promptTokens + completionTokens;
+  const latestUsage = usageFor(user.userId);
+  return {
+    inputTokens: promptTokens,
+    outputTokens: completionTokens,
+    totalTokens,
+    monthlyLimit: budget.limit,
+    remainingTokens: Math.max(0, budget.limit - latestUsage.used),
+  };
+}
+
 app.post(
   '/codex-deepseek/v1/responses',
   asyncHandler(async (req, res) => {
@@ -1063,6 +1336,7 @@ app.post(
 app.get('/health', (_req, res) => {
   const codexRuntime = createCodexDeepSeekRuntime();
   const libreChatRuntime = createLibreChatAgentRuntime();
+  const openClawRuntime = createOpenClawRuntime();
   jsonResponse(res, 200, {
     status: 'ok',
     service: 'dacheng-ai-backend',
@@ -1074,10 +1348,278 @@ app.get('/health', (_req, res) => {
     codexSdkAvailable: true,
     codexSdkChatEnabled: codexRuntime.enabled,
     codexSdkProvider: codexRuntime.provider,
+    openClawAgentChatEnabled: openClawRuntime.enabled,
+    openClawAgentProvider: openClawRuntime.provider,
+    openClawAgentReason: openClawRuntime.enabled ? undefined : openClawRuntime.reason,
     cbetaApiRoot,
     timestamp: nowIso(),
   });
 });
+
+app.post(
+  '/api/agent/chat',
+  asyncHandler(async (req, res) => {
+    const message = safeUserText(req.body?.message);
+    if (!message) {
+      return jsonResponse(res, 400, { success: false, message: 'message is required' });
+    }
+
+    const user = await resolveUser(req, req.body || {});
+    const estimated = estimateTokens(message) + 600;
+    const budget = enforceTokenBudget(user, estimated);
+    const createdAt = nowIso();
+    const conversationId = safeUserText(req.body?.conversationId) || crypto.randomUUID();
+    const mode = normalizeAgentMode(req.body?.mode);
+    const stream = req.body?.stream === true;
+    let conversation = statements.getConversation.get(conversationId, user.userId);
+    const isNewConversation = !conversation;
+
+    if (isNewConversation) {
+      conversation = { id: conversationId, user_id: user.userId, title: titleFromMessage(message) };
+      statements.insertConversation.run({
+        id: conversationId,
+        userId: user.userId,
+        title: conversation.title,
+        provider: 'agent',
+        model: openClawAgentId,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    }
+
+    const messageId = safeUserText(req.body?.messageId) || crypto.randomUUID();
+    statements.insertMessage.run({
+      id: messageId,
+      conversationId,
+      role: 'user',
+      content: message,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      createdAt,
+    });
+
+    const runId = `run_${crypto.randomUUID().replaceAll('-', '')}`;
+    const sessionKey = openClawSessionKey(user, conversationId);
+    const openClawRuntime = createOpenClawRuntime();
+    statements.insertAgentRun.run({
+      id: runId,
+      userId: user.userId,
+      conversationId,
+      messageId,
+      openClawRunId: null,
+      openClawSessionKey: sessionKey,
+      status: stream ? 'queued' : 'running',
+      mode,
+      provider: openClawRuntime.enabled ? openClawRuntime.provider : 'dacheng-ai-fallback',
+      model: openClawRuntime.enabled ? openClawAgentId : deepseekModel,
+      startedAt: createdAt,
+    });
+
+    if (stream) {
+      return jsonResponse(res, 200, {
+        success: true,
+        runId,
+        conversationId,
+        streamUrl: `/api/agent/runs/${runId}/events`,
+      });
+    }
+
+    const controller = new AbortController();
+    activeAgentRuns.set(runId, controller);
+    try {
+      const modelMessages = buildAgentMessages(conversationId);
+      const aiResult = await runAgentModel({
+        messages: modelMessages,
+        user,
+        conversationId,
+        mode,
+        signal: controller.signal,
+      });
+      const usage = {
+        promptTokens: aiResult.usage?.promptTokens || estimateTokens(JSON.stringify(modelMessages)),
+        completionTokens: aiResult.usage?.completionTokens || estimateTokens(aiResult.message),
+        totalTokens:
+          aiResult.usage?.totalTokens ||
+          estimateTokens(JSON.stringify(modelMessages)) + estimateTokens(aiResult.message),
+      };
+      recordUsage(user.userId, usage.totalTokens);
+      const answeredAt = nowIso();
+      const assistantMessageId = crypto.randomUUID();
+      statements.insertMessage.run({
+        id: assistantMessageId,
+        conversationId,
+        role: 'assistant',
+        content: aiResult.message,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        createdAt: answeredAt,
+      });
+      statements.updateConversation.run({
+        id: conversationId,
+        userId: user.userId,
+        title: isNewConversation ? titleFromMessage(message) : conversation.title,
+        updatedAt: answeredAt,
+      });
+      updateAgentRunStatus({ id: runId, user_id: user.userId }, 'completed', {
+        openClawRunId: aiResult.runId,
+        inputTokens: usage.promptTokens,
+        outputTokens: usage.completionTokens,
+      });
+      return jsonResponse(res, 200, {
+        success: true,
+        runId,
+        conversationId,
+        messageId: assistantMessageId,
+        provider: aiResult.provider,
+        model: aiResult.model,
+        message: aiResult.message,
+        usage: agentUsagePayload(usage, user, budget),
+      });
+    } catch (error) {
+      const status = error.name === 'AbortError' ? 'cancelled' : 'failed';
+      updateAgentRunStatus({ id: runId, user_id: user.userId }, status, {
+        errorCode: error.name || 'AGENT_RUN_FAILED',
+        errorMessage: publicAiErrorMessage(error),
+      });
+      if (status === 'cancelled') {
+        return jsonResponse(res, 499, { success: false, runId, status: 'cancelled' });
+      }
+      throw error;
+    } finally {
+      activeAgentRuns.delete(runId);
+    }
+  }),
+);
+
+app.get(
+  '/api/agent/runs/:runId/events',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, {});
+    const run = statements.getAgentRun.get(req.params.runId, user.userId);
+    if (!run) {
+      return jsonResponse(res, 404, { success: false, message: 'run not found' });
+    }
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
+      return jsonResponse(res, 409, { success: false, message: `run is already ${run.status}` });
+    }
+
+    sseHeaders(res);
+    const controller = new AbortController();
+    activeAgentRuns.set(run.id, controller);
+    updateAgentRunStatus(run, 'running');
+    writeSse(res, 'run.started', { runId: run.id, conversationId: run.conversation_id });
+
+    try {
+      const estimated = 600;
+      const budget = enforceTokenBudget(user, estimated);
+      let streamedText = '';
+      const modelMessages = buildAgentMessages(run.conversation_id);
+      const aiResult = await runAgentModel({
+        messages: modelMessages,
+        user,
+        conversationId: run.conversation_id,
+        mode: run.mode,
+        signal: controller.signal,
+        callbacks: {
+          onStep: (step) => writeSse(res, 'tool.call.completed', {
+            tool: 'agent.step',
+            displayName: step.title || 'Agent step',
+            summary: step.message || '',
+          }),
+          onToken: (delta) => {
+            streamedText += delta;
+            writeSse(res, 'assistant.delta', { text: delta });
+          },
+        },
+      });
+      const message = aiResult.message || streamedText.trim();
+      const usage = {
+        promptTokens: aiResult.usage?.promptTokens || estimateTokens(JSON.stringify(modelMessages)),
+        completionTokens: aiResult.usage?.completionTokens || estimateTokens(message),
+        totalTokens:
+          aiResult.usage?.totalTokens || estimateTokens(JSON.stringify(modelMessages)) + estimateTokens(message),
+      };
+      recordUsage(user.userId, usage.totalTokens);
+      const assistantMessageId = crypto.randomUUID();
+      const answeredAt = nowIso();
+      statements.insertMessage.run({
+        id: assistantMessageId,
+        conversationId: run.conversation_id,
+        role: 'assistant',
+        content: message,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        createdAt: answeredAt,
+      });
+      statements.updateConversation.run({
+        id: run.conversation_id,
+        userId: user.userId,
+        title: titleFromMessage(message),
+        updatedAt: answeredAt,
+      });
+      updateAgentRunStatus(run, 'completed', {
+        openClawRunId: aiResult.runId,
+        inputTokens: usage.promptTokens,
+        outputTokens: usage.completionTokens,
+      });
+      writeSse(res, 'assistant.message', { messageId: assistantMessageId, content: message });
+      writeSse(res, 'run.completed', { usage: agentUsagePayload(usage, user, budget) });
+      res.end();
+    } catch (error) {
+      const status = error.name === 'AbortError' ? 'cancelled' : 'failed';
+      updateAgentRunStatus(run, status, {
+        errorCode: error.name || 'AGENT_RUN_FAILED',
+        errorMessage: publicAiErrorMessage(error),
+      });
+      writeSse(res, status === 'cancelled' ? 'run.cancelled' : 'run.failed', {
+        runId: run.id,
+        message: publicAiErrorMessage(error),
+      });
+      res.end();
+    } finally {
+      activeAgentRuns.delete(run.id);
+    }
+  }),
+);
+
+app.post(
+  '/api/agent/runs/:runId/cancel',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, req.body || {});
+    const run = statements.getAgentRun.get(req.params.runId, user.userId);
+    if (!run) {
+      return jsonResponse(res, 404, { success: false, message: 'run not found' });
+    }
+    const controller = activeAgentRuns.get(run.id);
+    if (controller) controller.abort();
+    updateAgentRunStatus(run, 'cancelled');
+    return jsonResponse(res, 200, { success: true, runId: run.id, status: 'cancelled' });
+  }),
+);
+
+app.post(
+  '/api/agent/messages/:messageId/feedback',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, req.body || {});
+    const rating = safeUserText(req.body?.rating);
+    if (!['up', 'down'].includes(rating)) {
+      return jsonResponse(res, 400, { success: false, message: 'rating must be up or down' });
+    }
+    statements.insertAgentFeedback.run({
+      id: crypto.randomUUID(),
+      messageId: req.params.messageId,
+      userId: user.userId,
+      rating,
+      reason: safeUserText(req.body?.reason),
+      comment: safeUserText(req.body?.comment),
+      createdAt: nowIso(),
+    });
+    return jsonResponse(res, 200, { success: true });
+  }),
+);
 
 app.post(
   '/api/ai/chat',
