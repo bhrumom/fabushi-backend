@@ -1675,12 +1675,30 @@ app.post(
       ...normalizeMessages(historyRows),
     ];
 
+    const openClawRuntime = createOpenClawRuntime();
     const codexRuntime = createCodexDeepSeekRuntime();
-    let provider = libreChatRuntime.enabled ? libreChatRuntime.provider : 'deepseek';
-    let responseModel = libreChatRuntime.enabled ? libreChatRuntime.model : deepseekModel;
+    let provider = openClawRuntime.enabled
+      ? openClawRuntime.provider
+      : libreChatRuntime.enabled
+        ? libreChatRuntime.provider
+        : 'deepseek';
+    let responseModel = openClawRuntime.enabled
+      ? openClawRuntime.model
+      : libreChatRuntime.enabled
+        ? libreChatRuntime.model
+        : deepseekModel;
     let aiResult;
     try {
-      if (libreChatRuntime.enabled) {
+      if (openClawRuntime.enabled) {
+        aiResult = await callOpenClawAgent({
+          messages: modelMessages,
+          user,
+          conversationId,
+          mode: normalizeAgentMode(req.body?.mode),
+        });
+        provider = aiResult.provider || provider;
+        responseModel = aiResult.model || responseModel;
+      } else if (libreChatRuntime.enabled) {
         aiResult = await callLibreChatAgent(modelMessages);
       } else if (codexRuntime.enabled) {
         provider = codexRuntime.provider;
@@ -1805,12 +1823,19 @@ app.post('/api/ai/chat/stream', async (req, res) => {
 
     const codexRuntime = createCodexDeepSeekRuntime();
     const libreChatRuntime = createLibreChatAgentRuntime();
-    let provider = libreChatRuntime.enabled
-      ? libreChatRuntime.provider
-      : codexRuntime.enabled
-        ? codexRuntime.provider
-        : 'deepseek';
-    let responseModel = libreChatRuntime.enabled ? libreChatRuntime.model : deepseekModel;
+    const initialOpenClawRuntime = createOpenClawRuntime();
+    let provider = initialOpenClawRuntime.enabled
+      ? initialOpenClawRuntime.provider
+      : libreChatRuntime.enabled
+        ? libreChatRuntime.provider
+        : codexRuntime.enabled
+          ? codexRuntime.provider
+          : 'deepseek';
+    let responseModel = initialOpenClawRuntime.enabled
+      ? initialOpenClawRuntime.model
+      : libreChatRuntime.enabled
+        ? libreChatRuntime.model
+        : deepseekModel;
     writeSse(res, 'meta', {
       conversationId,
       provider,
@@ -1830,8 +1855,19 @@ app.post('/api/ai/chat/stream', async (req, res) => {
     ];
 
     let aiResult;
+    const openClawRuntime = initialOpenClawRuntime;
     try {
-      if (libreChatRuntime.enabled) {
+      if (openClawRuntime.enabled) {
+        aiResult = await callOpenClawAgent({
+          messages: modelMessages,
+          user,
+          conversationId,
+          mode: normalizeAgentMode(req.body?.mode),
+        });
+        provider = aiResult.provider || provider;
+        responseModel = aiResult.model || responseModel;
+        writeSse(res, 'delta', { text: aiResult.message });
+      } else if (libreChatRuntime.enabled) {
         aiResult = await callLibreChatAgentStream(modelMessages, {
           onToken: (token) => writeSse(res, 'delta', { text: token }),
         });
