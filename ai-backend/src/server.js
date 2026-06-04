@@ -173,6 +173,12 @@ const fabushiApiBaseUrl = (process.env.FABUSHI_API_BASE_URL || 'http://141.148.1
 const memberMonthlyLimit = Number(process.env.MEMBER_MONTHLY_TOKEN_LIMIT || 1_000_000);
 const freeMonthlyLimit = Number(process.env.FREE_MONTHLY_TOKEN_LIMIT || 50_000);
 const maxResourceTextChars = Number(process.env.MAX_RESOURCE_TEXT_CHARS || 80_000);
+const enableLibreChatAgentChat = process.env.ENABLE_LIBRECHAT_AGENT_CHAT === 'true';
+const libreChatAgentsBaseUrl = (
+  process.env.LIBRECHAT_AGENTS_BASE_URL || 'http://127.0.0.1:3080/api/agents/v1'
+).replace(/\/+$/, '');
+const libreChatAgentApiKey = process.env.LIBRECHAT_AGENT_API_KEY || '';
+const libreChatAgentId = process.env.LIBRECHAT_AGENT_ID || '';
 const enableCodexSdkChat = process.env.ENABLE_CODEX_SDK_CHAT === 'true';
 const codexDeepSeekProviderId = 'deepseek-chat-completions';
 const codexResponsesBaseUrl = (
@@ -612,6 +618,170 @@ function responseUsage(usage = {}) {
   };
 }
 
+function createLibreChatAgentRuntime() {
+  if (!enableLibreChatAgentChat || !libreChatAgentApiKey || !libreChatAgentId) {
+    return {
+      enabled: false,
+      provider: 'librechat-agent',
+      reason: !enableLibreChatAgentChat
+        ? 'ENABLE_LIBRECHAT_AGENT_CHAT is not true'
+        : !libreChatAgentApiKey
+          ? 'LIBRECHAT_AGENT_API_KEY is not configured'
+          : 'LIBRECHAT_AGENT_ID is not configured',
+    };
+  }
+
+  return {
+    enabled: true,
+    provider: 'librechat-agent',
+    model: libreChatAgentId,
+    chatCompletionsUrl: `${libreChatAgentsBaseUrl}/chat/completions`,
+  };
+}
+
+function libreChatUsage(usage = {}) {
+  return {
+    promptTokens: Number(usage.prompt_tokens || usage.input_tokens || usage.promptTokens || 0),
+    completionTokens: Number(usage.completion_tokens || usage.output_tokens || usage.completionTokens || 0),
+    totalTokens: Number(usage.total_tokens || usage.totalTokens || 0),
+  };
+}
+
+async function callLibreChatAgent(messages) {
+  const runtime = createLibreChatAgentRuntime();
+  if (!runtime.enabled) {
+    const error = new Error(runtime.reason || 'LibreChat Agent chat is not enabled');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const response = await fetch(runtime.chatCompletionsUrl, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${libreChatAgentApiKey}`,
+    },
+    body: JSON.stringify({
+      model: runtime.model,
+      messages,
+      temperature: 0.4,
+      stream: false,
+    }),
+    signal: AbortSignal.timeout(120_000),
+  });
+
+  const bodyText = await response.text();
+  let payload;
+  try {
+    payload = bodyText ? JSON.parse(bodyText) : {};
+  } catch {
+    payload = { error: bodyText };
+  }
+
+  if (!response.ok) {
+    const upstreamMessage = payload?.error?.message || payload?.message || bodyText || '';
+    const error = new Error(upstreamMessage || `LibreChat Agent request failed: ${response.status}`);
+    error.statusCode = response.status;
+    throw error;
+  }
+
+  const message = payload?.choices?.[0]?.message?.content?.trim();
+  if (!message) {
+    const error = new Error('LibreChat Agent returned an empty response');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return {
+    message,
+    usage: libreChatUsage(payload?.usage),
+  };
+}
+
+async function callLibreChatAgentStream(messages, callbacks = {}) {
+  const runtime = createLibreChatAgentRuntime();
+  if (!runtime.enabled) {
+    const error = new Error(runtime.reason || 'LibreChat Agent chat is not enabled');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const response = await fetch(runtime.chatCompletionsUrl, {
+    method: 'POST',
+    headers: {
+      Accept: 'text/event-stream',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${libreChatAgentApiKey}`,
+    },
+    body: JSON.stringify({
+      model: runtime.model,
+      messages,
+      temperature: 0.4,
+      stream: true,
+    }),
+    signal: callbacks.signal || AbortSignal.timeout(180_000),
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text();
+    let payload;
+    try {
+      payload = bodyText ? JSON.parse(bodyText) : {};
+    } catch {
+      payload = { error: bodyText };
+    }
+    const upstreamMessage = payload?.error?.message || payload?.message || bodyText || '';
+    const error = new Error(upstreamMessage || `LibreChat Agent request failed: ${response.status}`);
+    error.statusCode = response.status;
+    throw error;
+  }
+
+  let buffer = '';
+  let message = '';
+  let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  const decoder = new TextDecoder();
+
+  for await (const chunk of response.body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice('data:'.length).trim();
+      if (!data || data === '[DONE]') continue;
+
+      let payload;
+      try {
+        payload = JSON.parse(data);
+      } catch {
+        continue;
+      }
+
+      const delta = payload?.choices?.[0]?.delta?.content || '';
+      if (delta) {
+        message += delta;
+        callbacks.onToken?.(delta);
+      }
+
+      if (payload?.usage) {
+        usage = libreChatUsage(payload.usage);
+      }
+    }
+  }
+
+  message = message.trim();
+  if (!message) {
+    const error = new Error('LibreChat Agent returned an empty response');
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return { message, usage };
+}
+
 function isDeepSeekQuotaError(error) {
   const message = String(error?.message || error || '');
   return /额度|insufficient\s+balance|balance/i.test(message);
@@ -892,11 +1062,15 @@ app.post(
 
 app.get('/health', (_req, res) => {
   const codexRuntime = createCodexDeepSeekRuntime();
+  const libreChatRuntime = createLibreChatAgentRuntime();
   jsonResponse(res, 200, {
     status: 'ok',
     service: 'dacheng-ai-backend',
-    provider: 'deepseek',
-    model: deepseekModel,
+    provider: libreChatRuntime.enabled ? libreChatRuntime.provider : 'deepseek',
+    model: libreChatRuntime.enabled ? libreChatRuntime.model : deepseekModel,
+    libreChatAgentChatEnabled: libreChatRuntime.enabled,
+    libreChatAgentProvider: libreChatRuntime.provider,
+    libreChatAgentReason: libreChatRuntime.enabled ? undefined : libreChatRuntime.reason,
     codexSdkAvailable: true,
     codexSdkChatEnabled: codexRuntime.enabled,
     codexSdkProvider: codexRuntime.provider,
@@ -949,6 +1123,7 @@ app.post(
       createdAt,
     });
 
+    const libreChatRuntime = createLibreChatAgentRuntime();
     const skillResult = await runResourceFinderSkill({ message, user });
     const skillContext = resourceContextMessage(skillResult);
     const historyRows = statements.listMessages.all(conversationId).slice(-14);
@@ -959,20 +1134,41 @@ app.post(
     ];
 
     const codexRuntime = createCodexDeepSeekRuntime();
-    let provider = 'deepseek';
+    let provider = libreChatRuntime.enabled ? libreChatRuntime.provider : 'deepseek';
+    let responseModel = libreChatRuntime.enabled ? libreChatRuntime.model : deepseekModel;
     let aiResult;
     try {
-      if (codexRuntime.enabled) {
+      if (libreChatRuntime.enabled) {
+        aiResult = await callLibreChatAgent(modelMessages);
+      } else if (codexRuntime.enabled) {
         provider = codexRuntime.provider;
         aiResult = await callCodexSdkDeepSeek(modelMessages);
       } else {
         aiResult = await callDeepSeek(modelMessages);
       }
     } catch (error) {
-      if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
-      logger.warn({ error: String(error) }, 'Codex SDK chat failed, falling back to DeepSeek direct');
-      provider = 'deepseek';
-      aiResult = await callDeepSeek(modelMessages);
+      if (libreChatRuntime.enabled) {
+        logger.warn({ error: String(error) }, 'LibreChat Agent chat failed, falling back to Codex SDK or DeepSeek direct');
+        provider = codexRuntime.enabled ? codexRuntime.provider : 'deepseek';
+        responseModel = deepseekModel;
+        if (codexRuntime.enabled) {
+          try {
+            aiResult = await callCodexSdkDeepSeek(modelMessages);
+          } catch (codexError) {
+            if (isDeepSeekQuotaError(codexError)) throw codexError;
+            logger.warn({ error: String(codexError) }, 'Codex SDK chat failed, falling back to DeepSeek direct');
+            provider = 'deepseek';
+            aiResult = await callDeepSeek(modelMessages);
+          }
+        } else {
+          aiResult = await callDeepSeek(modelMessages);
+        }
+      } else {
+        if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
+        logger.warn({ error: String(error) }, 'Codex SDK chat failed, falling back to DeepSeek direct');
+        provider = 'deepseek';
+        aiResult = await callDeepSeek(modelMessages);
+      }
     }
     const usage = {
       promptTokens: aiResult.usage.promptTokens || estimateTokens(JSON.stringify(modelMessages)),
@@ -1007,7 +1203,7 @@ app.post(
       success: true,
       conversationId,
       provider,
-      model: deepseekModel,
+      model: responseModel,
       message: aiResult.message,
       usage: {
         ...usage,
@@ -1066,17 +1262,18 @@ app.post('/api/ai/chat/stream', async (req, res) => {
     });
 
     const codexRuntime = createCodexDeepSeekRuntime();
-    let provider = codexRuntime.enabled ? codexRuntime.provider : 'deepseek';
+    const libreChatRuntime = createLibreChatAgentRuntime();
+    let provider = libreChatRuntime.enabled
+      ? libreChatRuntime.provider
+      : codexRuntime.enabled
+        ? codexRuntime.provider
+        : 'deepseek';
+    let responseModel = libreChatRuntime.enabled ? libreChatRuntime.model : deepseekModel;
     writeSse(res, 'meta', {
       conversationId,
       provider,
-      model: deepseekModel,
+      model: responseModel,
     });
-    writeSse(res, 'step', {
-      title: '连接后端 AI',
-      message: '大乘后端已直连 VPS，并使用 DeepSeek OpenAI-compatible API。',
-    });
-
     const skillResult = await runResourceFinderSkill({
       message,
       user,
@@ -1092,7 +1289,11 @@ app.post('/api/ai/chat/stream', async (req, res) => {
 
     let aiResult;
     try {
-      if (codexRuntime.enabled) {
+      if (libreChatRuntime.enabled) {
+        aiResult = await callLibreChatAgentStream(modelMessages, {
+          onToken: (token) => writeSse(res, 'delta', { text: token }),
+        });
+      } else if (codexRuntime.enabled) {
         aiResult = await callCodexSdkDeepSeek(modelMessages, {
           onToken: (token) => writeSse(res, 'delta', { text: token }),
           onStep: (step) => writeSse(res, 'step', step),
@@ -1103,16 +1304,54 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         });
       }
     } catch (error) {
-      if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
-      logger.warn({ error: String(error) }, 'Codex SDK streaming chat failed, falling back to DeepSeek direct');
-      provider = 'deepseek';
-      writeSse(res, 'step', {
-        title: 'Codex SDK 暂不可用',
-        message: '已自动回退为 DeepSeek 直连流式返回。',
-      });
-      aiResult = await callDeepSeekStream(modelMessages, {
-        onToken: (token) => writeSse(res, 'delta', { text: token }),
-      });
+      if (libreChatRuntime.enabled) {
+        logger.warn({ error: String(error) }, 'LibreChat Agent streaming chat failed, falling back to Codex SDK or DeepSeek direct');
+        provider = codexRuntime.enabled ? codexRuntime.provider : 'deepseek';
+        responseModel = deepseekModel;
+        writeSse(res, 'meta', {
+          conversationId,
+          provider,
+          model: responseModel,
+        });
+        if (codexRuntime.enabled) {
+          try {
+            aiResult = await callCodexSdkDeepSeek(modelMessages, {
+              onToken: (token) => writeSse(res, 'delta', { text: token }),
+              onStep: (step) => writeSse(res, 'step', step),
+            });
+          } catch (codexError) {
+            if (isDeepSeekQuotaError(codexError)) throw codexError;
+            logger.warn({ error: String(codexError) }, 'Codex SDK streaming chat failed, falling back to DeepSeek direct');
+            provider = 'deepseek';
+            responseModel = deepseekModel;
+            writeSse(res, 'meta', {
+              conversationId,
+              provider,
+              model: responseModel,
+            });
+            aiResult = await callDeepSeekStream(modelMessages, {
+              onToken: (token) => writeSse(res, 'delta', { text: token }),
+            });
+          }
+        } else {
+          aiResult = await callDeepSeekStream(modelMessages, {
+            onToken: (token) => writeSse(res, 'delta', { text: token }),
+          });
+        }
+      } else {
+        if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
+        logger.warn({ error: String(error) }, 'Codex SDK streaming chat failed, falling back to DeepSeek direct');
+        provider = 'deepseek';
+        responseModel = deepseekModel;
+        writeSse(res, 'meta', {
+          conversationId,
+          provider,
+          model: responseModel,
+        });
+        aiResult = await callDeepSeekStream(modelMessages, {
+          onToken: (token) => writeSse(res, 'delta', { text: token }),
+        });
+      }
     }
 
     const usage = {
@@ -1147,7 +1386,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
     writeSse(res, 'done', {
       conversationId,
       provider,
-      model: deepseekModel,
+      model: responseModel,
       message: aiResult.message,
       usage: {
         ...usage,
@@ -1576,6 +1815,8 @@ function extractResourceQuery(message) {
 function resourceContextMessage(skillResult) {
   if (!skillResult) return '';
   const lines = [
+    '本轮资源检索/下载已经由大乘 App 后端完成。',
+    '不要再次调用 search_dharma_resources、download_dharma_resource 或其他资源 MCP 工具；请直接基于以下结果回答用户。',
     `后端已调用 skill: ${skillResult.skillName}`,
     `执行目标: ${skillResult.query}`,
   ];
