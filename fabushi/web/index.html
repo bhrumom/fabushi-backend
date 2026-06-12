@@ -2,125 +2,361 @@
 <html>
 
 <head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="description" content="Mahayana global sharing web app">
-  <meta name="color-scheme" content="dark">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="全球法布施 - 让佛法传遍世界每个角落">
 
+  <!-- iOS meta tags & icons -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="Mahayana">
+  <meta name="apple-mobile-web-app-title" content="全球法布施">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  <link rel="icon" type="image/png" href="favicon.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png" />
+
+  <title>全球法布施</title>
   <link rel="manifest" href="manifest.json">
 
-  <title>Mahayana</title>
+  <!-- 🚀 资源预连接 - 提前建立连接到关键域名 -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+
+  <!-- 🔤 预加载关键字体（子集化后仅~4.5MB） -->
+  <link rel="preload" href="assets/fonts/subset/NotoSansSC-Regular-subset.woff2" as="font" type="font/woff2"
+    crossorigin>
+  <link rel="preload" href="assets/fonts/subset/NotoSerifSC-Regular-subset.woff2" as="font" type="font/woff2"
+    crossorigin>
+
+  <!-- 🚀 预加载关键脚本 -->
+  <link rel="preload" href="flutter_bootstrap.js" as="script" fetchpriority="high">
+  <link rel="preload" href="main.dart.js" as="script" fetchpriority="high">
+
+  <!-- Flutter Angle for WebGL2 - 非关键，延迟加载 -->
+  <script src="https://cdn.jsdelivr.net/gh/Knightro63/flutter_angle/assets/gles_bindings.js" defer></script>
+
+  <!-- sql.js for drift -->
+  <script>
+    // Configure sql.js BEFORE loading the library
+    window.initSqlJs = window.initSqlJs || function (config) {
+      config = config || {};
+      config.locateFile = config.locateFile || function (file) {
+        return 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/' + file;
+      };
+      return window._initSqlJs(config);
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.js" defer
+    onload="window._initSqlJs = window.initSqlJs; window.initSqlJs = function(config) { config = config || {}; config.locateFile = function(file) { return 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/' + file; }; return window._initSqlJs(config); };"></script>
 
   <style>
-    html,
+    /* 基础样式 */
     body {
       margin: 0;
+      padding: 0;
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #09070b;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
 
-    #instant-shell {
+    #app-container {
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      transition: opacity 0.3s ease-in;
+    }
+
+    #app-container.loaded {
+      opacity: 1;
+    }
+
+    #zen-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+    }
+
+    /* 🎨 首屏占位：优先给出输入框感知 */
+    #loading-skeleton {
       position: fixed;
-      inset: 0;
-      z-index: 9999;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
       display: flex;
-      align-items: center;
+      align-items: flex-end;
       justify-content: center;
-      padding: 30px;
+      padding: 18px;
       box-sizing: border-box;
-      color: white;
-      background: linear-gradient(180deg, #0b1026 0%, #09070b 100%);
-      transition: opacity 180ms ease;
+      background:
+        linear-gradient(180deg, rgba(8, 23, 40, 0.68) 0%, rgba(7, 9, 11, 0.82) 100%),
+        linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      z-index: 9999;
+      opacity: 1;
+      transition: opacity 0.5s ease-out;
     }
 
-    #instant-shell.hidden {
+    #loading-skeleton.fade-out {
       opacity: 0;
       pointer-events: none;
     }
 
-    .instant-panel {
-      width: min(520px, 100%);
-      text-align: left;
+    .loading-shell {
+      width: min(720px, calc(100vw - 36px));
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: flex-start;
     }
 
-    .instant-title {
-      margin: 0 0 14px;
-      font-size: clamp(42px, 9vw, 68px);
-      line-height: 0.95;
-      font-weight: 900;
-      letter-spacing: 0.02em;
+    .loading-chip {
+      width: 148px;
+      height: 40px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(10px);
     }
 
-    .instant-copy {
-      margin: 0;
-      color: rgba(255, 255, 255, 0.72);
-      font-size: clamp(18px, 3vw, 22px);
-      line-height: 1.42;
-      font-weight: 650;
+    .loading-composer {
+      width: 100%;
+      min-height: 56px;
+      padding: 8px;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: 26px;
+      background: rgba(36, 36, 36, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.25);
     }
 
-    .instant-status {
+    .loading-composer-plus {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      flex: 0 0 auto;
       display: inline-flex;
       align-items: center;
-      gap: 12px;
-      margin-top: 30px;
-      color: rgba(255, 255, 255, 0.52);
-      font-size: 14px;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 24px;
+      border: 0;
     }
 
-    .instant-spinner {
-      width: 18px;
-      height: 18px;
-      border: 2px solid rgba(255, 255, 255, 0.22);
-      border-top-color: rgba(255, 255, 255, 0.82);
+    .loading-composer-input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .loading-composer-input input {
+      width: 100%;
+      height: 40px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: #fff;
+      font-size: 16px;
+      line-height: 40px;
+      padding: 0;
+    }
+
+    .loading-composer-input input::placeholder {
+      color: rgba(255, 255, 255, 0.56);
+    }
+
+    .loading-composer-send {
+      width: 42px;
+      height: 42px;
       border-radius: 50%;
-      animation: spin 700ms linear infinite;
+      flex: 0 0 auto;
+      border: 0;
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+      font-size: 18px;
     }
 
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
+    /* 加载进度指示器 */
+    .loading-dots {
+      display: flex;
+      gap: 8px;
+      margin-left: 14px;
+    }
+
+    .loading-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.7);
+      animation: pulse 1.4s infinite ease-in-out;
+    }
+
+    .loading-dot:nth-child(1) {
+      animation-delay: 0s;
+    }
+
+    .loading-dot:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+
+    .loading-dot:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      80%,
+      100% {
+        transform: scale(0.8);
+        opacity: 0.5;
+      }
+
+      40% {
+        transform: scale(1.2);
+        opacity: 1;
       }
     }
-  </style>
 
-  <script>
-    window.addEventListener('flutter-first-frame', function () {
-      var shell = document.getElementById('instant-shell');
-      if (!shell) return;
-      shell.classList.add('hidden');
-      setTimeout(function () {
-        if (shell && shell.parentNode) shell.parentNode.removeChild(shell);
-      }, 220);
-    });
-  </script>
+  </style>
 </head>
 
 <body>
-  <div id="instant-shell" aria-live="polite">
-    <main class="instant-panel">
-      <h1 class="instant-title">Mahayana</h1>
-      <p class="instant-copy">A fast first screen for global sharing.</p>
-      <div class="instant-status">
-        <span class="instant-spinner" aria-hidden="true"></span>
-        <span>Opening the app...</span>
+  <!-- 🎨 加载骨架屏 -->
+  <div id="loading-skeleton">
+    <div class="loading-shell">
+      <div class="loading-chip"></div>
+      <form id="loading-composer-form" class="loading-composer" autocomplete="off">
+        <button class="loading-composer-plus" type="button" aria-label="更多">+</button>
+        <label class="loading-composer-input" aria-label="问问大乘">
+          <input id="loading-composer-input" type="text" placeholder="问问大乘" />
+        </label>
+        <button id="loading-composer-send" class="loading-composer-send" type="submit" aria-label="发送">↑</button>
+      </form>
+      <div class="loading-dots" aria-hidden="true">
+        <div class="loading-dot"></div>
+        <div class="loading-dot"></div>
+        <div class="loading-dot"></div>
       </div>
-    </main>
+    </div>
   </div>
 
+  <!-- 应用容器 -->
+  <canvas id="zen-canvas"></canvas>
+  <div id="app-container"></div>
+
+  <!-- 支付宝相关脚本 - 延迟加载 -->
+  <script type="module" src="alipay-config.js" defer></script>
+  <script type="module" src="auth-utils.js" defer></script>
+  <script type="module" src="alipay-utils.js" defer></script>
+  <script type="module" src="alipay-login-functions.js" defer></script>
+
+  <!-- Flutter 引导脚本 -->
   <script src="flutter_bootstrap.js" async></script>
+
+  <!-- 🚀 Flutter 启动后处理：收起骨架屏 -->
+  <script>
+    (function () {
+      let appReady = false;
+      const pendingUrl = new URL(window.location.href);
+      const shellForm = document.getElementById('loading-composer-form');
+      const shellInput = document.getElementById('loading-composer-input');
+
+      function syncBootstrapPrompt(autoStart) {
+        if (!shellInput) return;
+        const prompt = shellInput.value.trim();
+        if (!prompt) return;
+
+        pendingUrl.searchParams.set('prompt', prompt);
+        if (autoStart) {
+          pendingUrl.searchParams.set('autostart', '1');
+        } else {
+          pendingUrl.searchParams.delete('autostart');
+        }
+        window.history.replaceState({}, '', pendingUrl);
+      }
+
+      if (shellInput) {
+        const existingPrompt = pendingUrl.searchParams.get('prompt');
+        if (existingPrompt) {
+          shellInput.value = existingPrompt;
+        }
+
+        shellInput.addEventListener('input', () => syncBootstrapPrompt(false));
+      }
+
+      if (shellForm) {
+        shellForm.addEventListener('submit', (event) => {
+          event.preventDefault();
+          if (!shellInput || !shellInput.value.trim()) {
+            return;
+          }
+          syncBootstrapPrompt(true);
+        });
+      }
+
+      function revealApp() {
+        if (appReady) return;
+        appReady = true;
+
+        const skeleton = document.getElementById('loading-skeleton');
+        const appContainer = document.getElementById('app-container');
+
+        if (skeleton) {
+          skeleton.classList.add('fade-out');
+          setTimeout(() => skeleton.remove(), 500);
+        }
+
+        if (appContainer) {
+          appContainer.classList.add('loaded');
+        }
+
+        console.log('🎉 Flutter view detected');
+      }
+
+      const observer = new MutationObserver(() => {
+        if (document.querySelector('flutter-view, flt-glass-pane, [flt-renderer]')) {
+          observer.disconnect();
+          revealApp();
+        }
+      });
+
+      observer.observe(document.body, { childList: true, subtree: true });
+
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          if (document.querySelector('flutter-view, flt-glass-pane, [flt-renderer]')) {
+            observer.disconnect();
+            revealApp();
+          }
+        }, 1500);
+      });
+    })();
+  </script>
 </body>
 
 </html>
