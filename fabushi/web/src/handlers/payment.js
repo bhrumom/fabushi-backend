@@ -16,6 +16,17 @@ function getPaidProduct(plan) {
   return null;
 }
 
+async function resolveTokenUser(db, tokenData) {
+  if (tokenData?.userId !== undefined && tokenData?.userId !== null && db.getUserById) {
+    const user = await db.getUserById(tokenData.userId);
+    if (user) return user;
+  }
+  if (tokenData?.username) {
+    return await db.getUser(tokenData.username);
+  }
+  return null;
+}
+
 // 创建支付宝订单
 export async function handleCreateAlipayOrder(request, env, db) {
   const authHeader = request.headers.get('Authorization');
@@ -35,18 +46,19 @@ export async function handleCreateAlipayOrder(request, env, db) {
     return jsonResponse({ error: '无效的付费项目' }, 400);
   }
 
-  const user = await db.getUser(tokenData.username);
+  const user = await resolveTokenUser(db, tokenData);
   if (!user) {
     return jsonResponse({ error: '用户不存在' }, 404);
   }
 
   const isAdminUser = isAdmin(user.email);
   const finalAmount = isAdminUser ? planDetails.adminPrice : planDetails.price;
-  const outTradeNo = platform === 'web' ? `WEB_${tokenData.username}_${Date.now()}` : `MEMBER_${tokenData.username}_${Date.now()}`;
+  const username = user.username;
+  const outTradeNo = platform === 'web' ? `WEB_${username}_${Date.now()}` : `MEMBER_${username}_${Date.now()}`;
 
   await db.createOrder({
     orderId: outTradeNo,
-    username: tokenData.username,
+    username,
     accountUserId: user.id,
     plan,
     amount: finalAmount,
@@ -191,7 +203,12 @@ export async function handleCheckPurchaseEntitlement(request, env, db) {
     return jsonResponse({ error: '无效的付费项目' }, 400);
   }
 
-  const unlocked = await db.hasCompletedPurchase(tokenData.username, product, tokenData.userId);
+  const user = await resolveTokenUser(db, tokenData);
+  if (!user) {
+    return jsonResponse({ error: '用户不存在' }, 404);
+  }
+
+  const unlocked = await db.hasCompletedPurchase(user.username, product, user.id);
   return jsonResponse({
     success: true,
     product,
@@ -226,7 +243,13 @@ export async function handleAlipayNotify(request, env, db) {
     });
 
     const username = order.username || order.user_id;
-    const user = await db.getUser(username);
+    let user = null;
+    if (order.account_user_id && db.getUserById) {
+      user = await db.getUserById(order.account_user_id);
+    }
+    if (!user) {
+      user = await db.getUser(username);
+    }
     const planDetails = getPaidProduct(order.plan);
     const now = new Date();
 
@@ -236,7 +259,8 @@ export async function handleAlipayNotify(request, env, db) {
 
     if (planDetails.productType === 'asset_unlock') {
       await db.addPurchaseHistory({
-        username,
+        username: user.username,
+        userId: user.id,
         orderId: outTradeNo,
         plan: order.plan,
         amount: order.amount || planDetails.price,
@@ -258,13 +282,21 @@ export async function handleAlipayNotify(request, env, db) {
 
     const endDate = new Date(startDate.getTime() + planDetails.duration);
 
-    await db.updateUser(username, {
-      membership_type: 'paid',
-      membership_expires_at: endDate.toISOString()
-    });
+    if (db.updateUserById && user.id !== undefined && user.id !== null) {
+      await db.updateUserById(user.id, {
+        membership_type: 'paid',
+        membership_expires_at: endDate.toISOString()
+      });
+    } else {
+      await db.updateUser(user.username, {
+        membership_type: 'paid',
+        membership_expires_at: endDate.toISOString()
+      });
+    }
 
     await db.addPurchaseHistory({
-      username,
+      username: user.username,
+      userId: user.id,
       orderId: outTradeNo,
       plan: order.plan,
       amount: order.amount || planDetails.price,

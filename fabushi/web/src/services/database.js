@@ -166,18 +166,35 @@ export class DatabaseService {
   }
 
   async getUserByAlipayId(alipayUserId) {
-    const binding = await this.db.prepare(
-      'SELECT user_id, username FROM alipay_bindings WHERE alipay_user_id = ?'
-    ).bind(alipayUserId).first();
-    if (binding?.user_id !== undefined && binding?.user_id !== null) {
-      const user = await this.getUserById(binding.user_id);
+    const identifiers = [...new Set(
+      [alipayUserId]
+        .filter((value) => value !== undefined && value !== null)
+        .map((value) => String(value).trim())
+        .filter(Boolean)
+    )];
+
+    for (const identifier of identifiers) {
+      const binding = await this.db.prepare(
+        'SELECT user_id, username FROM alipay_bindings WHERE alipay_user_id = ?'
+      ).bind(identifier).first();
+      if (binding?.user_id !== undefined && binding?.user_id !== null) {
+        const user = await this.getUserById(binding.user_id);
+        if (user) return user;
+      }
+      if (binding?.username) {
+        const user = await this.getUser(binding.username);
+        if (user) return user;
+      }
+    }
+
+    for (const identifier of identifiers) {
+      const user = await this.db.prepare(
+        'SELECT * FROM users WHERE alipay_user_id = ? OR alipay_open_id = ?'
+      ).bind(identifier, identifier).first();
       if (user) return user;
     }
-    if (binding?.username) {
-      const user = await this.getUser(binding.username);
-      if (user) return user;
-    }
-    return await this.db.prepare('SELECT * FROM users WHERE alipay_user_id = ?').bind(alipayUserId).first();
+
+    return null;
   }
 
   async getUserByEmail(email) {

@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { generateToken } from '../auth-utils.js';
 import {
+  handleCreateAlipayOrder,
   handleCheckPurchaseEntitlement,
   handleQueryAlipayOrder,
 } from '../src/handlers/payment.js';
 import { DatabaseService } from '../src/services/database.js';
 
 const env = { JWT_SECRET: 'payment-products-test-secret' };
+const TEST_ALIPAY_PRIVATE_KEY = readFileSync(
+  new URL('../test_private_key_pkcs8.pem', import.meta.url),
+  'utf8',
+);
 
 function createD1Mock({ columnsByTable = {}, firstResult = null } = {}) {
   const calls = [];
@@ -77,8 +83,11 @@ test('paid asset entitlement is granted from completed purchase history', async 
   const token = await generateToken('bhrum108', env);
   const calls = [];
   const db = {
-    async hasCompletedPurchase(username, productId) {
-      calls.push({ username, productId });
+    async getUser(username) {
+      return { id: 22, username, email: 'bhrum108@example.com' };
+    },
+    async hasCompletedPurchase(username, productId, userId) {
+      calls.push({ username, productId, userId });
       return username === 'bhrum108' && productId === 'zen_buddha_asset';
     },
   };
@@ -94,12 +103,55 @@ test('paid asset entitlement is granted from completed purchase history', async 
   const body = await response.json();
 
   assert.deepEqual(calls, [
-    { username: 'bhrum108', productId: 'zen_buddha_asset' },
+    { username: 'bhrum108', productId: 'zen_buddha_asset', userId: 22 },
   ]);
   assert.equal(response.status, 200);
   assert.equal(body.success, true);
   assert.equal(body.product, 'zen_buddha_asset');
   assert.equal(body.unlocked, true);
+});
+
+test('create Alipay order resolves stale token username through userId', async () => {
+  const token = await generateToken({ id: 55, username: 'stale_desktop_name' }, env);
+  const createdOrders = [];
+  const db = {
+    async getUserById(userId) {
+      assert.equal(userId, 55);
+      return { id: 55, username: 'real_paid_user', email: 'real@example.com' };
+    },
+    async getUser() {
+      throw new Error('username fallback should not be used when userId exists');
+    },
+    async createOrder(order) {
+      createdOrders.push(order);
+    },
+  };
+
+  const response = await handleCreateAlipayOrder(
+    new Request('https://example.com/api/alipay/create-order', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ plan: 'monthly', platform: 'app' }),
+    }),
+    {
+      ...env,
+      ALIPAY_APP_ID: 'test-app-id',
+      ALIPAY_PRIVATE_KEY: TEST_ALIPAY_PRIVATE_KEY,
+      WORKER_URL: 'https://api.example.com',
+    },
+    db,
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.success, true);
+  assert.equal(createdOrders.length, 1);
+  assert.equal(createdOrders[0].username, 'real_paid_user');
+  assert.equal(createdOrders[0].accountUserId, 55);
+  assert.match(createdOrders[0].orderId, /^MEMBER_real_paid_user_/);
 });
 
 test('createOrder writes username into legacy orders.user_id when username columns are absent', async () => {

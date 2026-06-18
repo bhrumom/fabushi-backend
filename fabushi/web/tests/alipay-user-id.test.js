@@ -24,6 +24,11 @@ function createDbEnv() {
                   const record = state.alipayBindings.find((item) => item.alipayUserId === params[0]);
                   return record ? { user_id: record.userId, username: record.username } : null;
                 }
+                if (sql.includes('SELECT * FROM users WHERE alipay_user_id = ? OR alipay_open_id = ?')) {
+                  return Array.from(state.userByUsername.values()).find((user) => (
+                    user.alipay_user_id === params[0] || user.alipay_open_id === params[1]
+                  )) || null;
+                }
                 if (sql.includes('SELECT user_id, username FROM email_username_mapping WHERE email = ?')) {
                   const record = state.emailMappings.find((item) => item.email === params[0]);
                   return record ? { user_id: record.userId, username: record.username } : null;
@@ -47,12 +52,36 @@ function createDbEnv() {
                 if (sql.includes('INSERT INTO users')) {
                   const username = params[0];
                   const email = params[1];
-                  state.userByUsername.set(username, { id: nextId++, username, email });
+                  const hasMembershipExpiry = sql.includes('membership_expires_at');
+                  const alipayUserIdIndex = hasMembershipExpiry ? 9 : 8;
+                  const alipayOpenIdIndex = hasMembershipExpiry ? 10 : 9;
+                  state.userByUsername.set(username, {
+                    id: nextId++,
+                    username,
+                    email,
+                    membership_type: params[7],
+                    membership_expires_at: hasMembershipExpiry ? params[8] : null,
+                    alipay_user_id: params[alipayUserIdIndex],
+                    alipay_open_id: params[alipayOpenIdIndex],
+                  });
                 } else if (sql.includes('INSERT INTO email_username_mapping')) {
                   state.emailMappings.push({ email: params[0], username: params[1], userId: params[2] });
                 } else if (sql.includes('INSERT OR REPLACE INTO alipay_bindings') || sql.includes('INSERT INTO alipay_bindings')) {
                   state.alipayBindings = state.alipayBindings.filter((item) => item.alipayUserId !== params[0]);
                   state.alipayBindings.push({ alipayUserId: params[0], username: params[1], userId: params[2], boundAt: params[3] });
+                } else if (sql.includes('UPDATE users SET') && sql.includes('WHERE id = ?')) {
+                  const fields = sql
+                    .match(/UPDATE users SET\s+(.+), updated_at = \? WHERE id = \?/s)?.[1]
+                    ?.split(',')
+                    .map((field) => field.trim().split(' = ')[0])
+                    .filter(Boolean) || [];
+                  const userId = params[fields.length + 1];
+                  const user = Array.from(state.userByUsername.values()).find((item) => item.id === Number(userId));
+                  if (user) {
+                    for (const [index, field] of fields.entries()) {
+                      user[field] = params[index];
+                    }
+                  }
                 }
                 return { success: true };
               }
@@ -88,6 +117,44 @@ test('one-click Alipay registration stores user_id in mappings and token', async
   assert.equal(state.alipayBindings[0].userId, 100);
   assert.equal(tokenPayload.userId, 100);
   assert.equal(tokenPayload.username, payload.username);
+});
+
+test('one-click Alipay registration reuses an existing user matched by open_id', async () => {
+  const { env, state } = createDbEnv();
+  state.userByUsername.set('paid_user', {
+    id: 77,
+    username: 'paid_user',
+    email: 'paid@example.com',
+    alipay_open_id: 'open_same_account',
+    membership_type: 'paid',
+    membership_expires_at: '2099-01-01T00:00:00.000Z',
+  });
+
+  const request = new Request('https://example.com/api/auth/alipay/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      oneClick: true,
+      alipayUserId: 'desktop_user_id',
+      alipayOpenId: 'open_same_account',
+      alipayNickname: '支付宝用户'
+    })
+  });
+
+  const response = await registerAlipayUser(request, env);
+  const payload = await response.json();
+  const tokenPayload = await verifyToken(payload.token, env);
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.isNewUser, false);
+  assert.equal(payload.userId, 77);
+  assert.equal(payload.username, 'paid_user');
+  assert.equal(tokenPayload.userId, 77);
+  assert.equal(state.userByUsername.size, 1);
+  assert.deepEqual(
+    state.alipayBindings.map((binding) => binding.alipayUserId).sort(),
+    ['desktop_user_id', 'open_same_account'],
+  );
 });
 
 test('mobile Alipay OAuth URL uses the backend callback directly', async () => {
