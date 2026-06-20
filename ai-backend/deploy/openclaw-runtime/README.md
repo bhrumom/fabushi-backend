@@ -43,3 +43,9 @@ GET https://ai.ombhrum.com/api/openclaw/runtime/files/<archive>
 The app validates `sha256`, checks that `nodeExecutable` and `cliEntrypoint`
 exist after extraction, then switches to the downloaded runtime. If anything
 fails, it keeps using the bundled runtime.
+
+macOS App Store/TestFlight builds run in the App Sandbox and must execute the
+bundled runtime signed with inherited sandbox entitlements. The backend therefore
+does not advertise `macos-*` runtime updates by default; set
+`OPENCLAW_RUNTIME_ENABLE_MACOS_UPDATES=true` only for a channel that can safely
+ship macOS-compatible signed child executables.

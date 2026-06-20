@@ -23,6 +23,8 @@ const dataDir = process.env.DATA_DIR || path.join(rootDir, 'data');
 const resourcesDir = path.join(dataDir, 'resources');
 const openClawRuntimeUpdatesDir =
   process.env.OPENCLAW_RUNTIME_UPDATES_DIR || path.join(dataDir, 'openclaw-runtime');
+const openClawRuntimeEnableMacosUpdates =
+  process.env.OPENCLAW_RUNTIME_ENABLE_MACOS_UPDATES === 'true';
 const codexHomeDir = process.env.CODEX_HOME || path.join(dataDir, 'codex-home');
 const codexTempDir = process.env.CODEX_TMPDIR || path.join(dataDir, 'codex-tmp');
 const codexRuntimeDir = process.env.XDG_RUNTIME_DIR || path.join(dataDir, 'codex-runtime');
@@ -1900,6 +1902,20 @@ app.get(
         channel: readText(manifest.channel || latest.channel || 'stable'),
         updateAvailable: false,
         reason: platform ? 'platform-unavailable' : 'platform-required',
+        platform,
+        currentVersion,
+        appVersion,
+        latestVersion: version,
+      });
+    }
+
+    if (platform.startsWith('macos-') && !openClawRuntimeEnableMacosUpdates) {
+      return jsonResponse(res, 200, {
+        success: true,
+        schema: Number(manifest.schema || 1),
+        channel: readText(manifest.channel || latest.channel || 'stable'),
+        updateAvailable: false,
+        reason: 'macos-runtime-updates-disabled',
         platform,
         currentVersion,
         appVersion,
