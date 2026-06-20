@@ -2,7 +2,7 @@ import { CORS_HEADERS } from '../config/constants.js';
 import { jsonResponse } from '../utils/response.js';
 
 const CBETA_PUBLIC_API_ROOT = 'https://api.ombhrum.com/api/cbeta';
-const CBETA_SELF_HOSTED_API_ROOT = 'https://144.24.17.21.sslip.io';
+const CBETA_SELF_HOSTED_API_ROOT = CBETA_PUBLIC_API_ROOT;
 const CBETA_API_ROOTS = [CBETA_SELF_HOSTED_API_ROOT];
 const DEFAULT_SEND_WORKS = [
   'T0365',

@@ -8,6 +8,7 @@ attach, or route a Cloudflare Worker for `ai.ombhrum.com`.
 - `https://ai.ombhrum.com/` -> LibreChat Web on `127.0.0.1:3080`
 - `https://ai.ombhrum.com/api/ai/*` -> Dacheng AI bridge on `127.0.0.1:8788`
 - `https://ai.ombhrum.com/api/resources/*` -> Dacheng AI bridge resource tools
+- `https://ai.ombhrum.com/api/openclaw/*` -> OpenClaw desktop runtime updates and proxy API
 - `https://ai.ombhrum.com/health` -> Dacheng AI bridge health endpoint
 
 Cloudflare may keep the record proxied when using a direct DNS record. If SSE

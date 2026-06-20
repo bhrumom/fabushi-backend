@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { handleGetCbetaSendTexts } from '../src/handlers/cbeta.js';
 
-const SELF_HOSTED_API = 'https://144.24.17.21.sslip.io';
+const SELF_HOSTED_API = 'https://api.ombhrum.com/api/cbeta';
 
 const sampleHtml = `
   <html><head><title>Heart Sutra</title></head><body>
@@ -124,9 +124,9 @@ test('CBETA send texts never falls back to official API when self-hosted returns
     assert.equal(body.fallbackApi, null);
     assert.equal(body.errors.length, 1);
     assert.deepEqual(attemptedHosts, [
-      '144.24.17.21.sslip.io',
-      '144.24.17.21.sslip.io',
-      '144.24.17.21.sslip.io',
+      'api.ombhrum.com',
+      'api.ombhrum.com',
+      'api.ombhrum.com',
     ]);
   } finally {
     restoreFetch();

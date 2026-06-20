@@ -21,12 +21,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const dataDir = process.env.DATA_DIR || path.join(rootDir, 'data');
 const resourcesDir = path.join(dataDir, 'resources');
+const openClawRuntimeUpdatesDir =
+  process.env.OPENCLAW_RUNTIME_UPDATES_DIR || path.join(dataDir, 'openclaw-runtime');
 const codexHomeDir = process.env.CODEX_HOME || path.join(dataDir, 'codex-home');
 const codexTempDir = process.env.CODEX_TMPDIR || path.join(dataDir, 'codex-tmp');
 const codexRuntimeDir = process.env.XDG_RUNTIME_DIR || path.join(dataDir, 'codex-runtime');
 const dbPath = process.env.SQLITE_PATH || path.join(dataDir, 'dacheng-ai.sqlite');
 
 fs.mkdirSync(resourcesDir, { recursive: true });
+fs.mkdirSync(openClawRuntimeUpdatesDir, { recursive: true });
 fs.mkdirSync(codexHomeDir, { recursive: true });
 fs.mkdirSync(codexTempDir, { recursive: true });
 fs.mkdirSync(codexRuntimeDir, { recursive: true });
@@ -236,11 +239,16 @@ const statements = {
 const deepseekApiKey = process.env.DEEPSEEK_API_KEY || '';
 const deepseekBaseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
 const deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
-const cbetaApiRoot = (process.env.CBETA_API_ROOT || 'https://144.24.17.21.sslip.io').replace(/\/+$/, '');
-const fabushiApiBaseUrl = (process.env.FABUSHI_API_BASE_URL || 'http://144.24.17.21').replace(/\/+$/, '');
+const cbetaApiRoot = (process.env.CBETA_API_ROOT || 'https://api.ombhrum.com/api/cbeta').replace(/\/+$/, '');
+const fabushiApiBaseUrl = (process.env.FABUSHI_API_BASE_URL || 'https://api.ombhrum.com').replace(/\/+$/, '');
 const memberMonthlyLimit = Number(process.env.MEMBER_MONTHLY_TOKEN_LIMIT || 1_000_000);
-const freeMonthlyLimit = Number(process.env.FREE_MONTHLY_TOKEN_LIMIT || 50_000);
+const freeMonthlyLimit = Number(process.env.FREE_MONTHLY_TOKEN_LIMIT || 1_000);
+const requireMemberForAi = process.env.REQUIRE_MEMBER_FOR_AI === 'true';
+const deepseekMaxCompletionTokens = Math.max(1, Number(process.env.DEEPSEEK_MAX_COMPLETION_TOKENS || 1400));
 const maxResourceTextChars = Number(process.env.MAX_RESOURCE_TEXT_CHARS || 80_000);
+const openClawRuntimeManifestPath =
+  process.env.OPENCLAW_RUNTIME_MANIFEST_PATH || path.join(openClawRuntimeUpdatesDir, 'manifest.json');
+const openClawRuntimePublicBaseUrl = (process.env.OPENCLAW_RUNTIME_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 const enableLibreChatAgentChat = process.env.ENABLE_LIBRECHAT_AGENT_CHAT === 'true';
 const libreChatAgentsBaseUrl = (
   process.env.LIBRECHAT_AGENTS_BASE_URL || 'http://127.0.0.1:3080/api/agents/v1'
@@ -279,6 +287,29 @@ function jsonResponse(res, status, payload) {
   res.status(status).json(payload);
 }
 
+async function readJsonFile(filePath) {
+  const raw = await fs.promises.readFile(filePath, 'utf8');
+  return JSON.parse(raw);
+}
+
+function requestOrigin(req) {
+  if (openClawRuntimePublicBaseUrl) return openClawRuntimePublicBaseUrl;
+  const proto = req.get('X-Forwarded-Proto') || req.protocol || 'https';
+  const host = req.get('X-Forwarded-Host') || req.get('Host');
+  return host ? `${proto}://${host}` : '';
+}
+
+function absolutizeOpenClawRuntimeUrl(req, value) {
+  const text = readText(value);
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  const normalized = text.startsWith('/')
+    ? text
+    : `/api/openclaw/runtime/files/${text.replace(/^\/+/, '')}`;
+  const origin = requestOrigin(req);
+  return origin ? new URL(normalized, `${origin}/`).toString() : normalized;
+}
+
 function textToolResult(text, structuredContent = {}) {
   return {
     structuredContent,
@@ -307,9 +338,19 @@ function asyncHandler(fn) {
 }
 
 function bearerToken(req) {
+  const delegated = readText(req.get('x-dacheng-auth-token'));
+  if (
+    delegated &&
+    delegated !== 'DACHENG_AUTH_TOKEN' &&
+    !delegated.startsWith('secretref-env:') &&
+    delegated !== 'dacheng-openclaw-proxy'
+  ) {
+    return delegated;
+  }
   const header = req.get('Authorization') || '';
   if (!header.startsWith('Bearer ')) return '';
-  return header.slice('Bearer '.length).trim();
+  const token = header.slice('Bearer '.length).trim();
+  return token === 'dacheng-openclaw-proxy' ? '' : token;
 }
 
 function sha256(value) {
@@ -327,23 +368,115 @@ function estimateTokens(text) {
   return Math.max(1, Math.ceil(normalized.length / 3));
 }
 
+function readText(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).replace(/\u0000/g, '').trim();
+}
+
+function unwrapPayload(payload) {
+  if (!payload || typeof payload !== 'object') return {};
+  return payload.data && typeof payload.data === 'object' ? payload.data : payload;
+}
+
+function readFirstText(values) {
+  for (const value of values) {
+    const text = readText(value);
+    if (text) return text;
+  }
+  return '';
+}
+
+function activeFlag(value) {
+  if (value === true) return true;
+  if (value === 1) return true;
+  if (typeof value !== 'string') return false;
+  return ['true', '1', 'yes', 'active'].includes(value.trim().toLowerCase());
+}
+
+function futureDate(value) {
+  const text = readText(value);
+  if (!text) return false;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) && timestamp > Date.now();
+}
+
 function normalizeMembershipPayload(payload) {
   if (!payload || typeof payload !== 'object') return false;
-  const data = payload.data && typeof payload.data === 'object' ? payload.data : payload;
+  const data = unwrapPayload(payload);
+  const membership = data.membership && typeof data.membership === 'object' ? data.membership : data;
+  const type = readText(membership.type || membership.membershipType || data.membershipType).toLowerCase();
+  const status = readText(membership.status || data.status).toLowerCase();
+  const expiry = membership.expiresAt ||
+    membership.expires_at ||
+    membership.membershipExpiry ||
+    membership.membership_expires_at ||
+    data.membershipExpiry ||
+    data.membership_expires_at;
+  const hasExplicitActiveFlag =
+    membership.isActive !== undefined ||
+    membership.active !== undefined ||
+    membership.hasPremiumAccess !== undefined ||
+    membership.hasPremiumMembership !== undefined ||
+    membership.isPremium !== undefined;
+
+  if (hasExplicitActiveFlag) {
+    return Boolean(
+      activeFlag(membership.isActive) ||
+        activeFlag(membership.active) ||
+        activeFlag(membership.hasPremiumAccess) ||
+        activeFlag(membership.hasPremiumMembership) ||
+        activeFlag(membership.isPremium),
+    );
+  }
+
   return Boolean(
-    data.isActive ||
-      data.active ||
-      data.hasPremiumAccess ||
-      data.hasPremiumMembership ||
-      data.isPremium ||
-      data.status === 'active' ||
-      data.type === 'paid' ||
-      data.membershipType === 'paid',
+    status === 'active' ||
+      type === 'paid' ||
+      type === 'premium' ||
+      type === 'trial' ||
+      futureDate(expiry),
   );
 }
 
-async function checkRemoteMembership(token) {
-  if (!token || !fabushiApiBaseUrl) return false;
+function extractRemoteAccount(payload) {
+  const data = unwrapPayload(payload);
+  const nestedUser = data.user && typeof data.user === 'object' ? data.user : {};
+  const id = readFirstText([
+    data.userId,
+    data.user_id,
+    data.userNo,
+    data.user_no,
+    data.id,
+    nestedUser.userId,
+    nestedUser.user_id,
+    nestedUser.userNo,
+    nestedUser.user_no,
+    nestedUser.id,
+  ]);
+  const username = readFirstText([data.username, data.name, nestedUser.username, nestedUser.name]);
+  const email = readFirstText([data.email, nestedUser.email]);
+  const membership = data.membership && typeof data.membership === 'object' ? data.membership : null;
+  return {
+    authenticated: Boolean(id || username || email || membership || data.success === true),
+    id,
+    username,
+    email,
+    isMember: normalizeMembershipPayload(payload),
+    membership,
+  };
+}
+
+async function resolveRemoteAccount(token) {
+  const fallback = {
+    authenticated: false,
+    id: '',
+    username: '',
+    email: '',
+    isMember: false,
+    membership: null,
+  };
+  if (!token || !fabushiApiBaseUrl) return fallback;
+
   const endpoints = [
     '/api/stripe/membership-status',
     '/api/alipay/check-membership',
@@ -359,34 +492,47 @@ async function checkRemoteMembership(token) {
         },
         signal: AbortSignal.timeout(8_000),
       });
+      if (response.status === 401 || response.status === 403) return fallback;
       if (!response.ok) continue;
       const payload = await response.json();
-      if (normalizeMembershipPayload(payload)) return true;
+      const account = extractRemoteAccount(payload);
+      if (account.authenticated || account.isMember) {
+        return {
+          ...fallback,
+          ...account,
+          authenticated: true,
+        };
+      }
     } catch (error) {
       logger.debug({ endpoint, error: String(error) }, 'membership lookup skipped');
     }
   }
 
-  return false;
+  return fallback;
 }
 
 async function resolveUser(req, body = {}) {
   const token = bearerToken(req);
-  const username = safeUserText(body.username || req.query.username);
+  const usernameHint = safeUserText(body.username || req.query.username);
   const tokenHash = token ? sha256(token).slice(0, 24) : '';
   const anonymousHash = sha256(`${req.ip}|${req.get('User-Agent') || ''}`).slice(0, 24);
-  const userId = username
-    ? `user:${username}`
+  const remoteAccount = await resolveRemoteAccount(token);
+  const remoteIdentity = remoteAccount.id ||
+    remoteAccount.username ||
+    remoteAccount.email ||
+    (remoteAccount.authenticated ? tokenHash : '');
+  const userId = remoteAccount.authenticated
+    ? `user:${remoteIdentity}`
     : tokenHash
       ? `token:${tokenHash}`
       : `anon:${anonymousHash}`;
-  const remoteMember = await checkRemoteMembership(token);
-  const memberHint = body.clientMembershipHint === true;
   return {
     userId,
-    username,
+    username: remoteAccount.username || usernameHint,
     tokenHash,
-    isMember: remoteMember || memberHint,
+    isAuthenticated: remoteAccount.authenticated,
+    isMember: remoteAccount.isMember,
+    membership: remoteAccount.membership,
   };
 }
 
@@ -400,11 +546,24 @@ function usageFor(userId) {
 }
 
 function enforceTokenBudget(user, estimatedTokensForRequest) {
+  if (requireMemberForAi && !user.isMember) {
+    const error = new Error('大乘 AI 需要开通会员后使用');
+    error.statusCode = 403;
+    error.code = 'AI_MEMBERSHIP_REQUIRED';
+    error.details = {
+      requireMemberForAi,
+      monthlyLimit: memberMonthlyLimit,
+      remainingTokens: 0,
+    };
+    throw error;
+  }
+
   const limit = user.isMember ? memberMonthlyLimit : freeMonthlyLimit;
   const usage = usageFor(user.userId);
   if (usage.used + estimatedTokensForRequest > limit) {
     const error = new Error('本月 AI token 额度已不足');
     error.statusCode = 429;
+    error.code = 'USER_TOKEN_QUOTA_EXCEEDED';
     error.details = {
       monthlyLimit: limit,
       usedTokens: usage.used,
@@ -413,6 +572,11 @@ function enforceTokenBudget(user, estimatedTokensForRequest) {
     throw error;
   }
   return { limit, usage };
+}
+
+function completionBudgetFor(budget, estimatedPromptTokens) {
+  const remainingAfterPrompt = budget.limit - budget.usage.used - estimatedPromptTokens;
+  return Math.max(1, Math.min(deepseekMaxCompletionTokens, Math.floor(remainingAfterPrompt)));
 }
 
 function recordUsage(userId, totalTokens) {
@@ -438,13 +602,27 @@ function normalizeMessages(rows) {
   }));
 }
 
-async function callDeepSeek(messages) {
+function normalizeMaxCompletionTokens(value) {
+  const numeric = Number(value || deepseekMaxCompletionTokens);
+  if (!Number.isFinite(numeric) || numeric < 1) return deepseekMaxCompletionTokens;
+  return Math.max(1, Math.min(deepseekMaxCompletionTokens, Math.floor(numeric)));
+}
+
+function normalizeDeepSeekModelName(value) {
+  const raw = readText(value || deepseekModel);
+  if (!raw) return deepseekModel;
+  const modelId = raw.includes('/') ? raw.split('/').pop() : raw;
+  return modelId || deepseekModel;
+}
+
+async function callDeepSeek(messages, options = {}) {
   if (!deepseekApiKey) {
     const error = new Error('DeepSeek API key is not configured');
     error.statusCode = 503;
     throw error;
   }
 
+  const model = normalizeDeepSeekModelName(options.model);
   const response = await fetch(`${deepseekBaseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -453,10 +631,10 @@ async function callDeepSeek(messages) {
       Authorization: `Bearer ${deepseekApiKey}`,
     },
     body: JSON.stringify({
-      model: deepseekModel,
+      model,
       messages,
       temperature: 0.4,
-      max_tokens: 1400,
+      max_tokens: normalizeMaxCompletionTokens(options.maxCompletionTokens),
       stream: false,
     }),
     signal: AbortSignal.timeout(60_000),
@@ -478,6 +656,9 @@ async function callDeepSeek(messages) {
         : upstreamMessage || `DeepSeek request failed: ${response.status}`;
     const error = new Error(friendlyMessage);
     error.statusCode = response.status;
+    if (response.status === 402 || /insufficient\s+balance/i.test(upstreamMessage)) {
+      error.code = 'DEEPSEEK_PROVIDER_QUOTA';
+    }
     throw error;
   }
 
@@ -490,6 +671,7 @@ async function callDeepSeek(messages) {
 
   return {
     message,
+    model,
     usage: {
       promptTokens: Number(payload?.usage?.prompt_tokens || 0),
       completionTokens: Number(payload?.usage?.completion_tokens || 0),
@@ -505,6 +687,7 @@ async function callDeepSeekStream(messages, callbacks = {}) {
     throw error;
   }
 
+  const model = normalizeDeepSeekModelName(callbacks.model);
   const response = await fetch(`${deepseekBaseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -513,10 +696,10 @@ async function callDeepSeekStream(messages, callbacks = {}) {
       Authorization: `Bearer ${deepseekApiKey}`,
     },
     body: JSON.stringify({
-      model: deepseekModel,
+      model,
       messages,
       temperature: 0.4,
-      max_tokens: 1400,
+      max_tokens: normalizeMaxCompletionTokens(callbacks.maxCompletionTokens),
       stream: true,
       stream_options: { include_usage: true },
     }),
@@ -538,6 +721,9 @@ async function callDeepSeekStream(messages, callbacks = {}) {
         : upstreamMessage || `DeepSeek request failed: ${response.status}`;
     const error = new Error(friendlyMessage);
     error.statusCode = response.status;
+    if (response.status === 402 || /insufficient\s+balance/i.test(upstreamMessage)) {
+      error.code = 'DEEPSEEK_PROVIDER_QUOTA';
+    }
     throw error;
   }
 
@@ -591,7 +777,7 @@ async function callDeepSeekStream(messages, callbacks = {}) {
     throw error;
   }
 
-  return { message, usage };
+  return { message, model, usage };
 }
 
 function createCodexDeepSeekRuntime() {
@@ -856,8 +1042,10 @@ async function callLibreChatAgentStream(messages, callbacks = {}) {
 }
 
 function isDeepSeekQuotaError(error) {
+  if (error?.code === 'DEEPSEEK_PROVIDER_QUOTA') return true;
+  if (error?.code === 'USER_TOKEN_QUOTA_EXCEEDED' || error?.code === 'AI_MEMBERSHIP_REQUIRED') return false;
   const message = String(error?.message || error || '');
-  return /额度|insufficient\s+balance|balance/i.test(message);
+  return /insufficient\s+balance|balance/i.test(message);
 }
 
 function publicAiErrorMessage(error) {
@@ -1112,7 +1300,7 @@ async function callOpenClawAgent({ messages, user, conversationId, mode, signal 
   };
 }
 
-async function runAgentModel({ messages, user, conversationId, mode, callbacks = {}, signal }) {
+async function runAgentModel({ messages, user, conversationId, mode, callbacks = {}, signal, maxCompletionTokens }) {
   const openClawRuntime = createOpenClawRuntime();
   if (openClawRuntime.enabled && !callbacks.onToken) {
     return await callOpenClawAgent({ messages, user, conversationId, mode, signal });
@@ -1139,15 +1327,15 @@ async function runAgentModel({ messages, user, conversationId, mode, callbacks =
       return { ...result, provider, model };
     }
     const result = callbacks.onToken
-      ? await callDeepSeekStream(messages, { ...callbacks, signal })
-      : await callDeepSeek(messages);
+      ? await callDeepSeekStream(messages, { ...callbacks, signal, maxCompletionTokens })
+      : await callDeepSeek(messages, { maxCompletionTokens });
     return { ...result, provider, model };
   } catch (error) {
     if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
     logger.warn({ error: String(error) }, 'Agent model failed, falling back to DeepSeek direct');
     const result = callbacks.onToken
-      ? await callDeepSeekStream(messages, { ...callbacks, signal })
-      : await callDeepSeek(messages);
+      ? await callDeepSeekStream(messages, { ...callbacks, signal, maxCompletionTokens })
+      : await callDeepSeek(messages, { maxCompletionTokens });
     return { ...result, provider: 'deepseek', model: deepseekModel };
   }
 }
@@ -1186,6 +1374,331 @@ function agentUsagePayload(usage, user, budget) {
     remainingTokens: Math.max(0, budget.limit - latestUsage.used),
   };
 }
+
+function openAiContentToText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        return readText(part.text || part.content || part.value);
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return readText(content);
+}
+
+function normalizeOpenAiMessages(value) {
+  if (!Array.isArray(value)) return [];
+  const allowedRoles = new Set(['system', 'user', 'assistant', 'tool']);
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const role = allowedRoles.has(item.role) ? item.role : 'user';
+      const content = openAiContentToText(item.content);
+      if (!content) return null;
+      return { role, content };
+    })
+    .filter(Boolean);
+}
+
+function truncateForDeepSeekMessage(text, maxChars = 12_000) {
+  const value = readText(text);
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}\n\n[内容已截断]`;
+}
+
+function truncateTailForDeepSeekMessage(text, maxChars = 2400) {
+  const value = readText(text);
+  if (value.length <= maxChars) return value;
+  return `[前文已省略]\n\n${value.slice(-maxChars)}`;
+}
+
+function stripOpenClawPromptNoise(text) {
+  const value = readText(text);
+  if (!value) return '';
+
+  const finalPromptMatch = value.match(/finalPromptText["'\s:：]+([\s\S]{1,4000})$/i);
+  if (finalPromptMatch?.[1]) {
+    return readText(finalPromptMatch[1].replace(/^["'`]+|["'`,}\]]+$/g, ''));
+  }
+
+  const markers = [
+    'final prompt:',
+    'final user prompt:',
+    'user prompt:',
+    '用户问题：',
+    '用户消息：',
+    '用户输入：',
+  ];
+  const lower = value.toLowerCase();
+  for (const marker of markers) {
+    const index = lower.lastIndexOf(marker.toLowerCase());
+    if (index >= 0) {
+      const tail = value.slice(index + marker.length).trim();
+      if (tail) return tail;
+    }
+  }
+
+  return value;
+}
+
+function compactOpenClawMessagesForDeepSeek(messages) {
+  const conversationalMessages = messages
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .map((message) => ({
+      role: message.role,
+      content: truncateTailForDeepSeekMessage(stripOpenClawPromptNoise(message.content)),
+    }))
+    .filter((message) => message.content);
+
+  const recent = conversationalMessages.slice(-6);
+  while (recent.length > 0 && recent[0].role !== 'user') {
+    recent.shift();
+  }
+
+  if (recent.length === 0) {
+    const fallback = messages
+      .slice()
+      .reverse()
+      .map((message) => truncateTailForDeepSeekMessage(stripOpenClawPromptNoise(message.content), 2400))
+      .find(Boolean);
+    if (!fallback) return messages;
+    recent.push({ role: 'user', content: fallback });
+  }
+
+  return [
+    {
+      role: 'system',
+      content: '你是大乘 App 的桌面 AI 助手。请直接回答用户问题，默认使用简洁、准确的中文。',
+    },
+    ...recent,
+  ];
+}
+
+function isDeepSeekBlockedError(error) {
+  return (
+    Number(error?.statusCode) === 403 &&
+    /blocked|被拦截|forbidden/i.test(String(error?.message || error || ''))
+  );
+}
+
+function shouldRetryWithCompactedOpenClawMessages(error, messages, compactedMessages) {
+  if (!isDeepSeekBlockedError(error)) return false;
+  return JSON.stringify(messages) !== JSON.stringify(compactedMessages);
+}
+
+function usageWithFallback(usage, messages, text) {
+  const promptTokens = Number(usage?.promptTokens || usage?.inputTokens || 0);
+  const completionTokens = Number(usage?.completionTokens || usage?.outputTokens || 0);
+  const totalTokens = Number(usage?.totalTokens || 0);
+  if (totalTokens > 0) {
+    return {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+    };
+  }
+  const estimatedPrompt = promptTokens || estimateTokens(JSON.stringify(messages));
+  const estimatedCompletion = completionTokens || estimateTokens(text);
+  return {
+    promptTokens: estimatedPrompt,
+    completionTokens: estimatedCompletion,
+    totalTokens: estimatedPrompt + estimatedCompletion,
+  };
+}
+
+function openAiUsagePayload(usage, user, budget) {
+  const promptTokens = Number(usage.promptTokens || 0);
+  const completionTokens = Number(usage.completionTokens || 0);
+  const totalTokens = Number(usage.totalTokens || promptTokens + completionTokens);
+  const latestUsage = usageFor(user.userId);
+  const remainingTokens = Math.max(0, budget.limit - latestUsage.used);
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens,
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    monthlyLimit: budget.limit,
+    remainingTokens,
+  };
+}
+
+function writeOpenAiSse(res, payload) {
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+app.post(
+  '/api/openclaw/deepseek/v1/chat/completions',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, req.body || {});
+    const incomingMessages = normalizeOpenAiMessages(req.body?.messages);
+    if (incomingMessages.length === 0) {
+      res.status(400).json({ error: { message: 'messages is required' } });
+      return;
+    }
+
+    const messages = compactOpenClawMessagesForDeepSeek(incomingMessages);
+    const promptEstimate = estimateTokens(JSON.stringify(messages));
+    const estimated = promptEstimate + 600;
+    const budget = enforceTokenBudget(user, estimated);
+    const maxCompletionTokens = Math.min(
+      completionBudgetFor(budget, promptEstimate),
+      normalizeMaxCompletionTokens(req.body?.max_tokens),
+    );
+    const model = normalizeDeepSeekModelName(req.body?.model);
+    const wantsStream =
+      req.body?.stream === true ||
+      String(req.get('accept') || '').includes('text/event-stream');
+    const id = `chatcmpl_${crypto.randomUUID().replaceAll('-', '')}`;
+    const created = Math.floor(Date.now() / 1000);
+    const compactedMessages = messages;
+
+    if (!wantsStream) {
+      let result;
+      let usageMessages = messages;
+      try {
+        result = await callDeepSeek(messages, { model, maxCompletionTokens });
+      } catch (error) {
+        if (!shouldRetryWithCompactedOpenClawMessages(error, messages, compactedMessages)) {
+          throw error;
+        }
+        logger.warn(
+          {
+            statusCode: error?.statusCode,
+            messageCount: messages.length,
+            compactedMessageCount: compactedMessages.length,
+          },
+          'OpenClaw DeepSeek proxy retrying with compacted messages',
+        );
+        usageMessages = compactedMessages;
+        result = await callDeepSeek(compactedMessages, { model, maxCompletionTokens });
+      }
+      const usage = usageWithFallback(result.usage, usageMessages, result.message);
+      recordUsage(user.userId, usage.totalTokens);
+      res.json({
+        id,
+        object: 'chat.completion',
+        created,
+        model: result.model || model,
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: result.message },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: openAiUsagePayload(usage, user, budget),
+      });
+      return;
+    }
+
+    const abortController = new AbortController();
+    req.on('close', () => abortController.abort());
+
+    res.status(200);
+    res.set({
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders?.();
+
+    const baseChunk = {
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model,
+      system_fingerprint: 'fabushi-openclaw-deepseek-proxy',
+    };
+    writeOpenAiSse(res, {
+      ...baseChunk,
+      choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+    });
+
+    let text = '';
+    let usageMessages = messages;
+    try {
+      let result;
+      try {
+        result = await callDeepSeekStream(messages, {
+          model,
+          maxCompletionTokens,
+          signal: abortController.signal,
+          onToken: (delta) => {
+            text += delta;
+            writeOpenAiSse(res, {
+              ...baseChunk,
+              choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
+            });
+          },
+        });
+      } catch (error) {
+        if (!shouldRetryWithCompactedOpenClawMessages(error, messages, compactedMessages)) {
+          throw error;
+        }
+        logger.warn(
+          {
+            statusCode: error?.statusCode,
+            messageCount: messages.length,
+            compactedMessageCount: compactedMessages.length,
+          },
+          'OpenClaw DeepSeek proxy stream retrying with compacted messages',
+        );
+        text = '';
+        usageMessages = compactedMessages;
+        result = await callDeepSeekStream(compactedMessages, {
+          model,
+          maxCompletionTokens,
+          signal: abortController.signal,
+          onToken: (delta) => {
+            text += delta;
+            writeOpenAiSse(res, {
+              ...baseChunk,
+              choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
+            });
+          },
+        });
+      }
+      text = result.message || text;
+      const usage = usageWithFallback(result.usage, usageMessages, text);
+      recordUsage(user.userId, usage.totalTokens);
+      writeOpenAiSse(res, {
+        ...baseChunk,
+        model: result.model || model,
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      });
+      writeOpenAiSse(res, {
+        ...baseChunk,
+        model: result.model || model,
+        choices: [],
+        usage: openAiUsagePayload(usage, user, budget),
+      });
+      res.write('data: [DONE]\n\n');
+    } catch (error) {
+      logger.error(
+        { error: String(error), code: error?.code, statusCode: error?.statusCode },
+        'OpenClaw DeepSeek proxy stream failed',
+      );
+      writeOpenAiSse(res, {
+        ...baseChunk,
+        choices: [],
+        error: {
+          message: publicAiErrorMessage(error),
+          code: error?.code || 'OPENCLAW_DEEPSEEK_PROXY_ERROR',
+        },
+      });
+      res.write('data: [DONE]\n\n');
+    } finally {
+      res.end();
+    }
+  }),
+);
 
 app.post(
   '/codex-deepseek/v1/responses',
@@ -1333,6 +1846,106 @@ app.post(
   }),
 );
 
+app.use(
+  '/api/openclaw/runtime/files',
+  express.static(openClawRuntimeUpdatesDir, {
+    fallthrough: false,
+    immutable: true,
+    maxAge: '7d',
+    setHeaders(res) {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
+  }),
+);
+
+app.get(
+  '/api/openclaw/runtime/manifest',
+  asyncHandler(async (req, res) => {
+    const platform = readText(req.query.platform);
+    const currentVersion = readText(req.query.currentVersion);
+    const appVersion = readText(req.query.appVersion);
+
+    let manifest;
+    try {
+      manifest = await readJsonFile(openClawRuntimeManifestPath);
+    } catch (error) {
+      logger.info(
+        { manifestPath: openClawRuntimeManifestPath, error: String(error) },
+        'OpenClaw runtime manifest unavailable',
+      );
+      return jsonResponse(res, 200, {
+        success: true,
+        schema: 1,
+        updateAvailable: false,
+        reason: 'manifest-unavailable',
+        platform,
+        currentVersion,
+        appVersion,
+      });
+    }
+
+    const latest = manifest.latest && typeof manifest.latest === 'object'
+      ? manifest.latest
+      : manifest;
+    const platforms = latest.platforms && typeof latest.platforms === 'object'
+      ? latest.platforms
+      : {};
+    const platformRelease = platform ? platforms[platform] : null;
+    const version = readText(latest.version || manifest.version);
+
+    if (!platform || !platformRelease || typeof platformRelease !== 'object') {
+      return jsonResponse(res, 200, {
+        success: true,
+        schema: Number(manifest.schema || 1),
+        channel: readText(manifest.channel || latest.channel || 'stable'),
+        updateAvailable: false,
+        reason: platform ? 'platform-unavailable' : 'platform-required',
+        platform,
+        currentVersion,
+        appVersion,
+        latestVersion: version,
+      });
+    }
+
+    const downloadUrl = absolutizeOpenClawRuntimeUrl(
+      req,
+      platformRelease.archiveUrl || platformRelease.url || platformRelease.fileName,
+    );
+    const release = {
+      version,
+      channel: readText(manifest.channel || latest.channel || 'stable'),
+      minAppVersion: readText(latest.minAppVersion || platformRelease.minAppVersion),
+      notes: readText(latest.notes || platformRelease.notes),
+      nodeExecutable: readText(
+        platformRelease.nodeExecutable || latest.nodeExecutable || 'node/bin/node',
+      ),
+      cliEntrypoint: readText(
+        platformRelease.cliEntrypoint || latest.cliEntrypoint || 'openclaw/openclaw.mjs',
+      ),
+      defaultPort: Number(latest.defaultPort || manifest.defaultPort || 18789),
+      defaultModel: readText(latest.defaultModel || manifest.defaultModel || 'openclaw/default'),
+      defaultModelOverride: readText(latest.defaultModelOverride || manifest.defaultModelOverride),
+      gatewayArgs: Array.isArray(latest.gatewayArgs)
+        ? latest.gatewayArgs.map((item) => String(item))
+        : ['gateway', '--port', '{port}', '--force'],
+      archiveUrl: downloadUrl,
+      sha256: readText(platformRelease.sha256),
+      size: Number(platformRelease.size || 0),
+    };
+
+    jsonResponse(res, 200, {
+      success: true,
+      schema: Number(manifest.schema || 1),
+      updateAvailable: Boolean(version && downloadUrl && version !== currentVersion),
+      platform,
+      currentVersion,
+      appVersion,
+      latest: release,
+      generatedAt: readText(manifest.generatedAt || latest.generatedAt),
+    });
+  }),
+);
+
 app.get('/health', (_req, res) => {
   const codexRuntime = createCodexDeepSeekRuntime();
   const libreChatRuntime = createLibreChatAgentRuntime();
@@ -1351,10 +1964,33 @@ app.get('/health', (_req, res) => {
     openClawAgentChatEnabled: openClawRuntime.enabled,
     openClawAgentProvider: openClawRuntime.provider,
     openClawAgentReason: openClawRuntime.enabled ? undefined : openClawRuntime.reason,
+    requireMemberForAi,
+    memberMonthlyLimit,
+    freeMonthlyLimit,
+    deepseekMaxCompletionTokens,
+    openClawRuntimeUpdatesDir,
+    openClawRuntimeManifestConfigured: fs.existsSync(openClawRuntimeManifestPath),
     cbetaApiRoot,
     timestamp: nowIso(),
   });
 });
+
+app.get(
+  '/api/ai/quota',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, { username: req.query.username });
+    const budget = enforceTokenBudget(user, 0);
+    const usage = usageFor(user.userId);
+    jsonResponse(res, 200, {
+      success: true,
+      isMember: user.isMember,
+      monthlyLimit: budget.limit,
+      usedTokens: usage.used,
+      remainingTokens: Math.max(0, budget.limit - usage.used),
+      month: usage.month,
+    });
+  }),
+);
 
 app.post(
   '/api/agent/chat',
@@ -1365,8 +2001,10 @@ app.post(
     }
 
     const user = await resolveUser(req, req.body || {});
-    const estimated = estimateTokens(message) + 600;
+    const promptEstimate = estimateTokens(message);
+    const estimated = promptEstimate + 600;
     const budget = enforceTokenBudget(user, estimated);
+    const maxCompletionTokens = completionBudgetFor(budget, promptEstimate);
     const createdAt = nowIso();
     const conversationId = safeUserText(req.body?.conversationId) || crypto.randomUUID();
     const mode = normalizeAgentMode(req.body?.mode);
@@ -1435,6 +2073,7 @@ app.post(
         conversationId,
         mode,
         signal: controller.signal,
+        maxCompletionTokens,
       });
       const usage = {
         promptTokens: aiResult.usage?.promptTokens || estimateTokens(JSON.stringify(modelMessages)),
@@ -1512,16 +2151,19 @@ app.get(
     writeSse(res, 'run.started', { runId: run.id, conversationId: run.conversation_id });
 
     try {
-      const estimated = 600;
-      const budget = enforceTokenBudget(user, estimated);
       let streamedText = '';
       const modelMessages = buildAgentMessages(run.conversation_id);
+      const promptEstimate = estimateTokens(JSON.stringify(modelMessages));
+      const estimated = promptEstimate + 600;
+      const budget = enforceTokenBudget(user, estimated);
+      const maxCompletionTokens = completionBudgetFor(budget, promptEstimate);
       const aiResult = await runAgentModel({
         messages: modelMessages,
         user,
         conversationId: run.conversation_id,
         mode: run.mode,
         signal: controller.signal,
+        maxCompletionTokens,
         callbacks: {
           onStep: (step) => writeSse(res, 'tool.call.completed', {
             tool: 'agent.step',
@@ -1630,8 +2272,10 @@ app.post(
     }
 
     const user = await resolveUser(req, req.body || {});
-    const estimated = estimateTokens(message) + 600;
+    const promptEstimate = estimateTokens(message);
+    const estimated = promptEstimate + 600;
     const budget = enforceTokenBudget(user, estimated);
+    const maxCompletionTokens = completionBudgetFor(budget, promptEstimate);
     const createdAt = nowIso();
     const conversationId = safeUserText(req.body?.conversationId) || crypto.randomUUID();
     let conversation = statements.getConversation.get(conversationId, user.userId);
@@ -1704,7 +2348,7 @@ app.post(
         provider = codexRuntime.provider;
         aiResult = await callCodexSdkDeepSeek(modelMessages);
       } else {
-        aiResult = await callDeepSeek(modelMessages);
+        aiResult = await callDeepSeek(modelMessages, { maxCompletionTokens });
       }
     } catch (error) {
       if (libreChatRuntime.enabled) {
@@ -1718,16 +2362,16 @@ app.post(
             if (isDeepSeekQuotaError(codexError)) throw codexError;
             logger.warn({ error: String(codexError) }, 'Codex SDK chat failed, falling back to DeepSeek direct');
             provider = 'deepseek';
-            aiResult = await callDeepSeek(modelMessages);
+            aiResult = await callDeepSeek(modelMessages, { maxCompletionTokens });
           }
         } else {
-          aiResult = await callDeepSeek(modelMessages);
+          aiResult = await callDeepSeek(modelMessages, { maxCompletionTokens });
         }
       } else {
         if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
         logger.warn({ error: String(error) }, 'Codex SDK chat failed, falling back to DeepSeek direct');
         provider = 'deepseek';
-        aiResult = await callDeepSeek(modelMessages);
+        aiResult = await callDeepSeek(modelMessages, { maxCompletionTokens });
       }
     }
     const usage = {
@@ -1786,8 +2430,10 @@ app.post('/api/ai/chat/stream', async (req, res) => {
     }
 
     const user = await resolveUser(req, req.body || {});
-    const estimated = estimateTokens(message) + 600;
+    const promptEstimate = estimateTokens(message);
+    const estimated = promptEstimate + 600;
     const budget = enforceTokenBudget(user, estimated);
+    const maxCompletionTokens = completionBudgetFor(budget, promptEstimate);
     const createdAt = nowIso();
     const conversationId = safeUserText(req.body?.conversationId) || crypto.randomUUID();
     let conversation = statements.getConversation.get(conversationId, user.userId);
@@ -1878,6 +2524,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         });
       } else {
         aiResult = await callDeepSeekStream(modelMessages, {
+          maxCompletionTokens,
           onToken: (token) => writeSse(res, 'delta', { text: token }),
         });
       }
@@ -1908,11 +2555,13 @@ app.post('/api/ai/chat/stream', async (req, res) => {
               model: responseModel,
             });
             aiResult = await callDeepSeekStream(modelMessages, {
+              maxCompletionTokens,
               onToken: (token) => writeSse(res, 'delta', { text: token }),
             });
           }
         } else {
           aiResult = await callDeepSeekStream(modelMessages, {
+            maxCompletionTokens,
             onToken: (token) => writeSse(res, 'delta', { text: token }),
           });
         }
@@ -1927,6 +2576,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
           model: responseModel,
         });
         aiResult = await callDeepSeekStream(modelMessages, {
+          maxCompletionTokens,
           onToken: (token) => writeSse(res, 'delta', { text: token }),
         });
       }
