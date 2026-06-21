@@ -7,6 +7,7 @@ import { generateUserNo } from './src/services/external-numbers.js';
 import { serializeAccountUser } from './src/contracts/account-user.js';
 
 const DEFAULT_WORKER_URL = 'https://api.ombhrum.com';
+const DEFAULT_WEB_APP_URL = 'https://ombhrum.com';
 
 function trimTrailingSlash(value) {
   return String(value || '').replace(/\/+$/, '');
@@ -18,6 +19,19 @@ function buildUrl(baseUrl, path) {
 
 function getWorkerUrl(env) {
   return trimTrailingSlash(env.WORKER_URL || DEFAULT_WORKER_URL);
+}
+
+function getWebAppUrl(env) {
+  return trimTrailingSlash(
+    env.ALIPAY_WEB_APP_URL ||
+      env.WEB_APP_URL ||
+      env.FRONTEND_URL ||
+      DEFAULT_WEB_APP_URL
+  );
+}
+
+function createAlipayWebRedirectUrl(env) {
+  return new URL('/index.html', getWebAppUrl(env) + '/');
 }
 
 function getAlipayOAuthRedirectUrl(env, callbackType) {
@@ -920,14 +934,14 @@ async function handleAlipayCallback(request, env) {
     });
 
     if (!authCode) {
-      const redirectUrl = new URL('/index.html', request.url);
+      const redirectUrl = createAlipayWebRedirectUrl(env);
       redirectUrl.hash = 'error=missing_auth_code&error_message=缺少授权码';
       return Response.redirect(redirectUrl.toString(), 302);
     }
 
     if (authCode.length < 10) {
       console.error('支付宝回调授权码格式无效:', authCode);
-      const redirectUrl = new URL('/index.html', request.url);
+      const redirectUrl = createAlipayWebRedirectUrl(env);
       redirectUrl.hash = 'error=invalid_auth_code&error_message=授权码格式无效';
       return Response.redirect(redirectUrl.toString(), 302);
     }
@@ -938,7 +952,7 @@ async function handleAlipayCallback(request, env) {
       ).bind(state).first();
       if (!storedState) {
         console.error('无效的state参数:', state);
-        const redirectUrl = new URL('/index.html', request.url);
+        const redirectUrl = createAlipayWebRedirectUrl(env);
         redirectUrl.hash = 'error=invalid_state&error_message=登录状态无效，请重新登录';
         return Response.redirect(redirectUrl.toString(), 302);
       }
@@ -965,7 +979,7 @@ async function handleAlipayCallback(request, env) {
 
     if (!alipayUser || !alipayUser.user_id) {
       console.error('支付宝用户信息不完整:', alipayUser);
-      const redirectUrl = new URL('/index.html', request.url);
+      const redirectUrl = createAlipayWebRedirectUrl(env);
       redirectUrl.hash = 'error=invalid_alipay_user&error_message=支付宝用户信息不完整';
       return Response.redirect(redirectUrl.toString(), 302);
     }
@@ -974,14 +988,14 @@ async function handleAlipayCallback(request, env) {
     if (user) {
       await backfillAlipayIdentity(env, user, alipayUser, alipayUser);
       const token = await generateToken({ id: user.id, username: user.username }, env);
-      const redirectUrl = new URL('/index.html', request.url);
+      const redirectUrl = createAlipayWebRedirectUrl(env);
       redirectUrl.hash = `token=${token}&username=${encodeURIComponent(user.username)}&login_method=alipay&${alipayCallbackUserParams(user, alipayUser)}`;
 
       console.log('支付宝登录成功，直接跳转到Flutter主应用:', redirectUrl.toString());
       return Response.redirect(redirectUrl.toString(), 302);
     }
 
-    const redirectUrl = new URL('/index.html', request.url);
+    const redirectUrl = createAlipayWebRedirectUrl(env);
     redirectUrl.hash = `alipay_auth_code=${authCode}&${alipayRegistrationParams(alipayUser)}&needs_registration=true&login_method=alipay`;
 
     console.log('新用户或未注册，直接跳转到Flutter主应用注册页面:', redirectUrl.toString());
@@ -989,7 +1003,7 @@ async function handleAlipayCallback(request, env) {
 
   } catch (error) {
     console.error('支付宝回调处理失败:', error);
-    const redirectUrl = new URL('/index.html', request.url);
+    const redirectUrl = createAlipayWebRedirectUrl(env);
     redirectUrl.hash = `error=callback_failed&error_message=${encodeURIComponent(error.message || '支付宝登录处理失败')}`;
     return Response.redirect(redirectUrl.toString(), 302);
   }
