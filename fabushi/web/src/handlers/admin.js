@@ -37,6 +37,7 @@ export async function handleCheckAdminStatus(request, env, db) {
     phoneNumber: user.phone_number || null,
     firebaseUid: user.firebase_uid || null,
     hasPassword: Boolean(user.password_hash && user.salt),
+    alipayProviderSubject: user.alipay_user_id || null,
     alipayUserId: user.alipay_user_id || null,
     alipayNickname: user.alipay_nickname || null,
     alipayAvatar: user.alipay_avatar || null,

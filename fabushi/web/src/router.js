@@ -34,6 +34,7 @@ import { routeAuthRequest } from './routes/auth-routes.js';
 import { routeMembershipRequest } from './routes/membership-routes.js';
 import { routeMeditationRequest } from './routes/meditation-routes.js';
 import { verifyToken } from '../auth-utils.js';
+import { CORS_HEADERS } from './config/constants.js';
 import { jsonResponse } from './utils/response.js';
 
 function jsonStringifyAscii(value) {
@@ -86,7 +87,7 @@ export async function route(request, env, db, ctx) {
   const method = request.method;
 
   if (method === 'OPTIONS') {
-    return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*' } });
+    return new Response(null, { headers: CORS_HEADERS });
   }
 
   if (pathname === '/health') {

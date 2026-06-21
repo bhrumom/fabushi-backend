@@ -189,8 +189,8 @@ export class DatabaseService {
 
     for (const identifier of identifiers) {
       const user = await this.db.prepare(
-        'SELECT * FROM users WHERE alipay_user_id = ? OR alipay_open_id = ?'
-      ).bind(identifier, identifier).first();
+        'SELECT * FROM users WHERE alipay_user_id = ?'
+      ).bind(identifier).first();
       if (user) return user;
     }
 

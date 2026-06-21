@@ -3,6 +3,8 @@
 import { generateToken, verifyToken, jsonResponse, verifyPassword, createPasswordHash } from './auth-utils.js';
 import { importPrivateKey, importPublicKey, generateSign, verifySign } from './alipay-utils.js';
 import { calculateTrialEndDate } from './stripe-config.js';
+import { generateUserNo } from './src/services/external-numbers.js';
+import { serializeAccountUser } from './src/contracts/account-user.js';
 
 const DEFAULT_WORKER_URL = 'https://api.ombhrum.com';
 
@@ -221,11 +223,13 @@ async function getAlipayUserInfo(authCode, env) {
     }
 
     const { access_token, user_id, alipay_user_id, open_id } = tokenResult;
+    const subject = getAlipayProviderSubject(tokenResult);
     console.log('成功获取access_token和支付宝身份:', {
-      access_token,
-      user_id,
-      alipay_user_id,
-      open_id
+      hasAccessToken: !!access_token,
+      providerSubjectType: subject.type,
+      hasUserId: !!user_id,
+      hasOpenId: !!open_id,
+      hasDeprecatedAlipayUserId: !!alipay_user_id
     });
 
     // 第二步：使用access_token获取用户详细信息
@@ -236,9 +240,12 @@ async function getAlipayUserInfo(authCode, env) {
       console.error('获取用户信息失败:', userInfoResult);
       // 如果获取用户信息失败，但至少返回了基本的user_id信息
       return {
-        user_id: user_id,
-        alipay_user_id: alipay_user_id || null,
+        user_id: subject.value,
+        provider_subject: subject.value,
+        subject_type: subject.type,
+        legacy_user_id: user_id || alipay_user_id || null,
         open_id: open_id || null,
+        alipay_user_id: alipay_user_id || user_id || null,
         nick_name: userInfoResult?.nick_name || '支付宝用户',
         avatar: userInfoResult?.avatar || '',
         province: userInfoResult?.province || '',
@@ -257,9 +264,12 @@ async function getAlipayUserInfo(authCode, env) {
     console.log('成功获取支付宝用户信息:', userInfo);
 
     return {
-      user_id: user_id, // 兼容旧客户端：优先真实 user_id，否则回退 open_id
-      alipay_user_id: alipay_user_id || null,
+      user_id: subject.value,
+      provider_subject: subject.value,
+      subject_type: subject.type,
+      legacy_user_id: user_id || alipay_user_id || null,
       open_id: open_id || null,
+      alipay_user_id: alipay_user_id || user_id || null,
       nick_name: userInfo.nick_name || '支付宝用户',
       avatar: userInfo.avatar || '',
       province: userInfo.province || '',
@@ -284,42 +294,104 @@ async function getUserById(env, userId) {
   return await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(normalizedUserId).first();
 }
 
-function uniqueAlipayIdentifiers(identity) {
-  const values = [];
-  if (identity && typeof identity === 'object') {
-    values.push(
-      identity.user_id,
-      identity.userId,
-      identity.alipayUserId,
-      identity.alipay_user_id,
-      identity.open_id,
-      identity.openId,
-      identity.alipayOpenId,
-      identity.alipay_open_id
-    );
-  } else {
-    values.push(identity);
+async function getUserByUserNo(env, userNo) {
+  const normalizedUserNo = Number(userNo);
+  if (!Number.isFinite(normalizedUserNo)) return null;
+  return await env.DB.prepare('SELECT * FROM users WHERE user_no = ?').bind(normalizedUserNo).first();
+}
+
+async function generateUniqueAlipayUserNo(env) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const candidate = generateUserNo();
+    const existing = await getUserByUserNo(env, candidate);
+    if (!existing) return candidate;
   }
-  return [...new Set(
-    values
-      .filter((value) => value !== undefined && value !== null)
-      .map((value) => String(value).trim())
-      .filter(Boolean)
-  )];
+  throw new Error('无法生成可用的 9 位用户号');
 }
 
-function getPrimaryAlipayUserId(identity) {
-  if (!identity || typeof identity !== 'object') return identity ? String(identity) : null;
-  return identity.alipay_user_id || identity.alipayUserId || identity.user_id || identity.userId || null;
+function normalizeIdentityValue(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized || null;
 }
 
-function getAlipayOpenId(identity) {
-  if (!identity || typeof identity !== 'object') return null;
-  return identity.open_id || identity.openId || identity.alipayOpenId || identity.alipay_open_id || null;
+function getAlipayProviderSubject(identity) {
+  if (!identity || typeof identity !== 'object') {
+    return {
+      value: normalizeIdentityValue(identity),
+      type: 'user_id',
+      legacySubject: null
+    };
+  }
+
+  const explicitSubject = normalizeIdentityValue(
+    identity.provider_subject ||
+      identity.providerSubject ||
+      identity.alipayProviderSubject
+  );
+  if (explicitSubject) {
+    return {
+      value: explicitSubject,
+      type: identity.subject_type || identity.subjectType || identity.alipaySubjectType || 'provider_subject',
+      legacySubject: normalizeIdentityValue(identity.legacy_user_id || identity.legacyUserId)
+    };
+  }
+
+  const openId = normalizeIdentityValue(
+    identity.open_id ||
+      identity.openId ||
+      identity.alipayOpenId ||
+      identity.alipay_open_id
+  );
+  const userId = normalizeIdentityValue(
+    identity.user_id ||
+      identity.userId ||
+      identity.alipayUserId ||
+      identity.alipay_user_id
+  );
+
+  if (openId) {
+    return {
+      value: openId,
+      type: 'open_id',
+      legacySubject: userId && userId !== openId ? userId : null
+    };
+  }
+
+  return {
+    value: userId,
+    type: userId ? 'user_id' : null,
+    legacySubject: null
+  };
+}
+
+function getAlipayLookupSubjects(identity) {
+  const subject = getAlipayProviderSubject(identity);
+  return [subject.value, subject.legacySubject]
+    .map(normalizeIdentityValue)
+    .filter((value, index, values) => value && values.indexOf(value) === index);
+}
+
+function getAlipayPrimarySubject(identity) {
+  return getAlipayProviderSubject(identity).value;
+}
+
+function getAlipayRegistrationIdentity(payload) {
+  return {
+    provider_subject: payload.alipayProviderSubject || payload.providerSubject || payload.alipayUserId,
+    subject_type: payload.alipaySubjectType || payload.subjectType || (payload.alipayProviderSubject ? 'provider_subject' : 'user_id'),
+    legacy_user_id: payload.alipayLegacyUserId || payload.alipay_legacy_user_id || payload.legacyUserId || null
+  };
+}
+
+function sanitizeSyntheticEmailSubject(value) {
+  return String(value || 'unknown')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 80);
 }
 
 async function getUserByAlipayBinding(env, identity) {
-  const identifiers = uniqueAlipayIdentifiers(identity);
+  const identifiers = getAlipayLookupSubjects(identity);
   if (identifiers.length === 0) return null;
 
   for (const identifier of identifiers) {
@@ -340,8 +412,8 @@ async function getUserByAlipayBinding(env, identity) {
 
   for (const identifier of identifiers) {
     const user = await env.DB.prepare(
-      'SELECT * FROM users WHERE alipay_user_id = ? OR alipay_open_id = ?'
-    ).bind(identifier, identifier).first();
+      'SELECT * FROM users WHERE alipay_user_id = ?'
+    ).bind(identifier).first();
     if (user) return user;
   }
 
@@ -351,8 +423,32 @@ async function getUserByAlipayBinding(env, identity) {
 async function getUserIdentityByUsername(env, username) {
   if (!username) return null;
   return await env.DB.prepare(
-    'SELECT id, username, email FROM users WHERE username = ?'
+    'SELECT * FROM users WHERE username = ?'
   ).bind(username).first();
+}
+
+function alipayCallbackUserParams(user, alipayUser) {
+  const userNo = user.user_no ?? user.id ?? '';
+  const subject = getAlipayProviderSubject(alipayUser);
+  return [
+    `user_no=${encodeURIComponent(String(userNo))}`,
+    `alipay_provider_subject=${encodeURIComponent(subject.value || '')}`,
+    `alipay_subject_type=${encodeURIComponent(subject.type || '')}`,
+    `alipay_user_id=${encodeURIComponent(subject.value || '')}`,
+    `alipay_nickname=${encodeURIComponent(alipayUser.nick_name || user.alipay_nickname || user.nickname || '')}`,
+    `alipay_avatar=${encodeURIComponent(alipayUser.avatar || user.alipay_avatar || user.avatar || '')}`,
+  ].join('&');
+}
+
+function alipayRegistrationParams(alipayUser) {
+  const subject = getAlipayProviderSubject(alipayUser);
+  return [
+    `alipay_provider_subject=${encodeURIComponent(subject.value || '')}`,
+    `alipay_subject_type=${encodeURIComponent(subject.type || '')}`,
+    `alipay_user_id=${encodeURIComponent(subject.value || '')}`,
+    `alipay_nickname=${encodeURIComponent(alipayUser.nick_name || '')}`,
+    `alipay_avatar=${encodeURIComponent(alipayUser.avatar || '')}`,
+  ].join('&');
 }
 
 async function writeEmailUsernameMapping(env, email, user) {
@@ -371,23 +467,18 @@ async function writeAlipayBinding(env, alipayUserId, user, replaceExisting = fal
 }
 
 async function writeAlipayBindings(env, identity, user) {
-  for (const identifier of uniqueAlipayIdentifiers(identity)) {
-    await writeAlipayBinding(env, identifier, user, true);
-  }
+  const providerSubject = getAlipayPrimarySubject(identity);
+  await writeAlipayBinding(env, providerSubject, user, true);
 }
 
 async function backfillAlipayIdentity(env, user, identity, profile = {}) {
   if (!user?.id) return;
 
   const updates = {};
-  const primaryUserId = getPrimaryAlipayUserId(identity);
-  const openId = getAlipayOpenId(identity);
+  const primaryUserId = getAlipayPrimarySubject(identity);
 
   if (primaryUserId && !user.alipay_user_id) {
     updates.alipay_user_id = primaryUserId;
-  }
-  if (openId && !user.alipay_open_id) {
-    updates.alipay_open_id = openId;
   }
   if (profile.nick_name && !user.alipay_nickname) {
     updates.alipay_nickname = profile.nick_name;
@@ -395,7 +486,7 @@ async function backfillAlipayIdentity(env, user, identity, profile = {}) {
   if (profile.avatar && !user.alipay_avatar) {
     updates.alipay_avatar = profile.avatar;
   }
-  if ((primaryUserId || openId) && !user.alipay_bound_at) {
+  if (primaryUserId && !user.alipay_bound_at) {
     updates.alipay_bound_at = new Date().toISOString();
   }
 
@@ -456,19 +547,23 @@ async function handleAlipayLogin(request, env) {
     if (user) {
       await backfillAlipayIdentity(env, user, alipayUser, alipayUser);
       const token = await generateToken({ id: user.id, username: user.username }, env);
+      const subject = getAlipayProviderSubject(alipayUser);
       return jsonResponse({
         success: true,
         token,
         username: user.username,
         userId: user.id,
+        userNo: user.user_no ?? user.id ?? null,
         isNewUser: false,
         loginMethod: 'alipay',
         alipayUser: {
-          userId: alipayUser.user_id,
-          openId: alipayUser.open_id,
+          userId: subject.value,
+          providerSubject: subject.value,
+          subjectType: subject.type,
           nickname: alipayUser.nick_name,
           avatar: alipayUser.avatar
-        }
+        },
+        user: serializeAccountUser(user)
       });
     }
 
@@ -488,26 +583,24 @@ async function handleAlipayLogin(request, env) {
 // 注册新用户（支持一键注册）
 async function registerAlipayUser(request, env) {
   try {
-    const { username, email, password, captcha, alipayUserId, alipayOpenId, alipayNickname, alipayAvatar, oneClick } = await request.json();
+    const payload = await request.json();
+    const { username, email, password, captcha, alipayNickname, alipayAvatar, oneClick } = payload;
+    const alipayIdentity = getAlipayRegistrationIdentity(payload);
+    const alipayProviderSubject = getAlipayPrimarySubject(alipayIdentity);
+    const alipaySubjectType = getAlipayProviderSubject(alipayIdentity).type;
 
     // 一键注册模式：自动生成用户名和邮箱
     if (oneClick === true) {
-      const existingUser = await getUserByAlipayBinding(env, {
-        user_id: alipayUserId,
-        alipayUserId,
-        open_id: alipayOpenId,
-        alipayOpenId,
-      });
+      if (!alipayProviderSubject) {
+        return jsonResponse({ error: '缺少支付宝用户标识' }, 400);
+      }
+
+      const existingUser = await getUserByAlipayBinding(env, alipayIdentity);
       if (existingUser) {
         await backfillAlipayIdentity(
           env,
           existingUser,
-          {
-            user_id: alipayUserId,
-            alipayUserId,
-            open_id: alipayOpenId,
-            alipayOpenId,
-          },
+          alipayIdentity,
           { nick_name: alipayNickname, avatar: alipayAvatar }
         );
         const token = await generateToken({ id: existingUser.id, username: existingUser.username }, env);
@@ -517,9 +610,13 @@ async function registerAlipayUser(request, env) {
           token,
           username: existingUser.username,
           userId: existingUser.id,
+          userNo: existingUser.user_no ?? existingUser.id ?? null,
           email: existingUser.email,
           isNewUser: false,
-          isOneClick: true
+          isOneClick: true,
+          alipayProviderSubject,
+          alipaySubjectType,
+          user: serializeAccountUser(existingUser)
         });
       }
 
@@ -541,17 +638,19 @@ async function registerAlipayUser(request, env) {
       }
 
       // 生成唯一邮箱（添加时间戳确保唯一性）
-      const autoEmail = `alipay_${alipayUserId}_${Date.now()}@alipay.user`;
+      const autoEmail = `alipay_${sanitizeSyntheticEmailSubject(alipayProviderSubject)}_${Date.now()}@alipay.user`;
 
       // 创建新用户
       const creds = await createPasswordHash('alipay_default_password'); // 默认密码
+      const userNo = await generateUniqueAlipayUserNo(env);
 
       const userData = {
         username: autoUsername,
+        userNo,
         email: autoEmail,
         password: creds.passwordHash,
-        alipayUserId: alipayUserId,
-        alipayOpenId: alipayOpenId,
+        alipayProviderSubject,
+        alipaySubjectType,
         alipayNickname: alipayNickname,
         alipayAvatar: alipayAvatar,
         alipayBoundAt: new Date().toISOString(),
@@ -564,17 +663,17 @@ async function registerAlipayUser(request, env) {
 
       await env.DB.prepare(`
         INSERT INTO users (
-          username, email, password_hash, salt, iterations, algo,
+          user_no, username, email, password_hash, salt, iterations, algo,
           email_verified, membership_type, membership_expires_at,
-          alipay_user_id, alipay_open_id, alipay_nickname, alipay_avatar,
+          alipay_user_id, alipay_nickname, alipay_avatar,
           created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
-        autoUsername, autoEmail, creds.passwordHash, creds.salt, creds.iterations, creds.algo,
+        userNo, autoUsername, autoEmail, creds.passwordHash, creds.salt, creds.iterations, creds.algo,
         1,
         'trial',
         calculateTrialEndDate().toISOString(),
-        alipayUserId, alipayOpenId || null, alipayNickname || '支付宝用户', alipayAvatar || null,
+        alipayProviderSubject, alipayNickname || '支付宝用户', alipayAvatar || null,
         new Date().toISOString(), new Date().toISOString()
       ).run();
 
@@ -586,12 +685,7 @@ async function registerAlipayUser(request, env) {
       await writeEmailUsernameMapping(env, autoEmail, createdUser);
       await writeAlipayBindings(
         env,
-        {
-          user_id: alipayUserId,
-          alipayUserId,
-          open_id: alipayOpenId,
-          alipayOpenId,
-        },
+        alipayIdentity,
         createdUser
       );
 
@@ -603,8 +697,12 @@ async function registerAlipayUser(request, env) {
         token,
         username: createdUser.username,
         userId: createdUser.id,
+        userNo: createdUser.user_no ?? userNo,
         email: createdUser.email,
-        isOneClick: true
+        isOneClick: true,
+        alipayProviderSubject,
+        alipaySubjectType,
+        user: serializeAccountUser(createdUser)
       });
     }
 
@@ -628,6 +726,10 @@ async function registerAlipayUser(request, env) {
       return jsonResponse({ error: '请输入有效的验证码' }, 400);
     }
 
+    if (!alipayProviderSubject) {
+      return jsonResponse({ error: '缺少支付宝用户标识' }, 400);
+    }
+
     const existingEmail = await env.DB.prepare(
       'SELECT user_id, username FROM email_username_mapping WHERE email = ?'
     ).bind(normalizedEmail).first();
@@ -635,29 +737,25 @@ async function registerAlipayUser(request, env) {
       return jsonResponse({ error: '该邮箱已被注册' }, 400);
     }
 
-    const existingAlipay = await getUserByAlipayBinding(env, {
-      user_id: alipayUserId,
-      alipayUserId,
-      open_id: alipayOpenId,
-      alipayOpenId,
-    });
+    const existingAlipay = await getUserByAlipayBinding(env, alipayIdentity);
     if (existingAlipay) {
       return jsonResponse({ error: '该支付宝账号已注册其他用户' }, 400);
     }
 
     const creds = await createPasswordHash(password);
+    const userNo = await generateUniqueAlipayUserNo(env);
 
     await env.DB.prepare(`
       INSERT INTO users (
-        username, email, password_hash, salt, iterations, algo,
+        user_no, username, email, password_hash, salt, iterations, algo,
         email_verified, membership_type,
-        alipay_user_id, alipay_open_id, alipay_nickname, alipay_avatar,
+        alipay_user_id, alipay_nickname, alipay_avatar,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      normalizedUsername, normalizedEmail, creds.passwordHash, creds.salt, creds.iterations, creds.algo,
+      userNo, normalizedUsername, normalizedEmail, creds.passwordHash, creds.salt, creds.iterations, creds.algo,
       1, 'free',
-      alipayUserId, alipayOpenId || null, alipayNickname || '支付宝用户', alipayAvatar || null,
+      alipayProviderSubject, alipayNickname || '支付宝用户', alipayAvatar || null,
       new Date().toISOString(), new Date().toISOString()
     ).run();
 
@@ -669,12 +767,7 @@ async function registerAlipayUser(request, env) {
     await writeEmailUsernameMapping(env, normalizedEmail, createdUser);
     await writeAlipayBindings(
       env,
-      {
-        user_id: alipayUserId,
-        alipayUserId,
-        open_id: alipayOpenId,
-        alipayOpenId,
-      },
+      alipayIdentity,
       createdUser
     );
 
@@ -686,7 +779,11 @@ async function registerAlipayUser(request, env) {
       token,
       username: createdUser.username,
       userId: createdUser.id,
-      email: createdUser.email
+      userNo: createdUser.user_no ?? userNo,
+      email: createdUser.email,
+      alipayProviderSubject,
+      alipaySubjectType,
+      user: serializeAccountUser(createdUser)
     });
 
   } catch (error) {
@@ -698,9 +795,13 @@ async function registerAlipayUser(request, env) {
 // 发送注册验证码
 async function sendRegistrationCaptcha(request, env) {
   try {
-    const { alipayUserId, alipayOpenId, username, password, nickname, avatar, email } = await request.json();
+    const payload = await request.json();
+    const { username, password, nickname, avatar, email } = payload;
+    const alipayIdentity = getAlipayRegistrationIdentity(payload);
+    const alipayProviderSubject = getAlipayPrimarySubject(alipayIdentity);
+    const alipaySubjectType = getAlipayProviderSubject(alipayIdentity).type;
 
-    if (!alipayUserId || !username || !password) {
+    if (!alipayProviderSubject || !username || !password) {
       return jsonResponse({ error: '缺少必要参数' }, 400);
     }
 
@@ -723,30 +824,26 @@ async function sendRegistrationCaptcha(request, env) {
       }
     }
 
-    const existingBinding = await getUserByAlipayBinding(env, {
-      user_id: alipayUserId,
-      alipayUserId,
-      open_id: alipayOpenId,
-      alipayOpenId,
-    });
+    const existingBinding = await getUserByAlipayBinding(env, alipayIdentity);
     if (existingBinding) {
       return jsonResponse({ error: '该支付宝账号已注册其他用户' }, 400);
     }
 
     const creds = await createPasswordHash(password);
+    const userNo = await generateUniqueAlipayUserNo(env);
     const trialEndDate = calculateTrialEndDate();
 
     await env.DB.prepare(`
       INSERT INTO users (
-        username, email, password_hash, salt, iterations, algo,
+        user_no, username, email, password_hash, salt, iterations, algo,
         email_verified, membership_type, membership_expires_at,
-        alipay_user_id, alipay_open_id, alipay_nickname, alipay_avatar,
+        alipay_user_id, alipay_nickname, alipay_avatar,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      normalizedUsername, normalizedEmail, creds.passwordHash, creds.salt, creds.iterations, creds.algo,
+      userNo, normalizedUsername, normalizedEmail, creds.passwordHash, creds.salt, creds.iterations, creds.algo,
       normalizedEmail ? 1 : 0, 'trial', trialEndDate.toISOString(),
-      alipayUserId, alipayOpenId || null, nickname || '支付宝用户', avatar || '',
+      alipayProviderSubject, nickname || '支付宝用户', avatar || '',
       new Date().toISOString(), new Date().toISOString()
     ).run();
 
@@ -760,12 +857,7 @@ async function sendRegistrationCaptcha(request, env) {
     }
     await writeAlipayBindings(
       env,
-      {
-        user_id: alipayUserId,
-        alipayUserId,
-        open_id: alipayOpenId,
-        alipayOpenId,
-      },
+      alipayIdentity,
       createdUser
     );
 
@@ -774,6 +866,10 @@ async function sendRegistrationCaptcha(request, env) {
       token,
       username: createdUser.username,
       userId: createdUser.id,
+      userNo: createdUser.user_no ?? userNo,
+      alipayProviderSubject,
+      alipaySubjectType,
+      user: serializeAccountUser(createdUser),
       message: '注册成功，支付宝账号已注册'
     }, 201);
 
@@ -879,14 +975,14 @@ async function handleAlipayCallback(request, env) {
       await backfillAlipayIdentity(env, user, alipayUser, alipayUser);
       const token = await generateToken({ id: user.id, username: user.username }, env);
       const redirectUrl = new URL('/index.html', request.url);
-      redirectUrl.hash = `token=${token}&username=${user.username}&login_method=alipay`;
+      redirectUrl.hash = `token=${token}&username=${encodeURIComponent(user.username)}&login_method=alipay&${alipayCallbackUserParams(user, alipayUser)}`;
 
       console.log('支付宝登录成功，直接跳转到Flutter主应用:', redirectUrl.toString());
       return Response.redirect(redirectUrl.toString(), 302);
     }
 
     const redirectUrl = new URL('/index.html', request.url);
-    redirectUrl.hash = `alipay_auth_code=${authCode}&alipay_user_id=${alipayUser.user_id}&alipay_open_id=${encodeURIComponent(alipayUser.open_id || '')}&alipay_nickname=${encodeURIComponent(alipayUser.nick_name || '')}&alipay_avatar=${encodeURIComponent(alipayUser.avatar || '')}&needs_registration=true&login_method=alipay`;
+    redirectUrl.hash = `alipay_auth_code=${authCode}&${alipayRegistrationParams(alipayUser)}&needs_registration=true&login_method=alipay`;
 
     console.log('新用户或未注册，直接跳转到Flutter主应用注册页面:', redirectUrl.toString());
     return Response.redirect(redirectUrl.toString(), 302);
@@ -940,11 +1036,11 @@ async function handleMacOSAlipayCallback(request, env) {
     if (user) {
       await backfillAlipayIdentity(env, user, alipayUser, alipayUser);
       const token = await generateToken({ id: user.id, username: user.username }, env);
-      const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state || ''}&token=${token}&username=${user.username}&isNewUser=false&loginMethod=alipay&alipay_user_id=${alipayUser.user_id}&alipay_open_id=${encodeURIComponent(alipayUser.open_id || '')}&alipay_nickname=${encodeURIComponent(alipayUser.nick_name || '')}&alipay_avatar=${encodeURIComponent(alipayUser.avatar || '')}`;
+      const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state || ''}&token=${token}&username=${encodeURIComponent(user.username)}&isNewUser=false&loginMethod=alipay&${alipayCallbackUserParams(user, alipayUser)}`;
       return Response.redirect(redirectUrl, 302);
     }
 
-    const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state || ''}&isNewUser=true&needsRegistration=true&loginMethod=alipay&alipay_user_id=${alipayUser.user_id}&alipay_open_id=${encodeURIComponent(alipayUser.open_id || '')}&alipay_nickname=${encodeURIComponent(alipayUser.nick_name || '')}&alipay_avatar=${encodeURIComponent(alipayUser.avatar || '')}`;
+    const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state || ''}&isNewUser=true&needsRegistration=true&loginMethod=alipay&${alipayRegistrationParams(alipayUser)}`;
     return Response.redirect(redirectUrl, 302);
   } catch (error) {
     console.error('macOS 支付宝回调处理失败:', error);
@@ -1042,12 +1138,21 @@ async function getAccessToken(authCode, env) {
       if (tokenResponse.access_token) {
         const alipayUserId = tokenResponse.user_id || null;
         const alipayOpenId = tokenResponse.open_id || null;
+        const deprecatedAlipayUserId = tokenResponse.alipay_user_id || null;
+        const subject = getAlipayProviderSubject({
+          user_id: alipayUserId,
+          open_id: alipayOpenId,
+          alipay_user_id: deprecatedAlipayUserId
+        });
         return {
           code: '10000',
           access_token: tokenResponse.access_token,
-          user_id: alipayUserId || alipayOpenId,
-          alipay_user_id: alipayUserId,
+          user_id: alipayUserId,
           open_id: alipayOpenId,
+          provider_subject: subject.value,
+          subject_type: subject.type,
+          legacy_user_id: subject.legacySubject,
+          alipay_user_id: deprecatedAlipayUserId,
           expires_in: tokenResponse.expires_in,
           refresh_token: tokenResponse.refresh_token,
           re_expires_in: tokenResponse.re_expires_in
@@ -1275,7 +1380,7 @@ async function handleMobileAlipayCallback(request, env) {
 
       console.log('移动端应用支付宝登录成功，用户已注册:', user.username);
 
-      const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state}&token=${token}&username=${user.username}&isNewUser=false&loginMethod=alipay&alipay_user_id=${alipayUser.user_id}&alipay_open_id=${encodeURIComponent(alipayUser.open_id || '')}&alipay_nickname=${encodeURIComponent(alipayUser.nick_name || '')}&alipay_avatar=${encodeURIComponent(alipayUser.avatar || '')}`;
+      const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state}&token=${token}&username=${encodeURIComponent(user.username)}&isNewUser=false&loginMethod=alipay&${alipayCallbackUserParams(user, alipayUser)}`;
 
       console.log('移动端应用支付宝登录成功，重定向到应用:', redirectUrl);
       return Response.redirect(redirectUrl, 302);
@@ -1283,7 +1388,7 @@ async function handleMobileAlipayCallback(request, env) {
 
     console.log('移动端应用新用户或未注册支付宝账号，重定向到应用进行注册');
 
-    const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state}&isNewUser=true&needsRegistration=true&loginMethod=alipay&alipay_user_id=${alipayUser.user_id}&alipay_open_id=${encodeURIComponent(alipayUser.open_id || '')}&alipay_nickname=${encodeURIComponent(alipayUser.nick_name || '')}&alipay_avatar=${encodeURIComponent(alipayUser.avatar || '')}`;
+    const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state}&isNewUser=true&needsRegistration=true&loginMethod=alipay&${alipayRegistrationParams(alipayUser)}`;
 
     console.log('移动端应用新用户，重定向到应用进行注册:', redirectUrl);
     return Response.redirect(redirectUrl, 302);
@@ -1415,20 +1520,24 @@ async function handleAlipaySDKLogin(request, env) {
     if (user) {
       await backfillAlipayIdentity(env, user, alipayUser, alipayUser);
       const token = await generateToken({ id: user.id, username: user.username }, env);
+      const subject = getAlipayProviderSubject(alipayUser);
 
       return jsonResponse({
         success: true,
         token,
         username: user.username,
         userId: user.id,
+        userNo: user.user_no ?? user.id ?? null,
         isNewUser: false,
         loginMethod: 'alipay_sdk',
         alipayUser: {
-          userId: alipayUser.user_id,
-          openId: alipayUser.open_id,
+          userId: subject.value,
+          providerSubject: subject.value,
+          subjectType: subject.type,
           nickname: alipayUser.nick_name,
           avatar: alipayUser.avatar
-        }
+        },
+        user: serializeAccountUser(user)
       });
     }
 
@@ -1437,8 +1546,9 @@ async function handleAlipaySDKLogin(request, env) {
       isNewUser: true,
       needsRegistration: true,
       alipayUser: {
-        userId: alipayUser.user_id,
-        openId: alipayUser.open_id,
+        userId: getAlipayPrimarySubject(alipayUser),
+        providerSubject: getAlipayPrimarySubject(alipayUser),
+        subjectType: getAlipayProviderSubject(alipayUser).type,
         nickname: alipayUser.nick_name,
         avatar: alipayUser.avatar
       }

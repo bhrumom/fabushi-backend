@@ -24,9 +24,9 @@ function createDbEnv() {
                   const record = state.alipayBindings.find((item) => item.alipayUserId === params[0]);
                   return record ? { user_id: record.userId, username: record.username } : null;
                 }
-                if (sql.includes('SELECT * FROM users WHERE alipay_user_id = ? OR alipay_open_id = ?')) {
+                if (sql.includes('SELECT * FROM users WHERE alipay_user_id = ?')) {
                   return Array.from(state.userByUsername.values()).find((user) => (
-                    user.alipay_user_id === params[0] || user.alipay_open_id === params[1]
+                    user.alipay_user_id === params[0]
                   )) || null;
                 }
                 if (sql.includes('SELECT user_id, username FROM email_username_mapping WHERE email = ?')) {
@@ -43,6 +43,10 @@ function createDbEnv() {
                 if (sql.includes('SELECT * FROM users WHERE id = ?')) {
                   return Array.from(state.userByUsername.values()).find((user) => user.id === Number(params[0])) || null;
                 }
+                if (sql.includes('SELECT * FROM users WHERE user_no = ?')) {
+                  const expectedUserNo = Number(params[0]);
+                  return Array.from(state.userByUsername.values()).find((user) => Number(user.user_no) === expectedUserNo) || null;
+                }
                 if (sql.includes('SELECT * FROM users WHERE username = ?')) {
                   return state.userByUsername.get(params[0]) || null;
                 }
@@ -50,19 +54,25 @@ function createDbEnv() {
               },
               async run() {
                 if (sql.includes('INSERT INTO users')) {
-                  const username = params[0];
-                  const email = params[1];
-                  const hasMembershipExpiry = sql.includes('membership_expires_at');
-                  const alipayUserIdIndex = hasMembershipExpiry ? 9 : 8;
-                  const alipayOpenIdIndex = hasMembershipExpiry ? 10 : 9;
+                  const columns = sql
+                    .match(/INSERT INTO users\s*\(([^)]+)\)/s)?.[1]
+                    ?.split(',')
+                    .map((column) => column.trim()) || [];
+                  const row = Object.fromEntries(
+                    columns.map((column, index) => [column, params[index]])
+                  );
+                  const username = row.username;
+                  const email = row.email;
                   state.userByUsername.set(username, {
                     id: nextId++,
+                    user_no: Number(row.user_no),
                     username,
                     email,
-                    membership_type: params[7],
-                    membership_expires_at: hasMembershipExpiry ? params[8] : null,
-                    alipay_user_id: params[alipayUserIdIndex],
-                    alipay_open_id: params[alipayOpenIdIndex],
+                    membership_type: row.membership_type,
+                    membership_expires_at: row.membership_expires_at || null,
+                    alipay_user_id: row.alipay_user_id,
+                    alipay_nickname: row.alipay_nickname,
+                    alipay_avatar: row.alipay_avatar,
                   });
                 } else if (sql.includes('INSERT INTO email_username_mapping')) {
                   state.emailMappings.push({ email: params[0], username: params[1], userId: params[2] });
@@ -95,14 +105,15 @@ function createDbEnv() {
   return { env, state };
 }
 
-test('one-click Alipay registration stores user_id in mappings and token', async () => {
+test('one-click Alipay registration stores provider subject in mappings and token', async () => {
   const { env, state } = createDbEnv();
   const request = new Request('https://example.com/api/auth/alipay/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       oneClick: true,
-      alipayUserId: 'ali_one_click',
+      alipayProviderSubject: 'open_one_click',
+      alipaySubjectType: 'open_id',
       alipayNickname: '支付宝用户'
     })
   });
@@ -113,19 +124,24 @@ test('one-click Alipay registration stores user_id in mappings and token', async
 
   assert.equal(response.status, 200);
   assert.equal(payload.userId, 100);
+  assert.equal(String(payload.userNo).length, 9);
+  assert.equal(payload.user.userNo, payload.userNo);
+  assert.equal(payload.alipayProviderSubject, 'open_one_click');
   assert.equal(state.emailMappings[0].userId, 100);
   assert.equal(state.alipayBindings[0].userId, 100);
+  assert.equal(state.alipayBindings[0].alipayUserId, 'open_one_click');
   assert.equal(tokenPayload.userId, 100);
   assert.equal(tokenPayload.username, payload.username);
 });
 
-test('one-click Alipay registration reuses an existing user matched by open_id', async () => {
+test('one-click Alipay registration reuses an existing user matched by provider subject', async () => {
   const { env, state } = createDbEnv();
   state.userByUsername.set('paid_user', {
     id: 77,
+    user_no: 123456789,
     username: 'paid_user',
     email: 'paid@example.com',
-    alipay_open_id: 'open_same_account',
+    alipay_user_id: 'same_open_id',
     membership_type: 'paid',
     membership_expires_at: '2099-01-01T00:00:00.000Z',
   });
@@ -135,8 +151,8 @@ test('one-click Alipay registration reuses an existing user matched by open_id',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       oneClick: true,
-      alipayUserId: 'desktop_user_id',
-      alipayOpenId: 'open_same_account',
+      alipayProviderSubject: 'same_open_id',
+      alipaySubjectType: 'open_id',
       alipayNickname: '支付宝用户'
     })
   });
@@ -148,12 +164,54 @@ test('one-click Alipay registration reuses an existing user matched by open_id',
   assert.equal(response.status, 200);
   assert.equal(payload.isNewUser, false);
   assert.equal(payload.userId, 77);
+  assert.equal(payload.userNo, 123456789);
+  assert.equal(payload.user.userNo, 123456789);
   assert.equal(payload.username, 'paid_user');
   assert.equal(tokenPayload.userId, 77);
   assert.equal(state.userByUsername.size, 1);
   assert.deepEqual(
     state.alipayBindings.map((binding) => binding.alipayUserId).sort(),
-    ['desktop_user_id', 'open_same_account'],
+    ['same_open_id'],
+  );
+});
+
+test('one-click Alipay registration migrates a legacy user_id match to open_id binding', async () => {
+  const { env, state } = createDbEnv();
+  state.userByUsername.set('legacy_user', {
+    id: 88,
+    user_no: 223344556,
+    username: 'legacy_user',
+    email: 'legacy@example.com',
+    alipay_user_id: 'legacy_user_id',
+    membership_type: 'paid',
+    membership_expires_at: '2099-01-01T00:00:00.000Z',
+  });
+
+  const request = new Request('https://example.com/api/auth/alipay/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      oneClick: true,
+      alipayProviderSubject: 'new_open_id',
+      alipaySubjectType: 'open_id',
+      alipayLegacyUserId: 'legacy_user_id',
+      alipayNickname: '支付宝用户'
+    })
+  });
+
+  const response = await registerAlipayUser(request, env);
+  const payload = await response.json();
+  const tokenPayload = await verifyToken(payload.token, env);
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.isNewUser, false);
+  assert.equal(payload.userId, 88);
+  assert.equal(payload.alipayProviderSubject, 'new_open_id');
+  assert.equal(tokenPayload.userId, 88);
+  assert.equal(state.userByUsername.size, 1);
+  assert.deepEqual(
+    state.alipayBindings.map((binding) => binding.alipayUserId).sort(),
+    ['new_open_id'],
   );
 });
 
@@ -190,7 +248,7 @@ test('mobile Alipay OAuth URL honors explicit redirect override', async () => {
   assert.equal(authUrl.searchParams.get('redirect_uri'), 'https://example.com/alipay-callback');
 });
 
-test('manual Alipay registration stores user_id in mappings and token', async () => {
+test('manual Alipay registration stores provider subject in mappings and token', async () => {
   const { env, state } = createDbEnv();
   const request = new Request('https://example.com/api/auth/alipay/register', {
     method: 'POST',
@@ -200,7 +258,8 @@ test('manual Alipay registration stores user_id in mappings and token', async ()
       email: 'manual@example.com',
       password: 'secure123',
       captcha: '1234',
-      alipayUserId: 'ali_manual',
+      alipayProviderSubject: 'open_manual',
+      alipaySubjectType: 'open_id',
       alipayNickname: '手动用户'
     })
   });
@@ -211,6 +270,8 @@ test('manual Alipay registration stores user_id in mappings and token', async ()
 
   assert.equal(response.status, 200);
   assert.equal(payload.userId, 100);
+  assert.equal(String(payload.userNo).length, 9);
+  assert.equal(payload.user.userNo, payload.userNo);
   assert.deepEqual(state.emailMappings[0], {
     email: 'manual@example.com',
     username: 'manual_user',
@@ -221,7 +282,7 @@ test('manual Alipay registration stores user_id in mappings and token', async ()
   assert.equal(tokenPayload.username, 'manual_user');
 });
 
-test('registration captcha flow stores user_id in mappings and token', async () => {
+test('registration captcha flow stores provider subject in mappings and token', async () => {
   const { env, state } = createDbEnv();
   const request = new Request('https://example.com/api/auth/alipay/register-captcha', {
     method: 'POST',
@@ -230,7 +291,8 @@ test('registration captcha flow stores user_id in mappings and token', async () 
       username: 'captcha_user',
       password: 'secure123',
       email: 'captcha@example.com',
-      alipayUserId: 'ali_captcha',
+      alipayProviderSubject: 'open_captcha',
+      alipaySubjectType: 'open_id',
       nickname: '验证码用户'
     })
   });
@@ -241,6 +303,8 @@ test('registration captcha flow stores user_id in mappings and token', async () 
 
   assert.equal(response.status, 201);
   assert.equal(payload.userId, 100);
+  assert.equal(String(payload.userNo).length, 9);
+  assert.equal(payload.user.userNo, payload.userNo);
   assert.deepEqual(state.emailMappings[0], {
     email: 'captcha@example.com',
     username: 'captcha_user',

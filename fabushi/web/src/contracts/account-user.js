@@ -12,6 +12,7 @@ export function serializeAccountUser(user) {
     avatar: user.avatar || user.alipay_avatar || user.wechat_headimgurl || null,
     phoneNumber: user.phone_number || null,
     firebaseUid: user.firebase_uid || null,
+    alipayProviderSubject: user.alipay_user_id || null,
     alipayUserId: user.alipay_user_id || null,
     alipayNickname: user.alipay_nickname || null,
     alipayAvatar: user.alipay_avatar || null,
