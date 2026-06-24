@@ -59,6 +59,7 @@ FROM_EMAIL = "amitabha@ombhrum.com"
 # JWT_SECRET 应该使用 Cloudflare Secret，不要在这里明文存储
 BACKEND_ONLY = "true"
 FRONTEND_URL = "https://flutter.ombhrum.com"
+DACHENG_AI_BACKEND_URL = "https://ai.ombhrum.com"
 
 # 生产环境配置
 [env.production]
@@ -111,6 +112,7 @@ ALIPAY_APP_ID = "2021005193647715"
 ALIPAY_PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAi0qnuA0SPHg/sB43ROGixTPaeCYN2kmsqCBUZ+gCaMivh405NBAX8LELBlBmrIvKhyUH9JNan+r0e2qrsmLSShIMD/M0YyB3+SqjITQXR0QSlneDKuHxl+O5qXe43qhuCaWXX3GVXwt5J+kOHPHCL+/3OThOjAYRwnCVewS85fx2hn6AtRPcyXHv+/nopckBL1ZbFrQRZC+BJuUlP3e9/NFWzWvUclAjaG2suVbz4YgmYh08fHlNNtb9/283/FKMRYbklpNKXTOwKQ7yflao0fTGPUdi9ILarLR8wPZTp8cv3ojIOU+e1toikcNNKK+Z+e24smY48QuB6MvJfV7skwIDAQAB"
 WORKER_URL = "https://api.ombhrum.com"
 FRONTEND_URL = "https://flutter.ombhrum.com"
+DACHENG_AI_BACKEND_URL = "https://ai.ombhrum.com"
 ALIPAY_MOBILE_AUTH_REDIRECT_URL = "https://api.ombhrum.com/api/auth/alipay/callback"
 ALIPAY_NOTIFY_URL = "https://api.ombhrum.com/api/alipay/notify"
 ALIPAY_RETURN_URL = "https://flutter.ombhrum.com/payment-success.html"
@@ -158,6 +160,7 @@ ALIPAY_APP_ID = "2021005193647715"
 ALIPAY_PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAi0qnuA0SPHg/sB43ROGixTPaeCYN2kmsqCBUZ+gCaMivh405NBAX8LELBlBmrIvKhyUH9JNan+r0e2qrsmLSShIMD/M0YyB3+SqjITQXR0QSlneDKuHxl+O5qXe43qhuCaWXX3GVXwt5J+kOHPHCL+/3OThOjAYRwnCVewS85fx2hn6AtRPcyXHv+/nopckBL1ZbFrQRZC+BJuUlP3e9/NFWzWvUclAjaG2suVbz4YgmYh08fHlNNtb9/283/FKMRYbklpNKXTOwKQ7yflao0fTGPUdi9ILarLR8wPZTp8cv3ojIOU+e1toikcNNKK+Z+e24smY48QuB6MvJfV7skwIDAQAB"
 WORKER_URL = "https://fabushi-flutter-web-dev.bhrumom.workers.dev"
 FRONTEND_URL = "https://flutter.ombhrum.com"
+DACHENG_AI_BACKEND_URL = "https://ai.ombhrum.com"
 ALIPAY_MOBILE_AUTH_REDIRECT_URL = "https://fabushi-flutter-web-dev.bhrumom.workers.dev/api/auth/alipay/callback"
 
 [observability.logs]

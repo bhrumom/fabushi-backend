@@ -3,6 +3,7 @@ import { jsonResponse } from '../utils/response.js';
 
 const DEFAULT_DACHENG_AI_BACKEND_URL = 'https://ai.ombhrum.com';
 const DEFAULT_DACHENG_AI_BACKEND_TIMEOUT_MS = 8000;
+const DACHENG_AI_UNAVAILABLE_MESSAGE = '大乘 AI 后端暂时不可用，请稍后重试。';
 
 export function isDachengAiPath(pathname) {
   return (
@@ -42,8 +43,21 @@ export async function handleDachengAiProxy(request, env) {
     const upstream = await fetch(targetUrl, init);
     const responseHeaders = new Headers(upstream.headers);
     for (const [key, value] of Object.entries(CORS_HEADERS)) {
+      if (key.toLowerCase() === 'content-type') continue;
       responseHeaders.set(key, value);
     }
+
+    if (!upstream.ok && !isJsonContentType(upstream.headers.get('content-type'))) {
+      const upstreamBody = await upstream.text();
+      console.warn('Dacheng AI upstream returned a non-JSON error:', {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        contentType: upstream.headers.get('content-type') || '',
+        bodyPreview: sanitizeLogSnippet(upstreamBody),
+      });
+      return dachengAiUnavailableResponse(upstream.status);
+    }
+
     return new Response(upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,
@@ -62,4 +76,26 @@ export async function handleDachengAiProxy(request, env) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function isJsonContentType(contentType) {
+  return (contentType || '').toLowerCase().includes('application/json');
+}
+
+function sanitizeLogSnippet(value) {
+  return (value || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+}
+
+function dachengAiUnavailableResponse(upstreamStatus) {
+  return jsonResponse(
+    {
+      success: false,
+      error: 'Dacheng AI backend unavailable',
+      message: DACHENG_AI_UNAVAILABLE_MESSAGE,
+      upstreamStatus,
+    },
+    upstreamStatus === 401 || upstreamStatus === 403 || upstreamStatus === 429
+      ? upstreamStatus
+      : 502,
+  );
 }

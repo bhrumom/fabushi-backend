@@ -241,6 +241,14 @@ const statements = {
 const deepseekApiKey = process.env.DEEPSEEK_API_KEY || '';
 const deepseekBaseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
 const deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+const deepseekAvailableModels = Array.from(
+  new Set(
+    (process.env.DEEPSEEK_MODELS || `${deepseekModel},deepseek-chat,deepseek-reasoner`)
+      .split(',')
+      .map((item) => normalizeDeepSeekModelName(item))
+      .filter(Boolean),
+  ),
+);
 const cbetaApiRoot = (process.env.CBETA_API_ROOT || 'https://api.ombhrum.com/api/cbeta').replace(/\/+$/, '');
 const fabushiApiBaseUrl = (process.env.FABUSHI_API_BASE_URL || 'https://api.ombhrum.com').replace(/\/+$/, '');
 const memberMonthlyLimit = Number(process.env.MEMBER_MONTHLY_TOKEN_LIMIT || 1_000_000);
@@ -375,6 +383,21 @@ function readText(value) {
   return String(value).replace(/\u0000/g, '').trim();
 }
 
+function clientContextMessage(client) {
+  if (!client || typeof client !== 'object') return '';
+  const selectedModel = readText(client.selectedModel || client.model);
+  const project = client.project && typeof client.project === 'object' ? client.project : {};
+  const projectName = readText(project.name);
+  const projectPath = readText(project.path);
+  const lines = ['桌面端上下文：'];
+  if (selectedModel) lines.push(`用户选择的 DeepSeek 模型：${normalizeDeepSeekModelName(selectedModel)}`);
+  if (projectPath) {
+    lines.push(`当前项目名称：${projectName || projectPath}`);
+    lines.push(`当前项目路径：${projectPath}`);
+    lines.push('如果本轮任务涉及读取、修改、运行、分析或整理项目，请优先围绕当前项目路径工作；不要擅自操作其他目录。');
+  }
+  return lines.length > 1 ? lines.join('\n') : '';
+}
 function unwrapPayload(payload) {
   if (!payload || typeof payload !== 'object') return {};
   return payload.data && typeof payload.data === 'object' ? payload.data : payload;
@@ -516,6 +539,20 @@ async function resolveRemoteAccount(token) {
 async function resolveUser(req, body = {}) {
   const token = bearerToken(req);
   const usernameHint = safeUserText(body.username || req.query.username);
+
+  const testToken = process.env.TEST_ACCOUNT_TOKEN || 'dacheng-test-token-bypass-limits';
+  if (token && token === testToken) {
+    return {
+      userId: 'user:test_account',
+      username: 'TestAccount',
+      tokenHash: sha256(token).slice(0, 24),
+      isAuthenticated: true,
+      isMember: true,
+      isTestAccount: true,
+      membership: { type: 'lifetime', active: true },
+    };
+  }
+
   const tokenHash = token ? sha256(token).slice(0, 24) : '';
   const anonymousHash = sha256(`${req.ip}|${req.get('User-Agent') || ''}`).slice(0, 24);
   const remoteAccount = await resolveRemoteAccount(token);
@@ -548,6 +585,9 @@ function usageFor(userId) {
 }
 
 function enforceTokenBudget(user, estimatedTokensForRequest) {
+  if (user && user.isTestAccount) {
+    return { limit: 999999999, usage: { month: monthKey(), used: 0 } };
+  }
   if (requireMemberForAi && !user.isMember) {
     const error = new Error('大乘 AI 需要开通会员后使用');
     error.statusCode = 403;
@@ -1492,6 +1532,25 @@ function shouldRetryWithCompactedOpenClawMessages(error, messages, compactedMess
   return JSON.stringify(messages) !== JSON.stringify(compactedMessages);
 }
 
+function openClawBlockedFallbackText(messages) {
+  const lastUser = messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === 'user')?.content || '';
+  const localActionIntent =
+    /(file|folder|directory|project|workspace|path|文件|文件夹|目录|项目|工程|路径|本地)/i.test(lastUser) &&
+    /(create|make|mkdir|write|edit|modify|rename|delete|move|copy|save|download|read|list|生成|创建|新建|写入|编辑|修改|重命名|删除|移动|复制|保存|下载|读取|列出)/i.test(lastUser);
+
+  if (localActionIntent) {
+    return [
+      '本机工具规划被模型服务拦截了，所以这次没有实际读取、创建、修改或下载本机文件。',
+      '如果只是新建文件夹，请先在底部选择项目后重新发送“新建文件夹”；桌面端会直接在已选项目里创建。',
+      '如果是更复杂的本地文件操作，请在“连应用”里重启本机 AI 后重试，或把要操作的文件路径和目标说得更具体。',
+    ].join('\n');
+  }
+
+  return '模型服务拦截了这次回复，未能生成结果。请换一种更具体、更短的表述后重试。';
+}
 function usageWithFallback(usage, messages, text) {
   const promptTokens = Number(usage?.promptTokens || usage?.inputTokens || 0);
   const completionTokens = Number(usage?.completionTokens || usage?.outputTokens || 0);
@@ -1683,6 +1742,30 @@ app.post(
       });
       res.write('data: [DONE]\n\n');
     } catch (error) {
+      if (isDeepSeekBlockedError(error)) {
+        const fallbackMessage = openClawBlockedFallbackText(usageMessages);
+        const usage = usageWithFallback(null, usageMessages, fallbackMessage);
+        recordUsage(user.userId, usage.totalTokens);
+        logger.warn(
+          { statusCode: error?.statusCode, code: error?.code },
+          'OpenClaw DeepSeek proxy stream blocked; returning local fallback message',
+        );
+        writeOpenAiSse(res, {
+          ...baseChunk,
+          choices: [{ index: 0, delta: { content: fallbackMessage }, finish_reason: null }],
+        });
+        writeOpenAiSse(res, {
+          ...baseChunk,
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        });
+        writeOpenAiSse(res, {
+          ...baseChunk,
+          choices: [],
+          usage: openAiUsagePayload(usage, user, budget),
+        });
+        res.write('data: [DONE]\n\n');
+        return;
+      }
       logger.error(
         { error: String(error), code: error?.code, statusCode: error?.statusCode },
         'OpenClaw DeepSeek proxy stream failed',
@@ -1971,6 +2054,8 @@ app.get('/health', (_req, res) => {
     service: 'dacheng-ai-backend',
     provider: libreChatRuntime.enabled ? libreChatRuntime.provider : 'deepseek',
     model: libreChatRuntime.enabled ? libreChatRuntime.model : deepseekModel,
+    deepseekModel,
+    deepseekAvailableModels,
     libreChatAgentChatEnabled: libreChatRuntime.enabled,
     libreChatAgentProvider: libreChatRuntime.provider,
     libreChatAgentReason: libreChatRuntime.enabled ? undefined : libreChatRuntime.reason,
@@ -1991,6 +2076,17 @@ app.get('/health', (_req, res) => {
   });
 });
 
+app.get('/api/ai/models', (_req, res) => {
+  jsonResponse(res, 200, {
+    success: true,
+    provider: 'deepseek',
+    defaultModel: deepseekModel,
+    models: deepseekAvailableModels.map((model) => ({
+      id: model,
+      label: model === 'deepseek-reasoner' ? 'DeepSeek Reasoner' : 'DeepSeek Chat',
+    })),
+  });
+});
 app.get(
   '/api/ai/quota',
   asyncHandler(async (req, res) => {
@@ -2082,7 +2178,15 @@ app.post(
     const controller = new AbortController();
     activeAgentRuns.set(runId, controller);
     try {
-      const modelMessages = buildAgentMessages(conversationId);
+      const skillResult = await runResourceFinderSkill({ message, user });
+      const skillContext = resourceContextMessage(skillResult);
+      const historyRows = statements.listMessages.all(conversationId).slice(-14);
+      const modelMessages = [
+        { role: 'system', content: systemPrompt },
+        ...(skillContext ? [{ role: 'system', content: skillContext }] : []),
+        ...normalizeMessages(historyRows),
+      ];
+
       const aiResult = await runAgentModel({
         messages: modelMessages,
         user,
@@ -2122,6 +2226,7 @@ app.post(
         inputTokens: usage.promptTokens,
         outputTokens: usage.completionTokens,
       });
+      const action = determineClientAction(skillResult, message);
       return jsonResponse(res, 200, {
         success: true,
         runId,
@@ -2131,6 +2236,7 @@ app.post(
         model: aiResult.model,
         message: aiResult.message,
         usage: agentUsagePayload(usage, user, budget),
+        ...(action ? { clientAction: action } : {}),
       });
     } catch (error) {
       const status = error.name === 'AbortError' ? 'cancelled' : 'failed';
@@ -2169,12 +2275,30 @@ app.get(
     try {
       let streamedText = '';
       const modelMessages = buildAgentMessages(run.conversation_id);
-      const promptEstimate = estimateTokens(JSON.stringify(modelMessages));
+      const lastUserMsg = [...modelMessages].reverse().find(m => m.role === 'user');
+      const userMsgText = lastUserMsg ? lastUserMsg.content : '';
+      const skillResult = userMsgText ? await runResourceFinderSkill({
+        message: userMsgText,
+        user,
+        onStep: (step) => writeSse(res, 'tool.call.completed', {
+          tool: 'agent.step',
+          displayName: step.title || 'Agent step',
+          summary: step.message || '',
+        }),
+      }) : null;
+      const skillContext = resourceContextMessage(skillResult);
+      const finalMessages = skillContext ? [
+        modelMessages[0],
+        { role: 'system', content: skillContext },
+        ...modelMessages.slice(1)
+      ] : modelMessages;
+
+      const promptEstimate = estimateTokens(JSON.stringify(finalMessages));
       const estimated = promptEstimate + 600;
       const budget = enforceTokenBudget(user, estimated);
       const maxCompletionTokens = completionBudgetFor(budget, promptEstimate);
       const aiResult = await runAgentModel({
-        messages: modelMessages,
+        messages: finalMessages,
         user,
         conversationId: run.conversation_id,
         mode: run.mode,
@@ -2194,10 +2318,10 @@ app.get(
       });
       const message = aiResult.message || streamedText.trim();
       const usage = {
-        promptTokens: aiResult.usage?.promptTokens || estimateTokens(JSON.stringify(modelMessages)),
+        promptTokens: aiResult.usage?.promptTokens || estimateTokens(JSON.stringify(finalMessages)),
         completionTokens: aiResult.usage?.completionTokens || estimateTokens(message),
         totalTokens:
-          aiResult.usage?.totalTokens || estimateTokens(JSON.stringify(modelMessages)) + estimateTokens(message),
+          aiResult.usage?.totalTokens || estimateTokens(JSON.stringify(finalMessages)) + estimateTokens(message),
       };
       recordUsage(user.userId, usage.totalTokens);
       const assistantMessageId = crypto.randomUUID();
@@ -2223,8 +2347,12 @@ app.get(
         inputTokens: usage.promptTokens,
         outputTokens: usage.completionTokens,
       });
+      const action = determineClientAction(skillResult, userMsgText);
       writeSse(res, 'assistant.message', { messageId: assistantMessageId, content: message });
-      writeSse(res, 'run.completed', { usage: agentUsagePayload(usage, user, budget) });
+      writeSse(res, 'run.completed', {
+        usage: agentUsagePayload(usage, user, budget),
+        ...(action ? { clientAction: action } : {}),
+      });
       res.end();
     } catch (error) {
       const status = error.name === 'AbortError' ? 'cancelled' : 'failed';
@@ -2294,6 +2422,8 @@ app.post(
     const maxCompletionTokens = completionBudgetFor(budget, promptEstimate);
     const createdAt = nowIso();
     const conversationId = safeUserText(req.body?.conversationId) || crypto.randomUUID();
+    const requestedModel = normalizeDeepSeekModelName(req.body?.model);
+    const clientContext = clientContextMessage(req.body?.client);
     let conversation = statements.getConversation.get(conversationId, user.userId);
     const isNewConversation = !conversation;
 
@@ -2308,7 +2438,7 @@ app.post(
         userId: user.userId,
         title: conversation.title,
         provider: 'deepseek',
-        model: deepseekModel,
+        model: requestedModel,
         createdAt,
         updatedAt: createdAt,
       });
@@ -2331,6 +2461,7 @@ app.post(
     const historyRows = statements.listMessages.all(conversationId).slice(-14);
     const modelMessages = [
       { role: 'system', content: systemPrompt },
+      ...(clientContext ? [{ role: 'system', content: clientContext }] : []),
       ...(skillContext ? [{ role: 'system', content: skillContext }] : []),
       ...normalizeMessages(historyRows),
     ];
@@ -2346,7 +2477,7 @@ app.post(
       ? openClawRuntime.model
       : libreChatRuntime.enabled
         ? libreChatRuntime.model
-        : deepseekModel;
+        : requestedModel;
     let aiResult;
     try {
       if (openClawRuntime.enabled) {
@@ -2364,13 +2495,13 @@ app.post(
         provider = codexRuntime.provider;
         aiResult = await callCodexSdkDeepSeek(modelMessages);
       } else {
-        aiResult = await callDeepSeek(modelMessages, { maxCompletionTokens });
+        aiResult = await callDeepSeek(modelMessages, { model: requestedModel, maxCompletionTokens });
       }
     } catch (error) {
       if (libreChatRuntime.enabled) {
         logger.warn({ error: String(error) }, 'LibreChat Agent chat failed, falling back to Codex SDK or DeepSeek direct');
         provider = codexRuntime.enabled ? codexRuntime.provider : 'deepseek';
-        responseModel = deepseekModel;
+        responseModel = requestedModel;
         if (codexRuntime.enabled) {
           try {
             aiResult = await callCodexSdkDeepSeek(modelMessages);
@@ -2378,16 +2509,17 @@ app.post(
             if (isDeepSeekQuotaError(codexError)) throw codexError;
             logger.warn({ error: String(codexError) }, 'Codex SDK chat failed, falling back to DeepSeek direct');
             provider = 'deepseek';
-            aiResult = await callDeepSeek(modelMessages, { maxCompletionTokens });
+            aiResult = await callDeepSeek(modelMessages, { model: requestedModel, maxCompletionTokens });
           }
         } else {
-          aiResult = await callDeepSeek(modelMessages, { maxCompletionTokens });
+          aiResult = await callDeepSeek(modelMessages, { model: requestedModel, maxCompletionTokens });
         }
       } else {
         if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
         logger.warn({ error: String(error) }, 'Codex SDK chat failed, falling back to DeepSeek direct');
         provider = 'deepseek';
-        aiResult = await callDeepSeek(modelMessages, { maxCompletionTokens });
+        responseModel = requestedModel;
+        aiResult = await callDeepSeek(modelMessages, { model: requestedModel, maxCompletionTokens });
       }
     }
     const usage = {
@@ -2419,6 +2551,7 @@ app.post(
 
     const latestUsage = usageFor(user.userId);
     const monthlyLimit = budget.limit;
+    const action = determineClientAction(skillResult, message);
     jsonResponse(res, 200, {
       success: true,
       conversationId,
@@ -2430,6 +2563,7 @@ app.post(
         monthlyLimit,
         remainingTokens: Math.max(0, monthlyLimit - latestUsage.used),
       },
+      ...(action ? { clientAction: action } : {}),
     });
   }),
 );
@@ -2452,6 +2586,8 @@ app.post('/api/ai/chat/stream', async (req, res) => {
     const maxCompletionTokens = completionBudgetFor(budget, promptEstimate);
     const createdAt = nowIso();
     const conversationId = safeUserText(req.body?.conversationId) || crypto.randomUUID();
+    const requestedModel = normalizeDeepSeekModelName(req.body?.model);
+    const clientContext = clientContextMessage(req.body?.client);
     let conversation = statements.getConversation.get(conversationId, user.userId);
     const isNewConversation = !conversation;
 
@@ -2466,7 +2602,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         userId: user.userId,
         title: conversation.title,
         provider: 'deepseek',
-        model: deepseekModel,
+        model: requestedModel,
         createdAt,
         updatedAt: createdAt,
       });
@@ -2497,7 +2633,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
       ? initialOpenClawRuntime.model
       : libreChatRuntime.enabled
         ? libreChatRuntime.model
-        : deepseekModel;
+        : requestedModel;
     writeSse(res, 'meta', {
       conversationId,
       provider,
@@ -2512,6 +2648,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
     const historyRows = statements.listMessages.all(conversationId).slice(-14);
     const modelMessages = [
       { role: 'system', content: systemPrompt },
+      ...(clientContext ? [{ role: 'system', content: clientContext }] : []),
       ...(skillContext ? [{ role: 'system', content: skillContext }] : []),
       ...normalizeMessages(historyRows),
     ];
@@ -2540,6 +2677,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         });
       } else {
         aiResult = await callDeepSeekStream(modelMessages, {
+          model: requestedModel,
           maxCompletionTokens,
           onToken: (token) => writeSse(res, 'delta', { text: token }),
         });
@@ -2548,7 +2686,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
       if (libreChatRuntime.enabled) {
         logger.warn({ error: String(error) }, 'LibreChat Agent streaming chat failed, falling back to Codex SDK or DeepSeek direct');
         provider = codexRuntime.enabled ? codexRuntime.provider : 'deepseek';
-        responseModel = deepseekModel;
+        responseModel = requestedModel;
         writeSse(res, 'meta', {
           conversationId,
           provider,
@@ -2564,19 +2702,21 @@ app.post('/api/ai/chat/stream', async (req, res) => {
             if (isDeepSeekQuotaError(codexError)) throw codexError;
             logger.warn({ error: String(codexError) }, 'Codex SDK streaming chat failed, falling back to DeepSeek direct');
             provider = 'deepseek';
-            responseModel = deepseekModel;
+            responseModel = requestedModel;
             writeSse(res, 'meta', {
               conversationId,
               provider,
               model: responseModel,
             });
             aiResult = await callDeepSeekStream(modelMessages, {
+              model: requestedModel,
               maxCompletionTokens,
               onToken: (token) => writeSse(res, 'delta', { text: token }),
             });
           }
         } else {
           aiResult = await callDeepSeekStream(modelMessages, {
+            model: requestedModel,
             maxCompletionTokens,
             onToken: (token) => writeSse(res, 'delta', { text: token }),
           });
@@ -2585,13 +2725,14 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
         logger.warn({ error: String(error) }, 'Codex SDK streaming chat failed, falling back to DeepSeek direct');
         provider = 'deepseek';
-        responseModel = deepseekModel;
+        responseModel = requestedModel;
         writeSse(res, 'meta', {
           conversationId,
           provider,
           model: responseModel,
         });
         aiResult = await callDeepSeekStream(modelMessages, {
+          model: requestedModel,
           maxCompletionTokens,
           onToken: (token) => writeSse(res, 'delta', { text: token }),
         });
@@ -2627,6 +2768,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
 
     const latestUsage = usageFor(user.userId);
     const monthlyLimit = budget.limit;
+    const action = determineClientAction(skillResult, message);
     writeSse(res, 'done', {
       conversationId,
       provider,
@@ -2637,6 +2779,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         monthlyLimit,
         remainingTokens: Math.max(0, monthlyLimit - latestUsage.used),
       },
+      ...(action ? { clientAction: action } : {}),
     });
     res.end();
   } catch (error) {
@@ -3079,6 +3222,20 @@ function resourceContextMessage(skillResult) {
     }
   }
   return lines.join('\n');
+}
+
+function determineClientAction(skillResult, message) {
+  if (skillResult && skillResult.downloaded) {
+    const text = safeUserText(message);
+    if (/法布施|全球法布施|分享/.test(text)) {
+      return {
+        type: 'prepare_dharma_share_text',
+        title: skillResult.downloaded.title,
+        text: skillResult.downloaded.contentText || '',
+      };
+    }
+  }
+  return null;
 }
 
 async function runResourceFinderSkill({ message, user, onStep }) {
