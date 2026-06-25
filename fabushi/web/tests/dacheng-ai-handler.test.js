@@ -10,8 +10,49 @@ test('Dacheng AI proxy includes first-party agent endpoints', () => {
   assert.equal(isDachengAiPath('/api/agent/messages/msg_1/feedback'), true);
 });
 
+test('Dacheng AI proxy includes OpenClaw DeepSeek fallback endpoints', () => {
+  assert.equal(isDachengAiPath('/api/openclaw/deepseek/v1/chat/completions'), true);
+  assert.equal(isDachengAiPath('/api/openclaw/runtime/manifest'), true);
+});
+
 test('Dacheng AI proxy still rejects unrelated API endpoints', () => {
   assert.equal(isDachengAiPath('/api/auth/login'), false);
+});
+
+test('Dacheng AI proxy forwards OpenClaw DeepSeek fallback requests', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  globalThis.fetch = async (url, init) => {
+    assert.equal(
+      url.toString(),
+      'https://ai.example.test/api/openclaw/deepseek/v1/chat/completions?source=desktop',
+    );
+    assert.equal(init.method, 'POST');
+    assert.equal(init.headers.get('X-Forwarded-Host'), 'api.ombhrum.com');
+    assert.equal(init.headers.get('X-Forwarded-Proto'), 'https');
+    return new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+    });
+  };
+
+  const response = await handleDachengAiProxy(
+    new Request(
+      'https://api.ombhrum.com/api/openclaw/deepseek/v1/chat/completions?source=desktop',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }], stream: true }),
+      },
+    ),
+    { DACHENG_AI_BACKEND_URL: 'https://ai.example.test' },
+  );
+
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
 });
 
 test('Dacheng AI proxy converts Cloudflare tunnel HTML into JSON error', async (t) => {

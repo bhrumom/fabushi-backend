@@ -2,13 +2,14 @@ import { CORS_HEADERS } from '../config/constants.js';
 import { jsonResponse } from '../utils/response.js';
 
 const DEFAULT_DACHENG_AI_BACKEND_URL = 'https://ai.ombhrum.com';
-const DEFAULT_DACHENG_AI_BACKEND_TIMEOUT_MS = 8000;
+const DEFAULT_DACHENG_AI_BACKEND_TIMEOUT_MS = 120000;
 const DACHENG_AI_UNAVAILABLE_MESSAGE = '大乘 AI 后端暂时不可用，请稍后重试。';
 
 export function isDachengAiPath(pathname) {
   return (
     pathname.startsWith('/api/ai/') ||
     pathname.startsWith('/api/agent/') ||
+    pathname.startsWith('/api/openclaw/') ||
     pathname.startsWith('/api/resources/') ||
     pathname === '/api/codex/resource-task'
   );
