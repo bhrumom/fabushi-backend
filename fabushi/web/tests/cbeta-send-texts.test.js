@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 
 import { handleGetCbetaSendTexts } from '../src/handlers/cbeta.js';
 
-const SELF_HOSTED_API = 'https://api.ombhrum.com/api/cbeta';
+const SELF_HOSTED_API = 'https://ai.ombhrum.com/cbeta';
+const OFFICIAL_FALLBACK_API = 'https://cbdata.dila.edu.tw/stable';
 
 const sampleHtml = `
   <html><head><title>Heart Sutra</title></head><body>
@@ -60,10 +61,10 @@ test('CBETA send texts returns real stripped scripture content and detailed part
     assert.equal(body.success, true);
     assert.equal(body.count, 1);
     assert.equal(body.primaryApi, SELF_HOSTED_API);
-    assert.equal(body.fallbackApi, null);
+    assert.equal(body.fallbackApi, OFFICIAL_FALLBACK_API);
     assert.equal(body.errors.length, 1);
-    assert.equal(body.errors[0].attempts.length, 3);
-    assert.equal(failAttempts, 3);
+    assert.equal(body.errors[0].attempts.length, 6);
+    assert.equal(failAttempts, 6);
 
     const item = body.items[0];
     assert.equal(item.work, 'T0251');
@@ -94,10 +95,10 @@ test('CBETA send texts reports full upstream errors when no scripture can be fet
     const body = await response.json();
     assert.equal(body.success, false);
     assert.equal(body.count, 0);
-    assert.equal(body.fallbackApi, null);
+    assert.equal(body.fallbackApi, OFFICIAL_FALLBACK_API);
     assert.equal(body.errors.length, 1);
-    assert.match(body.errors[0].message, /failed after 3 attempts/);
-    assert.equal(body.errors[0].attempts.length, 3);
+    assert.match(body.errors[0].message, /failed after 6 attempts/);
+    assert.equal(body.errors[0].attempts.length, 6);
     assert.equal(body.errors[0].attempts[0].status, 502);
     assert.match(body.errors[0].attempts[0].body, /bad gateway/);
   } finally {
@@ -105,7 +106,7 @@ test('CBETA send texts reports full upstream errors when no scripture can be fet
   }
 });
 
-test('CBETA send texts never falls back to official API when self-hosted returns empty content', async () => {
+test('CBETA send texts skips the public proxy URL and starts with the self-hosted API', async () => {
   const attemptedHosts = [];
   const restoreFetch = installFetchMock(async url => {
     const parsed = new URL(url);
@@ -116,18 +117,18 @@ test('CBETA send texts never falls back to official API when self-hosted returns
   try {
     const response = await handleGetCbetaSendTexts(
       new Request('https://api.ombhrum.com/api/cbeta/send-texts?works=T0251&limit=1'),
+      { CBETA_API_ROOT: 'https://api.ombhrum.com/api/cbeta' },
     );
     assert.equal(response.status, 502);
 
     const body = await response.json();
     assert.equal(body.count, 0);
-    assert.equal(body.fallbackApi, null);
+    assert.equal(body.fallbackApi, OFFICIAL_FALLBACK_API);
     assert.equal(body.errors.length, 1);
-    assert.deepEqual(attemptedHosts, [
-      'api.ombhrum.com',
-      'api.ombhrum.com',
-      'api.ombhrum.com',
-    ]);
+    assert.equal(attemptedHosts[0], 'ai.ombhrum.com');
+    assert.equal(attemptedHosts.filter(host => host === 'ai.ombhrum.com').length, 3);
+    assert.equal(attemptedHosts.filter(host => host === 'cbdata.dila.edu.tw').length, 3);
+    assert.equal(attemptedHosts.includes('api.ombhrum.com'), false);
   } finally {
     restoreFetch();
   }

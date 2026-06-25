@@ -2,8 +2,8 @@ import { CORS_HEADERS } from '../config/constants.js';
 import { jsonResponse } from '../utils/response.js';
 
 const CBETA_PUBLIC_API_ROOT = 'https://api.ombhrum.com/api/cbeta';
-const CBETA_SELF_HOSTED_API_ROOT = CBETA_PUBLIC_API_ROOT;
-const CBETA_API_ROOTS = [CBETA_SELF_HOSTED_API_ROOT];
+const CBETA_SELF_HOSTED_API_ROOT = 'https://ai.ombhrum.com/cbeta';
+const CBETA_OFFICIAL_FALLBACK_API_ROOT = 'https://cbdata.dila.edu.tw/stable';
 const DEFAULT_SEND_WORKS = [
   'T0365',
   'T0251',
@@ -23,6 +23,28 @@ const DEFAULT_TIMEOUT_MS = 10000;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizeApiRoot(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function isPublicProxyRoot(apiRoot) {
+  return normalizeApiRoot(apiRoot) === normalizeApiRoot(CBETA_PUBLIC_API_ROOT);
+}
+
+function cbetaApiRoots(env = {}) {
+  const roots = [
+    env?.CBETA_API_ROOT,
+    CBETA_SELF_HOSTED_API_ROOT,
+    env?.CBETA_FALLBACK_API_ROOT,
+    CBETA_OFFICIAL_FALLBACK_API_ROOT,
+  ]
+    .map(normalizeApiRoot)
+    .filter(Boolean)
+    .filter(apiRoot => !isPublicProxyRoot(apiRoot));
+
+  return Array.from(new Set(roots));
 }
 
 function buildCbetaUrl(path, params = {}, apiRoot = CBETA_SELF_HOSTED_API_ROOT) {
@@ -68,7 +90,7 @@ function describeUnusablePayload(path, data) {
 async function fetchJsonWithRetry(path, params = {}, options = {}) {
   const retries = options.retries ?? DEFAULT_RETRY_COUNT;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const apiRoots = options.apiRoots ?? CBETA_API_ROOTS;
+  const apiRoots = options.apiRoots ?? cbetaApiRoots(options.env);
   const attempts = [];
 
   for (const apiRoot of apiRoots) {
@@ -271,12 +293,13 @@ function normalizeError(work, juan, error) {
   };
 }
 
-export async function handleGetCbetaSendTexts(request) {
+export async function handleGetCbetaSendTexts(request, env = {}) {
   const url = new URL(request.url);
   const works = parseWorksParam(url.searchParams.get('works'));
   const limit = parseLimit(url.searchParams.get('limit'), DEFAULT_SEND_WORKS.length);
   const juan = parseLimit(url.searchParams.get('juan'), 1);
   const selectedWorks = works.slice(0, limit);
+  const apiRoots = cbetaApiRoots(env);
   const items = [];
   const errors = [];
 
@@ -287,7 +310,7 @@ export async function handleGetCbetaSendTexts(request) {
         juan,
         work_info: 1,
         toc: 1,
-      });
+      }, { apiRoots });
       items.push(toCbetaItem(work, juan, data, attempts, apiRoot));
     } catch (error) {
       errors.push(normalizeError(work, juan, error));
@@ -298,8 +321,8 @@ export async function handleGetCbetaSendTexts(request) {
     success: items.length > 0,
     source: 'CBETA',
     api: CBETA_PUBLIC_API_ROOT,
-    primaryApi: CBETA_SELF_HOSTED_API_ROOT,
-    fallbackApi: null,
+    primaryApi: apiRoots[0] ?? null,
+    fallbackApi: apiRoots[1] ?? null,
     requested: selectedWorks.length,
     count: items.length,
     items,
@@ -320,14 +343,14 @@ function canUseProxyResponse(path, method, bodyText, contentType) {
   }
 }
 
-export async function handleProxyCbetaRequest(request) {
+export async function handleProxyCbetaRequest(request, env = {}) {
   const sourceUrl = new URL(request.url);
   const cbetaPath = sourceUrl.pathname.replace(/^\/api\/cbeta\/?/, '');
   const params = Object.fromEntries(sourceUrl.searchParams);
   const attempts = [];
   let lastOkResponse = null;
 
-  for (const apiRoot of CBETA_API_ROOTS) {
+  for (const apiRoot of cbetaApiRoots(env)) {
     const targetUrl = buildCbetaUrl(cbetaPath || '/', params, apiRoot);
     const startedAt = Date.now();
 
