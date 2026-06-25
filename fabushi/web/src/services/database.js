@@ -318,6 +318,40 @@ export class DatabaseService {
     return createdUser;
   }
 
+  async getUserByWechatOpenid(openid) {
+    return await this.db.prepare('SELECT * FROM users WHERE wechat_openid = ?').bind(openid).first();
+  }
+
+  async createWechatUser(userData) {
+    const userId = await this.generateUniqueUserId();
+    const userNo = await this.generateUniqueUserNo();
+    await this.db.prepare(`
+      INSERT INTO users (id, user_no, username, email, wechat_openid, wechat_nickname, wechat_headimgurl, nickname, avatar, password_hash, salt, iterations, algo, email_verified, membership_type, membership_expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, '', 1, ?, ?, ?)
+    `).bind(
+      userId,
+      userNo,
+      userData.username,
+      userData.email || null,
+      userData.openid,
+      userData.wechatNickname || null,
+      userData.wechatAvatar || null,
+      userData.nickname,
+      userData.wechatAvatar || null,
+      userData.membershipType,
+      userData.membershipExpiresAt,
+      userData.createdAt
+    ).run();
+    const createdUser = await this.getCreatedUser(userId, userNo);
+    if (!createdUser) throw new Error('创建 WeChat 用户后无法重新读取 users.id / users.user_no');
+    if (userData.email) {
+      await this.db.prepare(
+        'INSERT OR REPLACE INTO email_username_mapping (email, username, user_id) VALUES (?, ?, ?)'
+      ).bind(userData.email, userData.username, createdUser.id).run();
+    }
+    return createdUser;
+  }
+
   async createOrder(orderData) {
     const user = orderData.userId
       ? await this.getUser(orderData.userId)

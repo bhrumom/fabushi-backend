@@ -9,6 +9,7 @@ import {
 } from '../handlers/auth.js';
 import {
   handleGetWechatLoginUrl,
+  handleWechatMPLogin,
   handleGetAlipayLoginUrl,
   handleAlipayLogin,
   handleAlipayCallback,
@@ -43,6 +44,7 @@ export async function routeAuthRequest({ pathname, method, request, env, db, ctx
   if (pathname === '/api/auth/delete' && method === 'DELETE') return await handleDeleteAccount(request, env, db);
 
   if (pathname === '/api/auth/wechat/login-url' && method === 'GET') return await handleGetWechatLoginUrl(request, env);
+  if (pathname === '/api/auth/wechat/mp-login' && method === 'POST') return await handleWechatMPLogin(request, env, db);
   if (pathname === '/api/auth/alipay/login-url' && method === 'GET') return await handleGetAlipayLoginUrl(request, env);
   if (pathname === '/api/auth/alipay/login' && method === 'POST') return await handleAlipayLogin(request, env);
   if (pathname === '/api/auth/alipay/callback' && method === 'GET') return await handleAlipayCallback(request, env);

@@ -83,6 +83,79 @@ export async function handleGetWechatLoginUrl(request, env) {
   return jsonResponse({ authUrl, state });
 }
 
+// 微信小程序登录
+export async function handleWechatMPLogin(request, env, db) {
+  try {
+    const { code } = await request.json();
+    if (!code) {
+      return jsonResponse({ error: '缺少 code 参数' }, 400);
+    }
+
+    const appId = env.WECHAT_MP_APP_ID || env.WECHAT_APP_ID;
+    const secret = env.WECHAT_MP_APP_SECRET || env.WECHAT_APP_SECRET;
+
+    if (!appId || !secret) {
+      return jsonResponse({ error: '未配置微信小程序 AppID 或 Secret' }, 500);
+    }
+
+    const url = `https://api.weixin.qq.com/sns/jscode2session?appid=${appId}&secret=${secret}&js_code=${code}&grant_type=authorization_code`;
+    const wechatRes = await fetch(url);
+    const wechatData = await wechatRes.json();
+
+    if (wechatData.errcode) {
+      console.error('WeChat login failed:', wechatData);
+      return jsonResponse({ error: '微信登录验证失败: ' + wechatData.errmsg }, 400);
+    }
+
+    const openid = wechatData.openid;
+    let user = await db.getUserByWechatOpenid(openid);
+    const { generateToken } = await import('../../auth-utils.js');
+    const { calculateTrialEndDate } = await import('../../stripe-config.js');
+
+    let isNewUser = false;
+    if (!user) {
+      const username = `wechat_${Date.now().toString(36)}`;
+      const trialEndDate = calculateTrialEndDate();
+      
+      user = await db.createWechatUser({
+        username,
+        openid,
+        nickname: '微信用户',
+        membershipType: 'trial',
+        membershipExpiresAt: trialEndDate.toISOString(),
+        createdAt: new Date().toISOString()
+      });
+      isNewUser = true;
+    }
+
+    // Reuse serializeAlipayAccountUser as a general serializer, or do it manually
+    const userPayload = {
+      id: user.id,
+      userId: user.id,
+      username: user.username,
+      nickname: user.nickname,
+      avatar: user.avatar || user.wechat_headimgurl || null,
+      membership: {
+        type: user.membership_type || 'expired',
+        expiresAt: user.membership_expires_at || user.free_trial_end_date || null,
+      }
+    };
+
+    return jsonResponse({
+      success: true,
+      token: await generateToken({ id: user.id, username: user.username }, env),
+      username: user.username,
+      userId: user.id,
+      isNewUser,
+      user: userPayload
+    });
+
+  } catch (error) {
+    console.error('WeChat MP Login Error:', error);
+    return jsonResponse({ error: '微信小程序登录失败: ' + error.message }, 500);
+  }
+}
+
 // 支付宝登录URL
 export async function handleGetAlipayLoginUrl(request, env) {
   const { generateAlipayLoginUrl } = await import('../../alipay-login-functions.js');
