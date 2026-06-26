@@ -21,6 +21,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const dataDir = process.env.DATA_DIR || path.join(rootDir, 'data');
 const resourcesDir = path.join(dataDir, 'resources');
+const miniAppsDir = path.join(dataDir, 'miniapps');
+const miniAppsStorePath = path.join(miniAppsDir, 'sandbox-miniapps.json');
 const openClawRuntimeUpdatesDir =
   process.env.OPENCLAW_RUNTIME_UPDATES_DIR || path.join(dataDir, 'openclaw-runtime');
 const openClawRuntimeEnableMacosUpdates =
@@ -31,6 +33,7 @@ const codexRuntimeDir = process.env.XDG_RUNTIME_DIR || path.join(dataDir, 'codex
 const dbPath = process.env.SQLITE_PATH || path.join(dataDir, 'dacheng-ai.sqlite');
 
 fs.mkdirSync(resourcesDir, { recursive: true });
+fs.mkdirSync(miniAppsDir, { recursive: true });
 fs.mkdirSync(openClawRuntimeUpdatesDir, { recursive: true });
 fs.mkdirSync(codexHomeDir, { recursive: true });
 fs.mkdirSync(codexTempDir, { recursive: true });
@@ -381,6 +384,322 @@ function estimateTokens(text) {
 function readText(value) {
   if (value === undefined || value === null) return '';
   return String(value).replace(/\u0000/g, '').trim();
+}
+
+const miniAppHostApiVersion = '1.0';
+const miniAppHighRiskPermissions = new Set([
+  'desktop.control',
+  'local.loopback',
+  'files.write',
+  'projects.write',
+  'openclaw.restart',
+]);
+
+function officialMiniAppRegistry(req) {
+  const webBase = process.env.MINIAPP_WEB_BASE_URL || 'https://fabushi.ombhrum.com';
+  const official = [
+    {
+      botId: 'bot.global-dharma',
+      miniAppId: 'official.global-dharma',
+      title: '全球法布施',
+      subtitle: '地区、循环、场能都在对话框上方设置',
+      initials: '法',
+      icon: 'public',
+      avatarColor: '#4CAF7A',
+      kind: 'global_dharma',
+      greeting: '把要分享的文字、链接或素材发给我，我会按上方选择的地区与模式启动全球法布施。',
+      inputHint: '输入要法布施的文字/链接，或点 + 添加素材',
+      permissions: [
+        'app.context',
+        'bot.chat',
+        'dharma.share',
+        'files.pick',
+        'openclaw.status',
+        'openclaw.chat',
+        'local.loopback',
+        'desktop.control',
+      ],
+    },
+    {
+      botId: 'bot.flashcards',
+      miniAppId: 'official.flashcards',
+      title: '背诵闪卡制作',
+      subtitle: '随机挖空 / AI 制卡从顶部模式按钮选择',
+      initials: '卡',
+      icon: 'flashcards',
+      avatarColor: '#7E57C2',
+      kind: 'flashcards',
+      greeting: '粘贴经文、文章正文或链接即可制作背诵闪卡。制卡模式请在上方按钮切换。',
+      inputHint: '粘贴链接或正文，发送后制作闪卡',
+      permissions: ['app.context', 'bot.chat', 'flashcards.create', 'openclaw.status', 'openclaw.chat'],
+    },
+    {
+      botId: 'bot.platform-publish',
+      miniAppId: 'official.platform-publish',
+      title: '法布施到平台',
+      subtitle: '选择平台后生成发布草稿并打开入口',
+      initials: '发',
+      icon: 'publish',
+      avatarColor: '#FF9F43',
+      kind: 'platform_publish',
+      greeting: '把要发布的正文或链接发给我，上方选择平台后，我会生成发布草稿并打开对应平台入口。',
+      inputHint: '输入要发布到平台的正文/链接',
+      permissions: ['app.context', 'bot.chat', 'platform.publish', 'files.pick'],
+    },
+    {
+      botId: 'bot.father',
+      miniAppId: 'official.bot-father',
+      title: '机器人之父',
+      subtitle: '用对话生成个人沙箱小程序',
+      initials: '父',
+      icon: 'bot_father',
+      avatarColor: '#3D8BFF',
+      kind: 'bot_father',
+      greeting: '告诉我你想要的小程序，我会生成 manifest、界面和权限声明，并放进你的个人沙箱。',
+      inputHint: '描述你想创建的小程序',
+      permissions: ['app.context', 'bot.chat', 'miniapps.dev'],
+    },
+  ];
+  return {
+    bots: official.map((bot, index) => ({
+      ...bot,
+      destinationIndex: index,
+      source: 'official',
+    })),
+    miniApps: official.map((bot) => ({
+      miniAppId: bot.miniAppId,
+      botId: bot.botId,
+      title: bot.title,
+      subtitle: bot.subtitle,
+      entryUrl: `${webBase.replace(/\/+$/, '')}/miniapps/${encodeURIComponent(bot.miniAppId)}`,
+      version: '1.0.0',
+      permissions: bot.permissions,
+      surfaces: ['homePinned', 'chatPanel'],
+      theme: 'telegramDark',
+      signature: 'official',
+      reviewStatus: 'trusted',
+      source: 'official',
+    })),
+  };
+}
+
+async function readMiniAppStore() {
+  try {
+    const raw = await fs.promises.readFile(miniAppsStorePath, 'utf8');
+    const decoded = JSON.parse(raw);
+    return {
+      apps: Array.isArray(decoded.apps) ? decoded.apps : [],
+    };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { apps: [] };
+    throw error;
+  }
+}
+
+async function writeMiniAppStore(store) {
+  await fs.promises.mkdir(miniAppsDir, { recursive: true });
+  await fs.promises.writeFile(
+    miniAppsStorePath,
+    JSON.stringify({ apps: store.apps || [] }, null, 2),
+  );
+}
+
+function miniAppEntryUrl(req, miniAppId) {
+  const origin = requestOrigin(req) || '';
+  const pathName = `/api/miniapps/dev/${encodeURIComponent(miniAppId)}/index.html`;
+  return origin ? new URL(pathName, `${origin}/`).toString() : pathName;
+}
+
+function sanitizeMiniAppPermissions(value, { allowHighRisk = false } = {}) {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = raw
+    .map((item) => readText(item).toLowerCase())
+    .filter((item) => /^[a-z][a-z0-9_.:-]{0,64}$/.test(item));
+  const deduped = [...new Set(['app.context', 'bot.chat', ...normalized])];
+  return deduped.filter((permission) => allowHighRisk || !miniAppHighRiskPermissions.has(permission));
+}
+
+function miniAppScan(permissions, sourceHtml = '') {
+  const highRisk = permissions.filter((permission) => miniAppHighRiskPermissions.has(permission));
+  const blockedPatterns = [
+    /authorization\s*:\s*['"`]bearer/i,
+    /desktop_control_bridge_token/i,
+    /openclaw_gateway_token/i,
+    /eval\s*\(/i,
+  ];
+  const blocked = blockedPatterns
+    .filter((pattern) => pattern.test(sourceHtml))
+    .map((pattern) => pattern.toString());
+  return {
+    passed: blocked.length === 0,
+    highRiskPermissions: highRisk,
+    blockedPatterns: blocked,
+  };
+}
+
+function miniAppRecordToBot(record) {
+  return {
+    botId: record.botId,
+    miniAppId: record.miniAppId,
+    title: record.title,
+    subtitle: record.subtitle,
+    initials: record.initials || '小',
+    icon: record.icon || 'code',
+    avatarColor: record.avatarColor || '#3D8BFF',
+    kind: 'third_party',
+    greeting: record.greeting || '你好，我是这个小程序的机器人。',
+    inputHint: record.inputHint || '输入消息，或打开小程序面板',
+    permissions: record.permissions || ['app.context', 'bot.chat'],
+    source: record.source || 'sandbox',
+  };
+}
+
+function miniAppRecordToManifest(req, record) {
+  return {
+    miniAppId: record.miniAppId,
+    botId: record.botId,
+    title: record.title,
+    subtitle: record.subtitle,
+    entryUrl: miniAppEntryUrl(req, record.miniAppId),
+    version: record.version || '0.0.1',
+    permissions: record.permissions || ['app.context', 'bot.chat'],
+    surfaces: record.surfaces || ['chatPanel'],
+    theme: record.theme || 'telegramDark',
+    signature: record.signature || `sandbox:${record.ownerId}`,
+    reviewStatus: record.reviewStatus || 'sandbox',
+    source: record.source || 'sandbox',
+  };
+}
+
+function safeMiniAppId(value) {
+  return readText(value).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 80);
+}
+
+function titleFromPromptForMiniApp(prompt) {
+  const text = readText(prompt).replace(/\s+/g, ' ');
+  if (!text) return '个人小程序';
+  return text.length <= 18 ? text : text.slice(0, 18);
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function generatedMiniAppHtml({ title, prompt }) {
+  const safeTitle = escapeHtml(title);
+  const safePrompt = escapeHtml(prompt);
+  const promptJson = JSON.stringify(readText(prompt));
+  return `<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${safeTitle}</title>
+  <style>
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#0f1722; color:#fff; }
+    main { padding:20px; display:grid; gap:14px; }
+    .card { border:1px solid #263445; background:#17212b; border-radius:16px; padding:16px; }
+    button { border:0; border-radius:999px; padding:10px 14px; background:#3390ec; color:white; font-weight:800; }
+    pre { white-space:pre-wrap; color:#9ec7ff; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>${safeTitle}</h1>
+      <p>这是机器人之父根据你的描述生成的个人沙箱小程序。</p>
+      <pre>${safePrompt}</pre>
+    </section>
+    <section class="card">
+      <button id="context">读取宿主上下文</button>
+      <button id="chat">让机器人解释这个小程序</button>
+      <pre id="output">等待操作...</pre>
+    </section>
+  </main>
+  <script>
+    const out = document.getElementById('output');
+    async function invoke(method, params) {
+      if (!window.FabushiMiniApp) throw new Error('FabushiMiniApp host SDK not ready');
+      const result = await window.FabushiMiniApp.invoke(method, params || {});
+      out.textContent = JSON.stringify(result, null, 2);
+    }
+    document.getElementById('context').onclick = () => invoke('app.getContext');
+    const prompt = ${promptJson};
+    document.getElementById('chat').onclick = () => invoke('bot.sendMessage', {
+      message: '请简要说明这个小程序能做什么：' + prompt
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function extractMiniAppHtml(value) {
+  const text = readText(value);
+  if (!text) return '';
+  const fenced = text.match(/```(?:html)?\s*([\s\S]*?)```/i);
+  const candidate = (fenced ? fenced[1] : text).trim();
+  if (!/<html[\s>]/i.test(candidate) || !/<script[\s>]/i.test(candidate)) return '';
+  return candidate.startsWith('<!doctype') || candidate.startsWith('<html')
+    ? candidate
+    : `<!doctype html>\n${candidate}`;
+}
+
+async function generateBotFatherMiniAppHtml({ title, prompt, user }) {
+  const fallback = generatedMiniAppHtml({ title, prompt });
+  try {
+    const result = await runAgentModel({
+      user,
+      mode: 'miniapp_generation',
+      maxCompletionTokens: deepseekMaxCompletionTokens,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是 Fabushi App 的小程序生成器。',
+            '只输出一个完整静态 HTML 文件，不要 Markdown，不要解释。',
+            '小程序只能通过 window.FabushiMiniApp.invoke(method, params) 调用宿主能力。',
+            '禁止外链脚本、eval、Authorization token、桌面桥 token、OpenClaw token。',
+            '优先实现一个可点击、可立即使用的小面板，包含 app.getContext 或 bot.sendMessage 示例。',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: [
+            `小程序标题：${title}`,
+            `用户需求：${prompt}`,
+            '请生成 HTML/CSS/JS 单文件。',
+          ].join('\n'),
+        },
+      ],
+    });
+    const sourceHtml = extractMiniAppHtml(result.message);
+    if (!sourceHtml) {
+      return {
+        sourceHtml: fallback,
+        generation: { provider: 'template', fallbackReason: 'ai_output_not_html' },
+      };
+    }
+    return {
+      sourceHtml,
+      generation: {
+        provider: result.provider || 'ai',
+        model: result.model || '',
+      },
+    };
+  } catch (error) {
+    return {
+      sourceHtml: fallback,
+      generation: {
+        provider: 'template',
+        fallbackReason: readText(error?.message || error),
+      },
+    };
+  }
 }
 
 function clientContextMessage(client) {
@@ -2075,6 +2394,245 @@ app.get('/health', (_req, res) => {
     timestamp: nowIso(),
   });
 });
+
+app.get(
+  '/api/miniapps/registry',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, { username: req.query.username });
+    const official = officialMiniAppRegistry(req);
+    const store = await readMiniAppStore();
+    const visibleSandbox = store.apps.filter((appRecord) => {
+      if (appRecord.reviewStatus === 'approved' && appRecord.source === 'marketplace') {
+        return true;
+      }
+      return appRecord.ownerId === user.userId;
+    });
+    const bots = [
+      ...official.bots,
+      ...visibleSandbox.map((record) => miniAppRecordToBot(record)),
+    ];
+    const miniApps = [
+      ...official.miniApps,
+      ...visibleSandbox.map((record) => miniAppRecordToManifest(req, record)),
+    ];
+    const registry = {
+      schemaVersion: 1,
+      hostApiVersion: miniAppHostApiVersion,
+      bots,
+      miniApps,
+      updatedAt: nowIso(),
+    };
+    registry.signature = sha256(JSON.stringify({ bots, miniApps }));
+    jsonResponse(res, 200, { success: true, registry });
+  }),
+);
+
+app.get(
+  '/api/miniapps/dev/:miniAppId/index.html',
+  asyncHandler(async (req, res) => {
+    const miniAppId = safeMiniAppId(req.params.miniAppId);
+    const store = await readMiniAppStore();
+    const record = store.apps.find((appRecord) => appRecord.miniAppId === miniAppId);
+    if (!record) {
+      res.status(404).type('text/html').send('<h1>Mini app not found</h1>');
+      return;
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(record.sourceHtml || generatedMiniAppHtml(record));
+  }),
+);
+
+app.post(
+  '/api/miniapps/dev/create',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, req.body || {});
+    const title = safeUserText(req.body?.title, '个人小程序').slice(0, 80);
+    const subtitle = safeUserText(req.body?.subtitle, '个人沙箱小程序').slice(0, 120);
+    const permissions = sanitizeMiniAppPermissions(req.body?.permissions);
+    const prompt = safeUserText(req.body?.prompt || title);
+    const idSeed = crypto.randomUUID().replaceAll('-', '').slice(0, 12);
+    const miniAppId = `sandbox.${idSeed}`;
+    const botId = `bot.${miniAppId}`;
+    const sourceHtml = generatedMiniAppHtml({ title, prompt });
+    const scan = miniAppScan(permissions, sourceHtml);
+    const createdAt = nowIso();
+    const record = {
+      ownerId: user.userId,
+      miniAppId,
+      botId,
+      title,
+      subtitle,
+      initials: title.slice(0, 1) || '小',
+      icon: 'code',
+      avatarColor: '#3D8BFF',
+      greeting: '你好，我是这个个人沙箱小程序的机器人。',
+      inputHint: '输入消息，或打开小程序面板',
+      version: '0.0.1',
+      permissions,
+      surfaces: ['chatPanel'],
+      theme: 'telegramDark',
+      source: 'sandbox',
+      reviewStatus: 'sandbox',
+      sourceHtml,
+      scan,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    const store = await readMiniAppStore();
+    store.apps.push(record);
+    await writeMiniAppStore(store);
+    jsonResponse(res, 200, {
+      success: true,
+      miniApp: miniAppRecordToManifest(req, record),
+      bot: miniAppRecordToBot(record),
+      scan,
+    });
+  }),
+);
+
+app.post(
+  '/api/miniapps/dev/:miniAppId/version',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, req.body || {});
+    const miniAppId = safeMiniAppId(req.params.miniAppId);
+    const store = await readMiniAppStore();
+    const index = store.apps.findIndex((appRecord) => appRecord.miniAppId === miniAppId);
+    if (index < 0) {
+      return jsonResponse(res, 404, { success: false, message: 'mini app not found' });
+    }
+    const record = store.apps[index];
+    if (record.ownerId !== user.userId) {
+      return jsonResponse(res, 403, { success: false, message: 'not your mini app' });
+    }
+    const title = safeUserText(req.body?.title, record.title).slice(0, 80);
+    const subtitle = safeUserText(req.body?.subtitle, record.subtitle).slice(0, 120);
+    const sourceHtml =
+      safeUserText(req.body?.sourceHtml) ||
+      generatedMiniAppHtml({ title, prompt: safeUserText(req.body?.prompt || title) });
+    const permissions = sanitizeMiniAppPermissions(req.body?.permissions || record.permissions);
+    const scan = miniAppScan(permissions, sourceHtml);
+    store.apps[index] = {
+      ...record,
+      title,
+      subtitle,
+      sourceHtml,
+      permissions,
+      scan,
+      reviewStatus: 'sandbox',
+      version: safeUserText(req.body?.version, record.version || '0.0.1'),
+      updatedAt: nowIso(),
+    };
+    await writeMiniAppStore(store);
+    jsonResponse(res, 200, {
+      success: true,
+      miniApp: miniAppRecordToManifest(req, store.apps[index]),
+      bot: miniAppRecordToBot(store.apps[index]),
+      scan,
+    });
+  }),
+);
+
+app.post(
+  '/api/miniapps/:miniAppId/submit-review',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, req.body || {});
+    const miniAppId = safeMiniAppId(req.params.miniAppId);
+    const store = await readMiniAppStore();
+    const index = store.apps.findIndex((appRecord) => appRecord.miniAppId === miniAppId);
+    if (index < 0) {
+      return jsonResponse(res, 404, { success: false, message: 'mini app not found' });
+    }
+    const record = store.apps[index];
+    if (record.ownerId !== user.userId) {
+      return jsonResponse(res, 403, { success: false, message: 'not your mini app' });
+    }
+    const scan = miniAppScan(record.permissions || [], record.sourceHtml || '');
+    if (!scan.passed) {
+      return jsonResponse(res, 400, {
+        success: false,
+        message: 'security scan failed',
+        scan,
+      });
+    }
+    store.apps[index] = {
+      ...record,
+      scan,
+      reviewStatus: 'pending_review',
+      updatedAt: nowIso(),
+    };
+    await writeMiniAppStore(store);
+    jsonResponse(res, 200, {
+      success: true,
+      miniApp: miniAppRecordToManifest(req, store.apps[index]),
+      scan,
+    });
+  }),
+);
+
+app.post(
+  '/api/botfather/generate-miniapp',
+  asyncHandler(async (req, res) => {
+    const user = await resolveUser(req, req.body || {});
+    const prompt = safeUserText(req.body?.prompt);
+    if (!prompt) {
+      return jsonResponse(res, 400, { success: false, message: 'prompt is required' });
+    }
+    const title = titleFromPromptForMiniApp(prompt);
+    const subtitle = '机器人之父生成的个人沙箱小程序';
+    const permissions = sanitizeMiniAppPermissions(req.body?.permissions);
+    const generated = await generateBotFatherMiniAppHtml({ title, prompt, user });
+    let sourceHtml = generated.sourceHtml;
+    let generation = generated.generation;
+    let scan = miniAppScan(permissions, sourceHtml);
+    if (!scan.passed) {
+      sourceHtml = generatedMiniAppHtml({ title, prompt });
+      generation = {
+        provider: 'template',
+        fallbackReason: 'ai_output_failed_security_scan',
+      };
+      scan = miniAppScan(permissions, sourceHtml);
+    }
+    const idSeed = crypto.randomUUID().replaceAll('-', '').slice(0, 12);
+    const miniAppId = `sandbox.${idSeed}`;
+    const createdAt = nowIso();
+    const record = {
+      ownerId: user.userId,
+      miniAppId,
+      botId: `bot.${miniAppId}`,
+      title,
+      subtitle,
+      initials: title.slice(0, 1) || '小',
+      icon: 'code',
+      avatarColor: '#3D8BFF',
+      greeting: `我是「${title}」的机器人。`,
+      inputHint: '继续描述修改需求，或打开小程序面板',
+      version: '0.0.1',
+      permissions,
+      surfaces: ['chatPanel'],
+      theme: 'telegramDark',
+      source: 'sandbox',
+      reviewStatus: 'sandbox',
+      sourceHtml,
+      scan,
+      generation,
+      prompt,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    const store = await readMiniAppStore();
+    store.apps.push(record);
+    await writeMiniAppStore(store);
+    jsonResponse(res, 200, {
+      success: true,
+      miniApp: miniAppRecordToManifest(req, record),
+      bot: miniAppRecordToBot(record),
+      scan,
+      generation,
+      actions: ['openMiniApp', 'continueEditing', 'submitReview'],
+    });
+  }),
+);
 
 app.get('/api/ai/models', (_req, res) => {
   jsonResponse(res, 200, {
