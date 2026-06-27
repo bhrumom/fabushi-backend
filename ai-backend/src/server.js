@@ -386,10 +386,16 @@ function readText(value) {
   return String(value).replace(/\u0000/g, '').trim();
 }
 
-const miniAppHostApiVersion = '1.0';
+const miniAppHostApiVersion = '1.2';
 const miniAppHighRiskPermissions = new Set([
+  'auth.token',
+  'payments.alipay',
   'desktop.control',
+  'wifi.hotspot',
   'local.loopback',
+  'fs.readWrite',
+  'shell.execute',
+  'browser.external',
   'files.write',
   'projects.write',
   'openclaw.restart',
@@ -407,13 +413,17 @@ function officialMiniAppRegistry(req) {
       icon: 'public',
       avatarColor: '#4CAF7A',
       kind: 'global_dharma',
+      entryUrl: process.env.GLOBAL_DHARMA_MINIAPP_URL,
       greeting: '把要分享的文字、链接或素材发给我，我会按上方选择的地区与模式启动全球法布施。',
       inputHint: '输入要法布施的文字/链接，或点 + 添加素材',
       permissions: [
         'app.context',
         'bot.chat',
+        'auth.session',
+        'payments.alipay',
         'dharma.share',
         'files.pick',
+        'wifi.hotspot',
         'openclaw.status',
         'openclaw.chat',
         'local.loopback',
@@ -429,6 +439,7 @@ function officialMiniAppRegistry(req) {
       icon: 'flashcards',
       avatarColor: '#7E57C2',
       kind: 'flashcards',
+      entryUrl: process.env.FLASHCARDS_MINIAPP_URL,
       greeting: '粘贴经文、文章正文或链接即可制作背诵闪卡。制卡模式请在上方按钮切换。',
       inputHint: '粘贴链接或正文，发送后制作闪卡',
       permissions: ['app.context', 'bot.chat', 'flashcards.create', 'openclaw.status', 'openclaw.chat'],
@@ -442,9 +453,18 @@ function officialMiniAppRegistry(req) {
       icon: 'publish',
       avatarColor: '#FF9F43',
       kind: 'platform_publish',
+      entryUrl: process.env.PLATFORM_PUBLISH_MINIAPP_URL,
       greeting: '把要发布的正文或链接发给我，上方选择平台后，我会生成发布草稿并打开对应平台入口。',
       inputHint: '输入要发布到平台的正文/链接',
-      permissions: ['app.context', 'bot.chat', 'platform.publish', 'files.pick'],
+      permissions: [
+        'app.context',
+        'bot.chat',
+        'platform.publish',
+        'files.pick',
+        'fs.readWrite',
+        'shell.execute',
+        'browser.external',
+      ],
     },
     {
       botId: 'bot.father',
@@ -455,6 +475,7 @@ function officialMiniAppRegistry(req) {
       icon: 'bot_father',
       avatarColor: '#3D8BFF',
       kind: 'bot_father',
+      entryUrl: process.env.BOT_FATHER_MINIAPP_URL,
       greeting: '告诉我你想要的小程序，我会生成 manifest、界面和权限声明，并放进你的个人沙箱。',
       inputHint: '描述你想创建的小程序',
       permissions: ['app.context', 'bot.chat', 'miniapps.dev'],
@@ -471,8 +492,10 @@ function officialMiniAppRegistry(req) {
       botId: bot.botId,
       title: bot.title,
       subtitle: bot.subtitle,
-      entryUrl: `${webBase.replace(/\/+$/, '')}/miniapps/${encodeURIComponent(bot.miniAppId)}`,
-      version: '1.0.0',
+      entryUrl:
+        bot.entryUrl ||
+        `${webBase.replace(/\/+$/, '')}/miniapps/${encodeURIComponent(bot.miniAppId)}`,
+      version: '1.2.0',
       permissions: bot.permissions,
       surfaces: ['homePinned', 'chatPanel'],
       theme: 'telegramDark',
@@ -535,6 +558,29 @@ function miniAppScan(permissions, sourceHtml = '') {
     highRiskPermissions: highRisk,
     blockedPatterns: blocked,
   };
+}
+
+function inferMiniAppPermissionsFromText(...values) {
+  const text = values.map((value) => readText(value)).join('\n').toLowerCase();
+  const rules = [
+    ['auth.session', [/auth\.(getsession|requirelogin)/, /登录|用户信息|宿主账号/]],
+    ['auth.token', [/auth\.getaccesstoken/, /access token|访问 token/]],
+    ['payments.alipay', [/payments\.alipay/, /支付宝|支付|购买|订单/]],
+    ['dharma.share', [/dharma\./, /全球法布施|法布施发送/]],
+    ['wifi.hotspot', [/wifihotspot\./, /wifi|wi-fi|热点|本地场能/]],
+    ['local.loopback', [/localloopback\./, /localhost|127\.0\.0\.1|本地回环|本地转经轮/]],
+    ['flashcards.create', [/flashcards\./, /闪卡|背诵卡|挖空/]],
+    ['platform.publish', [/platformpublish\./, /发布草稿|发布到平台|公众号|小红书|知乎/]],
+    ['files.pick', [/files\.pick/, /选择文件|上传文件|本地素材/]],
+    ['fs.readWrite', [/fs\.(writefile|readfile)/, /本地文件|写文件|读文件|文件处理/]],
+    ['shell.execute', [/shell\.execute/, /终端|命令行|shell|cli|playwright/]],
+    ['browser.external', [/browser\.open/, /浏览器|打开网页|打开平台/]],
+    ['desktop.control', [/desktopcontrol\./, /桌面控制|点击|键盘|鼠标/]],
+    ['openclaw.chat', [/openclaw\.chat/, /openclaw/]],
+  ];
+  return rules
+    .filter(([, patterns]) => patterns.some((pattern) => pattern.test(text)))
+    .map(([permission]) => permission);
 }
 
 function miniAppRecordToBot(record) {
@@ -617,6 +663,7 @@ function generatedMiniAppHtml({ title, prompt }) {
     </section>
     <section class="card">
       <button id="context">读取宿主上下文</button>
+      <button id="spec">读取宿主能力</button>
       <button id="chat">让机器人解释这个小程序</button>
       <pre id="output">等待操作...</pre>
     </section>
@@ -629,6 +676,7 @@ function generatedMiniAppHtml({ title, prompt }) {
       out.textContent = JSON.stringify(result, null, 2);
     }
     document.getElementById('context').onclick = () => invoke('app.getContext');
+    document.getElementById('spec').onclick = () => invoke('app.getHostApiSpec');
     const prompt = ${promptJson};
     document.getElementById('chat').onclick = () => invoke('bot.sendMessage', {
       message: '请简要说明这个小程序能做什么：' + prompt
@@ -663,7 +711,11 @@ async function generateBotFatherMiniAppHtml({ title, prompt, user }) {
             '你是 Fabushi App 的小程序生成器。',
             '只输出一个完整静态 HTML 文件，不要 Markdown，不要解释。',
             '小程序只能通过 window.FabushiMiniApp.invoke(method, params) 调用宿主能力。',
+            '先调用 app.getHostApiSpec 或 app.getCapabilities 判断宿主版本和已授权权限，再显示对应 UI。',
+            '标准能力：auth.getSession/auth.requireLogin 复用宿主登录；payments.alipay.pay 拉起支付宝并把支付结果传回小程序；payments.alipay.createOrder 仅作为宿主官方订单服务的可选能力；小程序商品、购买记录、权益状态由小程序自己保存；dharma.prepareContent/dharma.startGlobalSend 接入全球法布施；wifiHotspot.enable 接入本地场能热点；flashcards.createDeck 接入背诵闪卡；platformPublish.createDraft 接入发布草稿；fs.writeFile/fs.readFile、shell.execute、browser.open 用于本地文件处理、终端和浏览器。',
+            '高危权限包括 auth.token、payments.alipay、wifi.hotspot、local.loopback、fs.readWrite、shell.execute、browser.external、desktop.control；只有用户需求明确需要时才使用。',
             '禁止外链脚本、eval、Authorization token、桌面桥 token、OpenClaw token。',
+            '不要调用 auth.getAccessToken，除非用户明确要求对接需要 token 的受信服务。',
             '优先实现一个可点击、可立即使用的小面板，包含 app.getContext 或 bot.sendMessage 示例。',
           ].join('\n'),
         },
@@ -2580,10 +2632,14 @@ app.post(
     }
     const title = titleFromPromptForMiniApp(prompt);
     const subtitle = '机器人之父生成的个人沙箱小程序';
-    const permissions = sanitizeMiniAppPermissions(req.body?.permissions);
+    const requestedPermissions = Array.isArray(req.body?.permissions) ? req.body.permissions : [];
     const generated = await generateBotFatherMiniAppHtml({ title, prompt, user });
     let sourceHtml = generated.sourceHtml;
     let generation = generated.generation;
+    const permissions = sanitizeMiniAppPermissions([
+      ...requestedPermissions,
+      ...inferMiniAppPermissionsFromText(prompt, sourceHtml),
+    ]);
     let scan = miniAppScan(permissions, sourceHtml);
     if (!scan.passed) {
       sourceHtml = generatedMiniAppHtml({ title, prompt });
