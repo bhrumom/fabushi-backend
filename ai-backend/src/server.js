@@ -386,10 +386,11 @@ function readText(value) {
   return String(value).replace(/\u0000/g, '').trim();
 }
 
-const miniAppHostApiVersion = '1.2';
+const miniAppHostApiVersion = '1.4';
 const miniAppHighRiskPermissions = new Set([
   'auth.token',
   'payments.alipay',
+  'payments.fudeGold',
   'desktop.control',
   'wifi.hotspot',
   'local.loopback',
@@ -420,6 +421,9 @@ function officialMiniAppRegistry(req) {
         'app.context',
         'bot.chat',
         'auth.session',
+        'wallet.balance',
+        'payments.entitlement',
+        'payments.fudeGold',
         'payments.alipay',
         'dharma.share',
         'files.pick',
@@ -495,7 +499,7 @@ function officialMiniAppRegistry(req) {
       entryUrl:
         bot.entryUrl ||
         `${webBase.replace(/\/+$/, '')}/miniapps/${encodeURIComponent(bot.miniAppId)}`,
-      version: '1.2.0',
+      version: '1.4.0',
       permissions: bot.permissions,
       surfaces: ['homePinned', 'chatPanel'],
       theme: 'telegramDark',
@@ -566,6 +570,9 @@ function inferMiniAppPermissionsFromText(...values) {
     ['auth.session', [/auth\.(getsession|requirelogin)/, /登录|用户信息|宿主账号/]],
     ['auth.token', [/auth\.getaccesstoken/, /access token|访问 token/]],
     ['payments.alipay', [/payments\.alipay/, /支付宝|支付|购买|订单/]],
+    ['payments.entitlement', [/payments\.checkentitlement|权益|解锁状态|购买状态/]],
+    ['payments.fudeGold', [/payments\.requestpayment|福德金|代币|钱包|余额/]],
+    ['wallet.balance', [/wallet\.getbalance|福德金|代币|钱包|余额/]],
     ['dharma.share', [/dharma\./, /全球法布施|法布施发送/]],
     ['wifi.hotspot', [/wifihotspot\./, /wifi|wi-fi|热点|本地场能/]],
     ['local.loopback', [/localloopback\./, /localhost|127\.0\.0\.1|本地回环|本地转经轮/]],
@@ -681,6 +688,40 @@ function generatedMiniAppHtml({ title, prompt }) {
     document.getElementById('chat').onclick = () => invoke('bot.sendMessage', {
       message: '请简要说明这个小程序能做什么：' + prompt
     });
+    const seenCommands = new Set();
+    function deliverMiniAppCommand(detail) {
+      if (!detail || typeof detail !== 'object') return;
+      const commandKey = detail.commandId || detail.id || [detail.createdAt, detail.command, detail.rawText || detail.text].filter(Boolean).join(':');
+      if (commandKey) {
+        if (seenCommands.has(commandKey)) return;
+        seenCommands.add(commandKey);
+      }
+      handleMiniAppCommand(detail);
+    }
+    async function handleMiniAppCommand(detail) {
+      out.textContent = '收到后台命令：' + JSON.stringify(detail, null, 2);
+      try {
+        await invoke('bot.postMessage', {
+          commandId: detail.commandId || detail.id,
+          message: '「${safeTitle}」已收到后台命令：' + (detail.args || detail.text || '')
+        });
+        await invoke('bot.reportCommandResult', {
+          commandId: detail.commandId || detail.id,
+          status: 'completed',
+          message: '「${safeTitle}」后台命令已处理。'
+        });
+      } catch (error) {
+        out.textContent = String(error && error.message || error);
+      }
+    }
+    window.addEventListener('fabushi-miniapp-command', (event) => {
+      deliverMiniAppCommand(event.detail || {});
+    });
+    if (window.__fabushiLastMiniAppCommand) {
+      (window.queueMicrotask || ((fn) => setTimeout(fn, 0)))(() => {
+        deliverMiniAppCommand(window.__fabushiLastMiniAppCommand);
+      });
+    }
   </script>
 </body>
 </html>`;
@@ -712,8 +753,9 @@ async function generateBotFatherMiniAppHtml({ title, prompt, user }) {
             '只输出一个完整静态 HTML 文件，不要 Markdown，不要解释。',
             '小程序只能通过 window.FabushiMiniApp.invoke(method, params) 调用宿主能力。',
             '先调用 app.getHostApiSpec 或 app.getCapabilities 判断宿主版本和已授权权限，再显示对应 UI。',
-            '标准能力：auth.getSession/auth.requireLogin 复用宿主登录；payments.alipay.pay 拉起支付宝并把支付结果传回小程序；payments.alipay.createOrder 仅作为宿主官方订单服务的可选能力；小程序商品、购买记录、权益状态由小程序自己保存；dharma.prepareContent/dharma.startGlobalSend 接入全球法布施；wifiHotspot.enable 接入本地场能热点；flashcards.createDeck 接入背诵闪卡；platformPublish.createDraft 接入发布草稿；fs.writeFile/fs.readFile、shell.execute、browser.open 用于本地文件处理、终端和浏览器。',
-            '高危权限包括 auth.token、payments.alipay、wifi.hotspot、local.loopback、fs.readWrite、shell.execute、browser.external、desktop.control；只有用户需求明确需要时才使用。',
+            '聊天后台调用协议：优先使用 window.FabushiMiniApp.bot.onCommand("/start", handler) 或 bot.onAnyCommand(handler)；如果手写监听 window 的 fabushi-miniapp-command 事件，注册后也要读取 window.__fabushiLastMiniAppCommand 并按 commandId 去重补处理。detail.command 默认为 /start，detail.args 是用户文本；处理完成后调用 bot.postMessage 或 bot.reportCommandResult 把进度/结果写回聊天框。',
+            '标准能力：auth.getSession/auth.requireLogin 复用宿主登录；payments.requestPayment 使用福德金支付并由宿主登记权益；payments.checkEntitlement 查询商品是否已解锁；payments.alipay.pay/createOrder 仅作为宿主官方现金支付兜底；dharma.prepareContent/dharma.startGlobalSend 接入全球法布施；wifiHotspot.enable 接入本地场能热点；flashcards.createDeck 接入背诵闪卡；platformPublish.createDraft 接入发布草稿；fs.writeFile/fs.readFile、shell.execute、browser.open 用于本地文件处理、终端和浏览器。',
+            '高危权限包括 auth.token、payments.alipay、payments.fudeGold、wifi.hotspot、local.loopback、fs.readWrite、shell.execute、browser.external、desktop.control；只有用户需求明确需要时才使用。',
             '禁止外链脚本、eval、Authorization token、桌面桥 token、OpenClaw token。',
             '不要调用 auth.getAccessToken，除非用户明确要求对接需要 token 的受信服务。',
             '优先实现一个可点击、可立即使用的小面板，包含 app.getContext 或 bot.sendMessage 示例。',
