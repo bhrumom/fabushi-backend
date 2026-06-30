@@ -15,6 +15,8 @@ import helmet from 'helmet';
 import pino from 'pino';
 import { z } from 'zod';
 
+import { registerPlatformApi } from './platform_api.js';
+
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4406,6 +4408,8 @@ app.post(
     });
   }),
 );
+
+registerPlatformApi({ app, db, resolveUser, asyncHandler });
 
 app.use((error, _req, res, _next) => {
   const status = Number(error.statusCode || error.status || 500);
