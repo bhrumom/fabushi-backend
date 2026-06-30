@@ -386,13 +386,16 @@ function readText(value) {
   return String(value).replace(/\u0000/g, '').trim();
 }
 
-const miniAppHostApiVersion = '1.4';
+const miniAppHostApiVersion = '1.5';
 const miniAppHighRiskPermissions = new Set([
   'auth.token',
   'payments.alipay',
   'payments.fudeGold',
   'desktop.control',
-  'wifi.hotspot',
+  'network.udp',
+  'network.interfaces',
+  'system.keepAwake',
+  'hotspot.settings',
   'local.loopback',
   'fs.readWrite',
   'shell.execute',
@@ -425,12 +428,13 @@ function officialMiniAppRegistry(req) {
         'payments.entitlement',
         'payments.fudeGold',
         'payments.alipay',
-        'dharma.share',
         'files.pick',
-        'wifi.hotspot',
+        'network.udp',
+        'network.interfaces',
+        'system.keepAwake',
+        'hotspot.settings',
         'openclaw.status',
         'openclaw.chat',
-        'local.loopback',
         'desktop.control',
       ],
     },
@@ -499,7 +503,7 @@ function officialMiniAppRegistry(req) {
       entryUrl:
         bot.entryUrl ||
         `${webBase.replace(/\/+$/, '')}/miniapps/${encodeURIComponent(bot.miniAppId)}`,
-      version: '1.4.0',
+      version: '1.5.0',
       permissions: bot.permissions,
       surfaces: ['homePinned', 'chatPanel'],
       theme: 'telegramDark',
@@ -573,8 +577,10 @@ function inferMiniAppPermissionsFromText(...values) {
     ['payments.entitlement', [/payments\.checkentitlement|权益|解锁状态|购买状态/]],
     ['payments.fudeGold', [/payments\.requestpayment|福德金|代币|钱包|余额/]],
     ['wallet.balance', [/wallet\.getbalance|福德金|代币|钱包|余额/]],
-    ['dharma.share', [/dharma\./, /全球法布施|法布施发送/]],
-    ['wifi.hotspot', [/wifihotspot\./, /wifi|wi-fi|热点|本地场能/]],
+    ['network.udp', [/network\.udp|udp|datagram/, /全球法布施|法布施发送|数据报/]],
+    ['network.interfaces', [/network\.interfaces|网卡|网络接口|广播地址/]],
+    ['system.keepAwake', [/system\.keepawake|保持唤醒|后台任务|keep awake/]],
+    ['hotspot.settings', [/hotspot\.opensettings|热点|本地场能/]],
     ['local.loopback', [/localloopback\./, /localhost|127\.0\.0\.1|本地回环|本地转经轮/]],
     ['flashcards.create', [/flashcards\./, /闪卡|背诵卡|挖空/]],
     ['platform.publish', [/platformpublish\./, /发布草稿|发布到平台|公众号|小红书|知乎/]],
@@ -754,8 +760,8 @@ async function generateBotFatherMiniAppHtml({ title, prompt, user }) {
             '小程序只能通过 window.FabushiMiniApp.invoke(method, params) 调用宿主能力。',
             '先调用 app.getHostApiSpec 或 app.getCapabilities 判断宿主版本和已授权权限，再显示对应 UI。',
             '聊天后台调用协议：优先使用 window.FabushiMiniApp.bot.onCommand("/start", handler) 或 bot.onAnyCommand(handler)；如果手写监听 window 的 fabushi-miniapp-command 事件，注册后也要读取 window.__fabushiLastMiniAppCommand 并按 commandId 去重补处理。detail.command 默认为 /start，detail.args 是用户文本；处理完成后调用 bot.postMessage 或 bot.reportCommandResult 把进度/结果写回聊天框。',
-            '标准能力：auth.getSession/auth.requireLogin 复用宿主登录；payments.requestPayment 使用福德金支付并由宿主登记权益；payments.checkEntitlement 查询商品是否已解锁；payments.alipay.pay/createOrder 仅作为宿主官方现金支付兜底；dharma.prepareContent/dharma.startGlobalSend 接入全球法布施；wifiHotspot.enable 接入本地场能热点；flashcards.createDeck 接入背诵闪卡；platformPublish.createDraft 接入发布草稿；fs.writeFile/fs.readFile、shell.execute、browser.open 用于本地文件处理、终端和浏览器。',
-            '高危权限包括 auth.token、payments.alipay、payments.fudeGold、wifi.hotspot、local.loopback、fs.readWrite、shell.execute、browser.external、desktop.control；只有用户需求明确需要时才使用。',
+            '标准能力：auth.getSession/auth.requireLogin 复用宿主登录；payments.requestPayment 使用福德金支付并由宿主登记权益；payments.checkEntitlement 查询商品是否已解锁；payments.alipay.pay/createOrder 仅作为宿主官方现金支付兜底；network.udp/network.interfaces 提供 UDP 和网卡原语；system.keepAwake/hotspot.openSettings 提供系统级辅助；flashcards.createDeck 接入背诵闪卡；platformPublish.createDraft 接入发布草稿；fs.writeFile/fs.readFile、shell.execute、browser.open 用于本地文件处理、终端和浏览器。',
+            '高危权限包括 auth.token、payments.alipay、payments.fudeGold、network.udp、network.interfaces、system.keepAwake、hotspot.settings、local.loopback、fs.readWrite、shell.execute、browser.external、desktop.control；只有用户需求明确需要时才使用。',
             '禁止外链脚本、eval、Authorization token、桌面桥 token、OpenClaw token。',
             '不要调用 auth.getAccessToken，除非用户明确要求对接需要 token 的受信服务。',
             '优先实现一个可点击、可立即使用的小面板，包含 app.getContext 或 bot.sendMessage 示例。',
