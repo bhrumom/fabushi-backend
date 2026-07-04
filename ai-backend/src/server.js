@@ -442,6 +442,8 @@ function officialMiniAppRegistry(req) {
         'openclaw.status',
         'openclaw.chat',
         'desktop.control',
+        'fs.readWrite',
+        'runtime.process',
       ],
     },
     {
