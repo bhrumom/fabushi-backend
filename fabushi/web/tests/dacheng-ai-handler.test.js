@@ -15,6 +15,13 @@ test('Dacheng AI proxy includes OpenClaw DeepSeek fallback endpoints', () => {
   assert.equal(isDachengAiPath('/api/openclaw/runtime/manifest'), true);
 });
 
+test('Dacheng AI proxy includes Bot Father and MiniApp registry endpoints', () => {
+  assert.equal(isDachengAiPath('/api/botfather/generate-miniapp'), true);
+  assert.equal(isDachengAiPath('/api/miniapps/registry'), true);
+  assert.equal(isDachengAiPath('/api/miniapps/dev/create'), true);
+  assert.equal(isDachengAiPath('/api/miniapps/dev/test_app/index.html'), true);
+});
+
 test('Dacheng AI proxy still rejects unrelated API endpoints', () => {
   assert.equal(isDachengAiPath('/api/auth/login'), false);
 });

@@ -276,11 +276,21 @@ const openClawGatewayUrl = (process.env.OPENCLAW_GATEWAY_URL || 'http://127.0.0.
 const openClawGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || '';
 const openClawAgentId = process.env.OPENCLAW_AGENT_ID || 'fabushi-public-agent';
 const openClawRunsEndpoint = process.env.OPENCLAW_RUNS_ENDPOINT || '';
-const codexDeepSeekProviderId = 'deepseek-chat-completions';
+const codexDeepSeekProviderId = 'dacheng-deepseek-proxy';
 const codexResponsesBaseUrl = (
   process.env.CODEX_DEEPSEEK_RESPONSES_BASE_URL ||
   `http://127.0.0.1:${process.env.PORT || 8788}/codex-deepseek/v1`
 ).replace(/\/+$/, '');
+const codexAdapterTokenPrefix = 'dacheng-codex-proxy.';
+const codexAdapterTokenTtlMs = Math.max(
+  60_000,
+  Number(process.env.CODEX_DEEPSEEK_ADAPTER_TOKEN_TTL_MS || 15 * 60_000),
+);
+const codexAdapterSecret =
+  process.env.CODEX_DEEPSEEK_ADAPTER_SECRET ||
+  deepseekApiKey ||
+  openClawGatewayToken ||
+  'dacheng-codex-local-dev-secret';
 
 const systemPrompt = [
   '你是“大乘”App 的 AI 助手。',
@@ -1005,6 +1015,100 @@ async function resolveUser(req, body = {}) {
   };
 }
 
+function base64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+function timingSafeEqualText(left, right) {
+  const leftBuffer = Buffer.from(String(left || ''));
+  const rightBuffer = Buffer.from(String(right || ''));
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function signCodexAdapterPayload(encodedPayload) {
+  return crypto
+    .createHmac('sha256', codexAdapterSecret)
+    .update(encodedPayload)
+    .digest('base64url');
+}
+
+function createCodexAdapterToken(user, options = {}) {
+  const payload = {
+    sub: user.userId,
+    username: user.username || '',
+    tokenHash: user.tokenHash || '',
+    isAuthenticated: Boolean(user.isAuthenticated),
+    isMember: Boolean(user.isMember),
+    isTestAccount: Boolean(user.isTestAccount),
+    membership: user.membership || {},
+    recordUsage: options.recordUsage !== false,
+    exp: Date.now() + codexAdapterTokenTtlMs,
+  };
+  const encodedPayload = base64UrlJson(payload);
+  return `${codexAdapterTokenPrefix}${encodedPayload}.${signCodexAdapterPayload(encodedPayload)}`;
+}
+
+function resolveCodexAdapterToken(token) {
+  const raw = readText(token);
+  if (!raw.startsWith(codexAdapterTokenPrefix)) return null;
+
+  const signed = raw.slice(codexAdapterTokenPrefix.length);
+  const separator = signed.lastIndexOf('.');
+  if (separator < 1) return null;
+
+  const encodedPayload = signed.slice(0, separator);
+  const signature = signed.slice(separator + 1);
+  const expectedSignature = signCodexAdapterPayload(encodedPayload);
+  if (!timingSafeEqualText(signature, expectedSignature)) return null;
+
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+
+  if (!payload || typeof payload !== 'object') return null;
+  if (Number(payload.exp || 0) < Date.now()) return null;
+
+  const userId = safeUserText(payload.sub);
+  if (!userId) return null;
+
+  return {
+    user: {
+      userId,
+      username: safeUserText(payload.username),
+      tokenHash: safeUserText(payload.tokenHash),
+      isAuthenticated: Boolean(payload.isAuthenticated),
+      isMember: Boolean(payload.isMember),
+      isTestAccount: Boolean(payload.isTestAccount),
+      membership:
+        payload.membership && typeof payload.membership === 'object'
+          ? payload.membership
+          : {},
+    },
+    recordUsage: payload.recordUsage !== false,
+  };
+}
+
+async function resolveCodexResponsesBilling(req) {
+  const token = bearerToken(req);
+  const adapter = resolveCodexAdapterToken(token);
+  if (adapter) return adapter;
+
+  if (deepseekApiKey && token === deepseekApiKey) {
+    const error = new Error('Codex DeepSeek adapter now requires first-party user billing');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  return {
+    user: await resolveUser(req, req.body || {}),
+    recordUsage: true,
+  };
+}
+
 function usageFor(userId) {
   const month = monthKey();
   const row = statements.getUsage.get(userId, month);
@@ -1252,24 +1356,25 @@ async function callDeepSeekStream(messages, callbacks = {}) {
   return { message, model, usage };
 }
 
-function createCodexDeepSeekRuntime() {
+function createCodexDeepSeekRuntime(user = null) {
   if (!enableCodexSdkChat || !deepseekApiKey) {
     return {
       enabled: false,
-      provider: 'deepseek-direct',
+      provider: codexDeepSeekProviderId,
       reason: enableCodexSdkChat ? 'DeepSeek API key is not configured' : 'ENABLE_CODEX_SDK_CHAT is not true',
     };
   }
 
+  const adapterToken = user ? createCodexAdapterToken(user) : '';
   return {
     enabled: true,
-    provider: 'codex-sdk-deepseek',
+    provider: codexDeepSeekProviderId,
     options: {
-      apiKey: deepseekApiKey,
-      baseUrl: deepseekBaseUrl,
+      apiKey: adapterToken,
+      baseUrl: codexResponsesBaseUrl,
       env: {
         ...process.env,
-        DEEPSEEK_API_KEY: deepseekApiKey,
+        DEEPSEEK_API_KEY: adapterToken,
         HOME: codexHomeDir,
         CODEX_HOME: codexHomeDir,
         TMPDIR: codexTempDir,
@@ -1283,7 +1388,7 @@ function createCodexDeepSeekRuntime() {
         model_provider: codexDeepSeekProviderId,
         model_providers: {
           [codexDeepSeekProviderId]: {
-            name: 'DeepSeek Chat Completions',
+            name: 'Dacheng DeepSeek Proxy',
             base_url: codexResponsesBaseUrl,
             env_key: 'DEEPSEEK_API_KEY',
             wire_api: 'responses',
@@ -1566,10 +1671,15 @@ function responsesPayload({
 }
 
 async function callCodexSdkDeepSeek(messages, callbacks = {}) {
-  const codexRuntime = createCodexDeepSeekRuntime();
+  const codexRuntime = createCodexDeepSeekRuntime(callbacks.user);
   if (!codexRuntime.enabled) {
     const error = new Error(codexRuntime.reason || 'Codex SDK chat is not enabled');
     error.statusCode = 503;
+    throw error;
+  }
+  if (!callbacks.user) {
+    const error = new Error('Codex SDK DeepSeek proxy requires a resolved user for billing');
+    error.statusCode = 401;
     throw error;
   }
 
@@ -1627,6 +1737,7 @@ async function callCodexSdkDeepSeek(messages, callbacks = {}) {
         completionTokens: Number(usage?.output_tokens || 0),
         totalTokens: Number((usage?.input_tokens || 0) + (usage?.output_tokens || 0)),
       },
+      usageAlreadyRecorded: true,
     };
   }
 
@@ -1644,6 +1755,7 @@ async function callCodexSdkDeepSeek(messages, callbacks = {}) {
       completionTokens: Number(turn.usage?.output_tokens || 0),
       totalTokens: Number((turn.usage?.input_tokens || 0) + (turn.usage?.output_tokens || 0)),
     },
+    usageAlreadyRecorded: true,
   };
 }
 
@@ -1778,7 +1890,7 @@ async function runAgentModel({ messages, user, conversationId, mode, callbacks =
     return await callOpenClawAgent({ messages, user, conversationId, mode, signal });
   }
 
-  const codexRuntime = createCodexDeepSeekRuntime();
+  const codexRuntime = createCodexDeepSeekRuntime(user);
   const libreChatRuntime = createLibreChatAgentRuntime();
   let provider = libreChatRuntime.enabled
     ? libreChatRuntime.provider
@@ -1795,7 +1907,7 @@ async function runAgentModel({ messages, user, conversationId, mode, callbacks =
       return { ...result, provider, model };
     }
     if (codexRuntime.enabled) {
-      const result = await callCodexSdkDeepSeek(messages, { ...callbacks, signal });
+      const result = await callCodexSdkDeepSeek(messages, { ...callbacks, user, signal });
       return { ...result, provider, model };
     }
     const result = callbacks.onToken
@@ -2218,8 +2330,7 @@ app.post(
 app.post(
   '/codex-deepseek/v1/responses',
   asyncHandler(async (req, res) => {
-    const bearer = bearerToken(req);
-    if (!deepseekApiKey || bearer !== deepseekApiKey) {
+    if (!deepseekApiKey) {
       res.status(401).json({
         error: { message: 'Unauthorized Codex DeepSeek adapter request' },
       });
@@ -2232,24 +2343,33 @@ app.post(
       return;
     }
 
-    const model = String(req.body?.model || deepseekModel);
+    const { user, recordUsage: shouldRecordUsage } = await resolveCodexResponsesBilling(req);
+    const messages = [{ role: 'user', content: prompt }];
+    const promptEstimate = estimateTokens(JSON.stringify(messages));
+    const budget = enforceTokenBudget(user, promptEstimate + 600);
+    const maxCompletionTokens = Math.min(
+      completionBudgetFor(budget, promptEstimate),
+      normalizeMaxCompletionTokens(req.body?.max_output_tokens || req.body?.max_tokens),
+    );
+    const model = normalizeDeepSeekModelName(req.body?.model);
     const responseId = `resp_${crypto.randomUUID().replaceAll('-', '')}`;
     const itemId = `msg_${crypto.randomUUID().replaceAll('-', '')}`;
     const wantsStream =
       req.body?.stream !== false ||
       String(req.get('accept') || '').includes('text/event-stream');
-    const messages = [{ role: 'user', content: prompt }];
 
     if (!wantsStream) {
-      const result = await callDeepSeek(messages);
+      const result = await callDeepSeek(messages, { model, maxCompletionTokens });
+      const usage = usageWithFallback(result.usage, messages, result.message);
+      if (shouldRecordUsage) recordUsage(user.userId, usage.totalTokens);
       res.json(
         responsesPayload({
           responseId,
           itemId,
           status: 'completed',
-          model,
+          model: result.model || model,
           text: result.message,
-          usage: result.usage,
+          usage,
         }),
       );
       return;
@@ -2295,6 +2415,8 @@ app.post(
     let text = '';
     try {
       const result = await callDeepSeekStream(messages, {
+        model,
+        maxCompletionTokens,
         onToken: (delta) => {
           text += delta;
           writeResponsesEvent(res, 'response.output_text.delta', {
@@ -2307,6 +2429,8 @@ app.post(
         },
       });
       text = result.message || text;
+      const usage = usageWithFallback(result.usage, messages, text);
+      if (shouldRecordUsage) recordUsage(user.userId, usage.totalTokens);
       writeResponsesEvent(res, 'response.output_text.done', {
         type: 'response.output_text.done',
         item_id: itemId,
@@ -2338,9 +2462,9 @@ app.post(
           responseId,
           itemId,
           status: 'completed',
-          model,
+          model: result.model || model,
           text,
-          usage: result.usage,
+          usage,
         }),
       });
       res.end();
@@ -2875,7 +2999,7 @@ app.post(
           aiResult.usage?.totalTokens ||
           estimateTokens(JSON.stringify(modelMessages)) + estimateTokens(aiResult.message),
       };
-      recordUsage(user.userId, usage.totalTokens);
+      if (!aiResult.usageAlreadyRecorded) recordUsage(user.userId, usage.totalTokens);
       const answeredAt = nowIso();
       const assistantMessageId = crypto.randomUUID();
       statements.insertMessage.run({
@@ -2996,7 +3120,7 @@ app.get(
         totalTokens:
           aiResult.usage?.totalTokens || estimateTokens(JSON.stringify(finalMessages)) + estimateTokens(message),
       };
-      recordUsage(user.userId, usage.totalTokens);
+      if (!aiResult.usageAlreadyRecorded) recordUsage(user.userId, usage.totalTokens);
       const assistantMessageId = crypto.randomUUID();
       const answeredAt = nowIso();
       statements.insertMessage.run({
@@ -3140,7 +3264,7 @@ app.post(
     ];
 
     const openClawRuntime = createOpenClawRuntime();
-    const codexRuntime = createCodexDeepSeekRuntime();
+    const codexRuntime = createCodexDeepSeekRuntime(user);
     let provider = openClawRuntime.enabled
       ? openClawRuntime.provider
       : libreChatRuntime.enabled
@@ -3166,7 +3290,7 @@ app.post(
         aiResult = await callLibreChatAgent(modelMessages);
       } else if (codexRuntime.enabled) {
         provider = codexRuntime.provider;
-        aiResult = await callCodexSdkDeepSeek(modelMessages);
+        aiResult = await callCodexSdkDeepSeek(modelMessages, { user, maxCompletionTokens });
       } else {
         aiResult = await callDeepSeek(modelMessages, { model: requestedModel, maxCompletionTokens });
       }
@@ -3177,7 +3301,7 @@ app.post(
         responseModel = requestedModel;
         if (codexRuntime.enabled) {
           try {
-            aiResult = await callCodexSdkDeepSeek(modelMessages);
+            aiResult = await callCodexSdkDeepSeek(modelMessages, { user, maxCompletionTokens });
           } catch (codexError) {
             if (isDeepSeekQuotaError(codexError)) throw codexError;
             logger.warn({ error: String(codexError) }, 'Codex SDK chat failed, falling back to DeepSeek direct');
@@ -3202,7 +3326,7 @@ app.post(
         aiResult.usage.totalTokens ||
         estimateTokens(JSON.stringify(modelMessages)) + estimateTokens(aiResult.message),
     };
-    recordUsage(user.userId, usage.totalTokens);
+    if (!aiResult.usageAlreadyRecorded) recordUsage(user.userId, usage.totalTokens);
 
     const answeredAt = nowIso();
     statements.insertMessage.run({
@@ -3292,7 +3416,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
       createdAt,
     });
 
-    const codexRuntime = createCodexDeepSeekRuntime();
+    const codexRuntime = createCodexDeepSeekRuntime(user);
     const libreChatRuntime = createLibreChatAgentRuntime();
     const initialOpenClawRuntime = createOpenClawRuntime();
     let provider = initialOpenClawRuntime.enabled
@@ -3345,6 +3469,8 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         });
       } else if (codexRuntime.enabled) {
         aiResult = await callCodexSdkDeepSeek(modelMessages, {
+          user,
+          maxCompletionTokens,
           onToken: (token) => writeSse(res, 'delta', { text: token }),
           onStep: (step) => writeSse(res, 'step', step),
         });
@@ -3368,6 +3494,8 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         if (codexRuntime.enabled) {
           try {
             aiResult = await callCodexSdkDeepSeek(modelMessages, {
+              user,
+              maxCompletionTokens,
               onToken: (token) => writeSse(res, 'delta', { text: token }),
               onStep: (step) => writeSse(res, 'step', step),
             });
@@ -3419,7 +3547,7 @@ app.post('/api/ai/chat/stream', async (req, res) => {
         aiResult.usage.totalTokens ||
         estimateTokens(JSON.stringify(modelMessages)) + estimateTokens(aiResult.message),
     };
-    recordUsage(user.userId, usage.totalTokens);
+    if (!aiResult.usageAlreadyRecorded) recordUsage(user.userId, usage.totalTokens);
 
     const answeredAt = nowIso();
     statements.insertMessage.run({
@@ -4399,8 +4527,9 @@ app.post(
     if (!prompt) {
       return jsonResponse(res, 400, { success: false, message: 'prompt is required' });
     }
+    const user = await resolveUser(req, req.body || {});
     const { Codex } = await import('@openai/codex-sdk');
-    const codexRuntime = createCodexDeepSeekRuntime();
+    const codexRuntime = createCodexDeepSeekRuntime(user);
     const codex = new Codex(codexRuntime.enabled ? codexRuntime.options : {});
     const thread = codex.startThread(
       codexRuntime.enabled
@@ -4408,11 +4537,20 @@ app.post(
         : { skipGitRepoCheck: true, networkAccessEnabled: true },
     );
     const result = await thread.run(prompt);
+    const usage = {
+      promptTokens: Number(result.usage?.input_tokens || 0),
+      completionTokens: Number(result.usage?.output_tokens || 0),
+      totalTokens: Number((result.usage?.input_tokens || 0) + (result.usage?.output_tokens || 0)),
+    };
+    if (!codexRuntime.enabled) {
+      recordUsage(user.userId, usage.totalTokens || estimateTokens(JSON.stringify(result)));
+    }
     jsonResponse(res, 200, {
       success: true,
       threadId: thread.id,
       provider: codexRuntime.provider,
       model: deepseekModel,
+      usage,
       result,
     });
   }),
