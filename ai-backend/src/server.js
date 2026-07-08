@@ -745,8 +745,10 @@ function generatedMiniAppHtml({ title, prompt }) {
       deliverMiniAppCommand(event.detail || {});
     });
     if (window.__fabushiLastMiniAppCommand) {
+      const cmd = window.__fabushiLastMiniAppCommand;
+      window.__fabushiLastMiniAppCommand = null;
       (window.queueMicrotask || ((fn) => setTimeout(fn, 0)))(() => {
-        deliverMiniAppCommand(window.__fabushiLastMiniAppCommand);
+        deliverMiniAppCommand(cmd);
       });
     }
   </script>
