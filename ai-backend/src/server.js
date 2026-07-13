@@ -16,6 +16,10 @@ import pino from 'pino';
 import { z } from 'zod';
 
 import { registerPlatformApi } from './platform_api.js';
+import {
+  extractMiniAppHtml,
+  isBotFatherGenerationMessages,
+} from './miniapp_generation.js';
 
 dotenv.config();
 
@@ -25,6 +29,20 @@ const dataDir = process.env.DATA_DIR || path.join(rootDir, 'data');
 const resourcesDir = path.join(dataDir, 'resources');
 const miniAppsDir = path.join(dataDir, 'miniapps');
 const miniAppsStorePath = path.join(miniAppsDir, 'sandbox-miniapps.json');
+
+function miniAppWorkspaceDir(user, prompt) {
+  const userId = String(user?.userId || 'anonymous')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 64);
+  const seed = crypto
+    .createHash('sha256')
+    .update(`${userId}:${prompt}`)
+    .digest('hex')
+    .slice(0, 16);
+  const dir = path.join(miniAppsDir, userId, seed);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
 const openClawRuntimeUpdatesDir =
   process.env.OPENCLAW_RUNTIME_UPDATES_DIR || path.join(dataDir, 'openclaw-runtime');
 const openClawRuntimeEnableMacosUpdates =
@@ -260,6 +278,10 @@ const memberMonthlyLimit = Number(process.env.MEMBER_MONTHLY_TOKEN_LIMIT || 1_00
 const freeMonthlyLimit = Number(process.env.FREE_MONTHLY_TOKEN_LIMIT || 1_000);
 const requireMemberForAi = process.env.REQUIRE_MEMBER_FOR_AI === 'true';
 const deepseekMaxCompletionTokens = Math.max(1, Number(process.env.DEEPSEEK_MAX_COMPLETION_TOKENS || 1400));
+const botFatherMaxCompletionTokens = Math.max(
+  deepseekMaxCompletionTokens,
+  Math.min(12_000, Number(process.env.BOT_FATHER_MAX_COMPLETION_TOKENS || 6000)),
+);
 const maxResourceTextChars = Number(process.env.MAX_RESOURCE_TEXT_CHARS || 80_000);
 const openClawRuntimeManifestPath =
   process.env.OPENCLAW_RUNTIME_MANIFEST_PATH || path.join(openClawRuntimeUpdatesDir, 'manifest.json');
@@ -756,30 +778,54 @@ function generatedMiniAppHtml({ title, prompt }) {
 </html>`;
 }
 
-function extractMiniAppHtml(value) {
-  const text = readText(value);
-  if (!text) return '';
-  const fenced = text.match(/```(?:html)?\s*([\s\S]*?)```/i);
-  const candidate = (fenced ? fenced[1] : text).trim();
-  if (!/<html[\s>]/i.test(candidate) || !/<script[\s>]/i.test(candidate)) return '';
-  return candidate.startsWith('<!doctype') || candidate.startsWith('<html')
-    ? candidate
-    : `<!doctype html>\n${candidate}`;
+function writeBotFatherWorkspaceInstructions(workspaceDir) {
+  const instructions = [
+    '# Fabushi Mini App Workspace',
+    '',
+    'You are developing a Fabushi mini app in this directory.',
+    'Use your normal coding workflow: inspect files, create or edit code, run checks, and fix problems.',
+    'The required runtime entry point is index.html.',
+    'index.html must be a complete self-contained HTML document with inline CSS and JavaScript.',
+    'Do not load external scripts, stylesheets, fonts, or remote application code.',
+    'Host capabilities are available only through window.FabushiMiniApp.invoke(method, params).',
+    'Do not include Authorization tokens, desktop bridge tokens, OpenClaw tokens, eval, or dynamically fetched executable code.',
+    'Before finishing, verify that index.html contains html and body elements and can run without a build step.',
+    'Do not paste the full source into the final response; write the files and briefly summarize the result.',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(workspaceDir, 'AGENTS.md'), instructions, 'utf8');
 }
 
-async function generateBotFatherMiniAppHtml({ title, prompt, user }) {
-  const fallback = generatedMiniAppHtml({ title, prompt });
+function readBotFatherWorkspaceHtml(workspaceDir) {
+  const entryPath = path.join(workspaceDir, 'index.html');
+  if (!fs.existsSync(entryPath)) return '';
+  return extractMiniAppHtml(fs.readFileSync(entryPath, 'utf8'));
+}
+
+async function generateBotFatherMiniAppHtml({ title, prompt, user, miniAppId }) {
+  const workspaceDir = miniAppWorkspaceDir(
+    user,
+    miniAppId || crypto.randomUUID(),
+  );
+  writeBotFatherWorkspaceInstructions(workspaceDir);
   try {
     const result = await runAgentModel({
       user,
       mode: 'miniapp_generation',
-      maxCompletionTokens: deepseekMaxCompletionTokens,
+      preferCodex: true,
+      requireCodex: true,
+      sandboxMode: 'workspace-write',
+      maxCompletionTokens: botFatherMaxCompletionTokens,
+      workingDirectory: workspaceDir,
       messages: [
         {
           role: 'system',
           content: [
-            '你是 Fabushi App 的小程序生成器。',
-            '只输出一个完整静态 HTML 文件，不要 Markdown，不要解释。',
+            '你是 Fabushi App 的小程序开发 Agent。',
+            '你运行在一个独立的小程序工作区中。',
+            '不要把自己当成 HTML 生成器；请像真实软件工程师一样完成任务。',
+            '先分析需求，再创建或修改项目文件，必要时运行测试和修复错误。',
+            '最终回复只需要说明完成情况，不需要把完整源码粘贴到聊天中。',
             '小程序只能通过 window.FabushiMiniApp.invoke(method, params) 调用宿主能力。',
             '先调用 app.getHostApiSpec 或 app.getCapabilities 判断宿主版本和已授权权限，再显示对应 UI。',
             '聊天后台调用协议：优先使用 window.FabushiMiniApp.bot.onCommand("/start", handler) 或 bot.onAnyCommand(handler)；如果手写监听 window 的 fabushi-miniapp-command 事件，注册后也要读取 window.__fabushiLastMiniAppCommand 并按 commandId 去重补处理。detail.command 默认为 /start，detail.args 是用户文本；处理完成后调用 bot.postMessage 或 bot.reportCommandResult 把进度/结果写回聊天框。',
@@ -795,33 +841,78 @@ async function generateBotFatherMiniAppHtml({ title, prompt, user }) {
           content: [
             `小程序标题：${title}`,
             `用户需求：${prompt}`,
-            '请生成 HTML/CSS/JS 单文件。',
+            '请直接在当前工作区中完成小程序，实现并验证 index.html。',
           ].join('\n'),
         },
       ],
     });
-    const sourceHtml = extractMiniAppHtml(result.message);
+    let sourceHtml = readBotFatherWorkspaceHtml(workspaceDir);
+    let finalResult = result;
+    let repaired = false;
     if (!sourceHtml) {
-      return {
-        sourceHtml: fallback,
-        generation: { provider: 'template', fallbackReason: 'ai_output_not_html' },
-      };
+      logger.warn(
+        {
+          provider: result.provider || 'ai',
+          model: result.model || '',
+          responseLength: readText(result.message).length,
+          workspaceDir,
+          indexExists: fs.existsSync(path.join(workspaceDir, 'index.html')),
+        },
+        'Bot Father Codex did not create a valid index.html; asking Codex to repair the workspace',
+      );
+      finalResult = await runAgentModel({
+        user,
+        mode: 'miniapp_generation_repair',
+        preferCodex: true,
+        requireCodex: true,
+        sandboxMode: 'workspace-write',
+        maxCompletionTokens: botFatherMaxCompletionTokens,
+        workingDirectory: workspaceDir,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              '你是 Fabushi App 的小程序开发 Agent。',
+              '检查当前工作区并修复它，不要只在回复中输出源码。',
+              '必须在工作区中创建或修复完整的 index.html。',
+              'index.html 必须包含完整 html、body、内联 CSS 和 JavaScript，并且无需构建即可运行。',
+              '禁止外链脚本、eval、Authorization token、桌面桥 token、OpenClaw token。',
+              '需要宿主能力时只能调用 window.FabushiMiniApp.invoke(method, params)。',
+            ].join('\n'),
+          },
+          {
+            role: 'user',
+            content: `标题：${title}\n需求：${prompt}\n请检查现有文件，完成修复并验证 index.html，然后简要报告。`,
+          },
+        ],
+      });
+      sourceHtml = readBotFatherWorkspaceHtml(workspaceDir);
+      repaired = Boolean(sourceHtml);
+    }
+    if (!sourceHtml) {
+      const error = new Error('Codex CLI did not create a valid index.html in the mini app workspace');
+      error.statusCode = 502;
+      throw error;
     }
     return {
       sourceHtml,
       generation: {
-        provider: result.provider || 'ai',
-        model: result.model || '',
+        provider: finalResult.provider || 'ai',
+        model: finalResult.model || '',
+        repaired,
+        workspaceId: path.basename(workspaceDir),
+        threadId: finalResult.threadId || null,
       },
     };
   } catch (error) {
-    return {
-      sourceHtml: fallback,
-      generation: {
-        provider: 'template',
-        fallbackReason: readText(error?.message || error),
+    logger.error(
+      {
+        error: readText(error?.message || error),
+        workspaceDir,
       },
-    };
+      'Bot Father Codex workspace generation failed',
+    );
+    throw error;
   }
 }
 
@@ -982,8 +1073,8 @@ async function resolveUser(req, body = {}) {
   const token = bearerToken(req);
   const usernameHint = safeUserText(body.username || req.query.username);
 
-  const testToken = process.env.TEST_ACCOUNT_TOKEN || 'dacheng-test-token-bypass-limits';
-  if (token && token === testToken) {
+  const testToken = readText(process.env.TEST_ACCOUNT_TOKEN);
+  if (testToken && token && token === testToken) {
     return {
       userId: 'user:test_account',
       username: 'TestAccount',
@@ -1036,6 +1127,7 @@ function signCodexAdapterPayload(encodedPayload) {
 }
 
 function createCodexAdapterToken(user, options = {}) {
+  const requestedMaxCompletionTokens = Number(options.maxCompletionTokens || 0);
   const payload = {
     sub: user.userId,
     username: user.username || '',
@@ -1045,6 +1137,10 @@ function createCodexAdapterToken(user, options = {}) {
     isTestAccount: Boolean(user.isTestAccount),
     membership: user.membership || {},
     recordUsage: options.recordUsage !== false,
+    maxCompletionTokens:
+      Number.isFinite(requestedMaxCompletionTokens) && requestedMaxCompletionTokens > 0
+        ? Math.floor(requestedMaxCompletionTokens)
+        : null,
     exp: Date.now() + codexAdapterTokenTtlMs,
   };
   const encodedPayload = base64UrlJson(payload);
@@ -1091,6 +1187,10 @@ function resolveCodexAdapterToken(token) {
           : {},
     },
     recordUsage: payload.recordUsage !== false,
+    maxCompletionTokens:
+      Number.isFinite(Number(payload.maxCompletionTokens)) && Number(payload.maxCompletionTokens) > 0
+        ? Math.floor(Number(payload.maxCompletionTokens))
+        : null,
   };
 }
 
@@ -1152,9 +1252,13 @@ function enforceTokenBudget(user, estimatedTokensForRequest) {
   return { limit, usage };
 }
 
-function completionBudgetFor(budget, estimatedPromptTokens) {
+function completionBudgetFor(
+  budget,
+  estimatedPromptTokens,
+  maximumCompletionTokens = deepseekMaxCompletionTokens,
+) {
   const remainingAfterPrompt = budget.limit - budget.usage.used - estimatedPromptTokens;
-  return Math.max(1, Math.min(deepseekMaxCompletionTokens, Math.floor(remainingAfterPrompt)));
+  return Math.max(1, Math.min(maximumCompletionTokens, Math.floor(remainingAfterPrompt)));
 }
 
 function recordUsage(userId, totalTokens) {
@@ -1180,10 +1284,13 @@ function normalizeMessages(rows) {
   }));
 }
 
-function normalizeMaxCompletionTokens(value) {
-  const numeric = Number(value || deepseekMaxCompletionTokens);
-  if (!Number.isFinite(numeric) || numeric < 1) return deepseekMaxCompletionTokens;
-  return Math.max(1, Math.min(deepseekMaxCompletionTokens, Math.floor(numeric)));
+function normalizeMaxCompletionTokens(
+  value,
+  maximumCompletionTokens = deepseekMaxCompletionTokens,
+) {
+  const numeric = Number(value || maximumCompletionTokens);
+  if (!Number.isFinite(numeric) || numeric < 1) return maximumCompletionTokens;
+  return Math.max(1, Math.min(maximumCompletionTokens, Math.floor(numeric)));
 }
 
 function normalizeDeepSeekModelName(value) {
@@ -1212,7 +1319,10 @@ async function callDeepSeek(messages, options = {}) {
       model,
       messages,
       temperature: 0.4,
-      max_tokens: normalizeMaxCompletionTokens(options.maxCompletionTokens),
+      max_tokens: normalizeMaxCompletionTokens(
+        options.maxCompletionTokens,
+        options.maximumCompletionTokens || deepseekMaxCompletionTokens,
+      ),
       stream: false,
     }),
     signal: AbortSignal.timeout(60_000),
@@ -1277,7 +1387,10 @@ async function callDeepSeekStream(messages, callbacks = {}) {
       model,
       messages,
       temperature: 0.4,
-      max_tokens: normalizeMaxCompletionTokens(callbacks.maxCompletionTokens),
+      max_tokens: normalizeMaxCompletionTokens(
+        callbacks.maxCompletionTokens,
+        callbacks.maximumCompletionTokens || deepseekMaxCompletionTokens,
+      ),
       stream: true,
       stream_options: { include_usage: true },
     }),
@@ -1358,7 +1471,7 @@ async function callDeepSeekStream(messages, callbacks = {}) {
   return { message, model, usage };
 }
 
-function createCodexDeepSeekRuntime(user = null) {
+function createCodexDeepSeekRuntime(user = null, runtimeOptions = {}) {
   if (!enableCodexSdkChat || !deepseekApiKey) {
     return {
       enabled: false,
@@ -1367,7 +1480,11 @@ function createCodexDeepSeekRuntime(user = null) {
     };
   }
 
-  const adapterToken = user ? createCodexAdapterToken(user) : '';
+  const adapterToken = user
+    ? createCodexAdapterToken(user, {
+        maxCompletionTokens: runtimeOptions.maxCompletionTokens,
+      })
+    : '';
   return {
     enabled: true,
     provider: codexDeepSeekProviderId,
@@ -1402,7 +1519,10 @@ function createCodexDeepSeekRuntime(user = null) {
     threadOptions: {
       model: deepseekModel,
       approvalPolicy: 'never',
-      sandboxMode: 'read-only',
+      sandboxMode: runtimeOptions.sandboxMode || 'read-only',
+      ...(runtimeOptions.workingDirectory
+        ? { workingDirectory: runtimeOptions.workingDirectory }
+        : {}),
       skipGitRepoCheck: true,
       networkAccessEnabled: true,
     },
@@ -1673,7 +1793,11 @@ function responsesPayload({
 }
 
 async function callCodexSdkDeepSeek(messages, callbacks = {}) {
-  const codexRuntime = createCodexDeepSeekRuntime(callbacks.user);
+  const codexRuntime = createCodexDeepSeekRuntime(callbacks.user, {
+    maxCompletionTokens: callbacks.maxCompletionTokens,
+    workingDirectory: callbacks.workingDirectory,
+    sandboxMode: callbacks.sandboxMode,
+  });
   if (!codexRuntime.enabled) {
     const error = new Error(codexRuntime.reason || 'Codex SDK chat is not enabled');
     error.statusCode = 503;
@@ -1687,16 +1811,25 @@ async function callCodexSdkDeepSeek(messages, callbacks = {}) {
 
   const { Codex } = await import('@openai/codex-sdk');
   const codex = new Codex(codexRuntime.options);
-  const thread = codex.startThread(codexRuntime.threadOptions);
+  const thread = callbacks.threadId
+    ? codex.resumeThread(callbacks.threadId, codexRuntime.threadOptions)
+    : codex.startThread(codexRuntime.threadOptions);
   const prompt = codexPromptFromMessages(messages);
+  const turnOptions = {
+    ...(callbacks.outputSchema ? { outputSchema: callbacks.outputSchema } : {}),
+    ...(callbacks.signal ? { signal: callbacks.signal } : {}),
+  };
 
   if (callbacks.onToken || callbacks.onStep) {
-    const { events } = await thread.runStreamed(prompt, { signal: callbacks.signal });
+    const { events } = await thread.runStreamed(prompt, turnOptions);
     let finalResponse = '';
     let usage = null;
+    let threadId = callbacks.threadId || null;
 
     for await (const event of events) {
-      if (event.type === 'item.completed') {
+      if (event.type === 'thread.started') {
+        threadId = event.thread_id || threadId;
+      } else if (event.type === 'item.completed') {
         const item = event.item;
         if (item.type === 'agent_message') {
           finalResponse = item.text || finalResponse;
@@ -1710,6 +1843,11 @@ async function callCodexSdkDeepSeek(messages, callbacks = {}) {
           callbacks.onStep?.({
             title: 'Codex SDK 执行命令',
             message: item.command,
+          });
+        } else if (item.type === 'file_change') {
+          callbacks.onStep?.({
+            title: 'Codex SDK 修改文件',
+            message: item.changes.map((change) => `${change.kind}: ${change.path}`).join('\n'),
           });
         } else if (item.type === 'mcp_tool_call') {
           callbacks.onStep?.({
@@ -1740,10 +1878,11 @@ async function callCodexSdkDeepSeek(messages, callbacks = {}) {
         totalTokens: Number((usage?.input_tokens || 0) + (usage?.output_tokens || 0)),
       },
       usageAlreadyRecorded: true,
+      threadId: thread.id || threadId,
     };
   }
 
-  const turn = await thread.run(prompt);
+  const turn = await thread.run(prompt, turnOptions);
   if (!turn.finalResponse?.trim()) {
     const error = new Error('Codex SDK returned an empty response');
     error.statusCode = 502;
@@ -1758,6 +1897,7 @@ async function callCodexSdkDeepSeek(messages, callbacks = {}) {
       totalTokens: Number((turn.usage?.input_tokens || 0) + (turn.usage?.output_tokens || 0)),
     },
     usageAlreadyRecorded: true,
+    threadId: thread.id || callbacks.threadId || null,
   };
 }
 
@@ -1886,17 +2026,69 @@ async function callOpenClawAgent({ messages, user, conversationId, mode, signal 
   };
 }
 
-async function runAgentModel({ messages, user, conversationId, mode, callbacks = {}, signal, maxCompletionTokens }) {
+async function runAgentModel({
+  messages,
+  user,
+  conversationId,
+  mode,
+  callbacks = {},
+  signal,
+  maxCompletionTokens,
+  preferCodex = false,
+  requireCodex = false,
+  workingDirectory,
+  sandboxMode,
+  outputSchema,
+  threadId,
+}) {
+  const codexRuntime = createCodexDeepSeekRuntime(user, {
+    workingDirectory,
+    sandboxMode,
+    maxCompletionTokens,
+  });
+  if (requireCodex && !codexRuntime.enabled) {
+    const error = new Error(codexRuntime.reason || 'Codex SDK chat is not enabled');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  let preferredCodexFailed = false;
+  if ((preferCodex || requireCodex) && codexRuntime.enabled) {
+    try {
+      const result = await callCodexSdkDeepSeek(messages, {
+        ...callbacks,
+        user,
+        signal,
+        maxCompletionTokens,
+        workingDirectory,
+        sandboxMode,
+        outputSchema,
+        threadId,
+      });
+      return {
+        ...result,
+        provider: codexRuntime.provider,
+        model: deepseekModel,
+      };
+    } catch (error) {
+      if (requireCodex || isDeepSeekQuotaError(error)) throw error;
+      logger.warn(
+        { error: String(error), mode },
+        'Preferred Codex SDK model failed, continuing through agent fallbacks',
+      );
+      preferredCodexFailed = true;
+    }
+  }
+
   const openClawRuntime = createOpenClawRuntime();
   if (openClawRuntime.enabled && !callbacks.onToken) {
     return await callOpenClawAgent({ messages, user, conversationId, mode, signal });
   }
 
-  const codexRuntime = createCodexDeepSeekRuntime(user);
   const libreChatRuntime = createLibreChatAgentRuntime();
   let provider = libreChatRuntime.enabled
     ? libreChatRuntime.provider
-    : codexRuntime.enabled
+    : codexRuntime.enabled && !preferredCodexFailed
       ? codexRuntime.provider
       : 'deepseek';
   let model = libreChatRuntime.enabled ? libreChatRuntime.model : deepseekModel;
@@ -1908,8 +2100,17 @@ async function runAgentModel({ messages, user, conversationId, mode, callbacks =
         : await callLibreChatAgent(messages);
       return { ...result, provider, model };
     }
-    if (codexRuntime.enabled) {
-      const result = await callCodexSdkDeepSeek(messages, { ...callbacks, user, signal });
+    if (codexRuntime.enabled && !preferredCodexFailed) {
+      const result = await callCodexSdkDeepSeek(messages, {
+        ...callbacks,
+        user,
+        signal,
+        maxCompletionTokens,
+        workingDirectory,
+        sandboxMode,
+        outputSchema,
+        threadId,
+      });
       return { ...result, provider, model };
     }
     const result = callbacks.onToken
@@ -1917,7 +2118,7 @@ async function runAgentModel({ messages, user, conversationId, mode, callbacks =
       : await callDeepSeek(messages, { maxCompletionTokens });
     return { ...result, provider, model };
   } catch (error) {
-    if (!codexRuntime.enabled || isDeepSeekQuotaError(error)) throw error;
+    if (!codexRuntime.enabled || preferredCodexFailed || isDeepSeekQuotaError(error)) throw error;
     logger.warn({ error: String(error) }, 'Agent model failed, falling back to DeepSeek direct');
     const result = callbacks.onToken
       ? await callDeepSeekStream(messages, { ...callbacks, signal, maxCompletionTokens })
@@ -2151,9 +2352,12 @@ app.post(
     const promptEstimate = estimateTokens(JSON.stringify(messages));
     const estimated = promptEstimate + 600;
     const budget = enforceTokenBudget(user, estimated);
+    const requestCompletionLimit = isBotFatherGenerationMessages(incomingMessages)
+      ? botFatherMaxCompletionTokens
+      : deepseekMaxCompletionTokens;
     const maxCompletionTokens = Math.min(
-      completionBudgetFor(budget, promptEstimate),
-      normalizeMaxCompletionTokens(req.body?.max_tokens),
+      completionBudgetFor(budget, promptEstimate, requestCompletionLimit),
+      normalizeMaxCompletionTokens(req.body?.max_tokens, requestCompletionLimit),
     );
     const model = normalizeDeepSeekModelName(req.body?.model);
     const wantsStream =
@@ -2167,7 +2371,11 @@ app.post(
       let result;
       let usageMessages = messages;
       try {
-        result = await callDeepSeek(messages, { model, maxCompletionTokens });
+        result = await callDeepSeek(messages, {
+          model,
+          maxCompletionTokens,
+          maximumCompletionTokens: requestCompletionLimit,
+        });
       } catch (error) {
         if (!shouldRetryWithCompactedOpenClawMessages(error, messages, compactedMessages)) {
           throw error;
@@ -2181,7 +2389,11 @@ app.post(
           'OpenClaw DeepSeek proxy retrying with compacted messages',
         );
         usageMessages = compactedMessages;
-        result = await callDeepSeek(compactedMessages, { model, maxCompletionTokens });
+        result = await callDeepSeek(compactedMessages, {
+          model,
+          maxCompletionTokens,
+          maximumCompletionTokens: requestCompletionLimit,
+        });
       }
       const usage = usageWithFallback(result.usage, usageMessages, result.message);
       recordUsage(user.userId, usage.totalTokens);
@@ -2234,6 +2446,7 @@ app.post(
         result = await callDeepSeekStream(messages, {
           model,
           maxCompletionTokens,
+          maximumCompletionTokens: requestCompletionLimit,
           signal: abortController.signal,
           onToken: (delta) => {
             text += delta;
@@ -2260,6 +2473,7 @@ app.post(
         result = await callDeepSeekStream(compactedMessages, {
           model,
           maxCompletionTokens,
+          maximumCompletionTokens: requestCompletionLimit,
           signal: abortController.signal,
           onToken: (delta) => {
             text += delta;
@@ -2345,13 +2559,21 @@ app.post(
       return;
     }
 
-    const { user, recordUsage: shouldRecordUsage } = await resolveCodexResponsesBilling(req);
+    const {
+      user,
+      recordUsage: shouldRecordUsage,
+      maxCompletionTokens: adapterMaxCompletionTokens,
+    } = await resolveCodexResponsesBilling(req);
     const messages = [{ role: 'user', content: prompt }];
     const promptEstimate = estimateTokens(JSON.stringify(messages));
     const budget = enforceTokenBudget(user, promptEstimate + 600);
+    const responseCompletionLimit = adapterMaxCompletionTokens || deepseekMaxCompletionTokens;
     const maxCompletionTokens = Math.min(
-      completionBudgetFor(budget, promptEstimate),
-      normalizeMaxCompletionTokens(req.body?.max_output_tokens || req.body?.max_tokens),
+      completionBudgetFor(budget, promptEstimate, responseCompletionLimit),
+      normalizeMaxCompletionTokens(
+        req.body?.max_output_tokens || req.body?.max_tokens,
+        responseCompletionLimit,
+      ),
     );
     const model = normalizeDeepSeekModelName(req.body?.model);
     const responseId = `resp_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -2361,7 +2583,11 @@ app.post(
       String(req.get('accept') || '').includes('text/event-stream');
 
     if (!wantsStream) {
-      const result = await callDeepSeek(messages, { model, maxCompletionTokens });
+      const result = await callDeepSeek(messages, {
+        model,
+        maxCompletionTokens,
+        maximumCompletionTokens: responseCompletionLimit,
+      });
       const usage = usageWithFallback(result.usage, messages, result.message);
       if (shouldRecordUsage) recordUsage(user.userId, usage.totalTokens);
       res.json(
@@ -2419,6 +2645,7 @@ app.post(
       const result = await callDeepSeekStream(messages, {
         model,
         maxCompletionTokens,
+        maximumCompletionTokens: responseCompletionLimit,
         onToken: (delta) => {
           text += delta;
           writeResponsesEvent(res, 'response.output_text.delta', {
@@ -2625,6 +2852,7 @@ app.get('/health', (_req, res) => {
     memberMonthlyLimit,
     freeMonthlyLimit,
     deepseekMaxCompletionTokens,
+    botFatherMaxCompletionTokens,
     openClawRuntimeUpdatesDir,
     openClawRuntimeManifestConfigured: fs.existsSync(openClawRuntimeManifestPath),
     cbetaApiRoot,
@@ -2818,7 +3046,7 @@ app.post(
     const title = titleFromPromptForMiniApp(prompt);
     const subtitle = '机器人之父生成的个人沙箱小程序';
     const requestedPermissions = Array.isArray(req.body?.permissions) ? req.body.permissions : [];
-    const generated = await generateBotFatherMiniAppHtml({ title, prompt, user });
+    const generated = await generateBotFatherMiniAppHtml({ title, prompt, user, miniAppId: crypto.randomUUID() });
     let sourceHtml = generated.sourceHtml;
     let generation = generated.generation;
     const permissions = sanitizeMiniAppPermissions([
@@ -2827,12 +3055,10 @@ app.post(
     ]);
     let scan = miniAppScan(permissions, sourceHtml);
     if (!scan.passed) {
-      sourceHtml = generatedMiniAppHtml({ title, prompt });
-      generation = {
-        provider: 'template',
-        fallbackReason: 'ai_output_failed_security_scan',
-      };
-      scan = miniAppScan(permissions, sourceHtml);
+      const error = new Error('Codex generated mini app failed security scan');
+      error.statusCode = 400;
+      error.scan = scan;
+      throw error;
     }
     const idSeed = crypto.randomUUID().replaceAll('-', '').slice(0, 12);
     const miniAppId = `sandbox.${idSeed}`;
@@ -2866,7 +3092,14 @@ app.post(
     await writeMiniAppStore(store);
     jsonResponse(res, 200, {
       success: true,
-      miniApp: miniAppRecordToManifest(req, record),
+      // Bot Father previews are rendered immediately by the native clients.
+      // Keep the persisted entryUrl for subsequent launches, and return the
+      // scanned source in the create response so the first preview does not
+      // depend on a second network round trip.
+      miniApp: {
+        ...miniAppRecordToManifest(req, record),
+        sourceHtml,
+      },
       bot: miniAppRecordToBot(record),
       scan,
       generation,

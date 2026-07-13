@@ -35,6 +35,9 @@
   <title>全球法布施</title>
   <link rel="manifest" href="manifest.json">
 
+  <!-- Rust messaging core is loaded lazily by TelegramRustRuntime.initialize(). -->
+  <script type="module" src="telegram-wasm/bootstrap.js"></script>
+
   <!-- 🚀 资源预连接 - 提前建立连接到关键域名 -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
