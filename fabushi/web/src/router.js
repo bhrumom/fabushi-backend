@@ -2,7 +2,7 @@ import { handleRegister, handleLogin, handleGetUserInfo, handleUpdateProfile, ha
 import { handleSendSmsCode, handleSmsLogin } from './handlers/sms.js';
 import { handleGetComments, handlePostComment, handleDeleteComment, handleGetTaggedPosts, handleGetHotFeed, handleGetPostDetail, handleBatchGetCommentCounts } from './handlers/comments.js';
 import { handleSendVerificationCode, handleForgotPassword, handleResetPassword } from './handlers/verification.js';
-import { handleGetWechatLoginUrl, handleGetAlipayLoginUrl, handleAlipayLogin, handleAlipayCallback, handleAlipayRegister, handleBindEmail, handleMacOSAlipayCallback, handleMobileAlipayCallback, handleGetAlipayAuthString, handleAlipaySDKLogin } from './handlers/thirdparty.js';
+import { handleGetWechatLoginUrl, handleGetAlipayLoginUrl, handleAlipayLogin, handleAlipayCallback, handleAlipayCliSession, handleAlipayRegister, handleBindEmail, handleMacOSAlipayCallback, handleMobileAlipayCallback, handleGetAlipayAuthString, handleAlipaySDKLogin } from './handlers/thirdparty.js';
 import { handleCreateAlipayOrder, handleQueryAlipayOrder, handleAlipayNotify, handleCheckPurchaseEntitlement } from './handlers/payment.js';
 import { handleVerifyAppleReceipt } from './handlers/apple-iap.js';
 import { handleCreateRedeemCode, handleUseRedeemCode, handleGetPurchaseHistory, handleGetRedeemHistory } from './handlers/redeem.js';
@@ -20,6 +20,15 @@ import { handleOnlineJoin, handleOnlineHeartbeat, handleOnlineLeave, handleOnlin
 import { handleSyncRecord, handleGetRecords, handleUpdateRecord, handleDeleteRecord, handleGetStats, handleGetWeeklyStats, handleGetMonthlyStats, handleSetGoal, handleGetGoals, handleMeditationSettings, handleGetMeditationGroups, handleCreateMeditationGroup, handleJoinMeditationGroup, handleGetMeditationGroupDetail, handleReviewMeditationGroupJoin } from './handlers/meditation.js';
 import { handleGetSyncData, handlePushSyncData, handleGetSyncState } from './handlers/sync.js';
 import { handleToggleFollow, handleGetFollowList, handleGetFollowSummary, handleGetPracticePrivacy, handleUpdatePracticePrivacy } from './handlers/social.js';
+import {
+  handleAcceptFriendRequest,
+  handleCreateFriendRequest,
+  handleListDirectMessages,
+  handleListFriends,
+  handleListIncomingFriendRequests,
+  handleSearchFriendUsers,
+  handleSendDirectMessage,
+} from './handlers/friends.js';
 import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
 import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
 import { handleSubmitFeedback } from './handlers/feedback.js';
@@ -110,7 +119,6 @@ export async function route(request, env, db, ctx) {
   if (pathname === '/api/site/releases' && method === 'GET') {
     return await handleOfficialSiteReleaseCollection(request, env, db);
   }
-
   const normalizedMeditationAuth = await normalizeMeditationAuthRequest(request, env, pathname);
   if (normalizedMeditationAuth.response) {
     return normalizedMeditationAuth.response;
@@ -161,6 +169,7 @@ export async function route(request, env, db, ctx) {
   if (pathname === '/api/auth/alipay/login-url' && method === 'GET') return await handleGetAlipayLoginUrl(request, env);
   if (pathname === '/api/auth/alipay/login' && method === 'POST') return await handleAlipayLogin(request, env);
   if (pathname === '/api/auth/alipay/callback' && method === 'GET') return await handleAlipayCallback(request, env);
+  if (pathname === '/api/auth/alipay/cli-session' && method === 'GET') return await handleAlipayCliSession(request, env);
   if (pathname === '/api/auth/alipay/register' && method === 'POST') return await handleAlipayRegister(request, env);
   if (pathname === '/api/auth/alipay/macos-callback' && method === 'GET') return await handleMacOSAlipayCallback(request, env);
   if (pathname === '/api/auth/alipay/mobile-callback' && method === 'GET') return await handleMobileAlipayCallback(request, env);
@@ -208,6 +217,14 @@ export async function route(request, env, db, ctx) {
   if (pathname === '/api/social/follow-summary' && method === 'GET') return await handleGetFollowSummary(request, env, db);
   if (pathname === '/api/social/practice-privacy' && method === 'GET') return await handleGetPracticePrivacy(request, env, db);
   if (pathname === '/api/social/practice-privacy' && method === 'POST') return await handleUpdatePracticePrivacy(request, env, db);
+  if (pathname === '/api/social/users/search' && method === 'GET') return await handleSearchFriendUsers(request, env, db);
+  if (pathname === '/api/social/friends' && method === 'GET') return await handleListFriends(request, env, db);
+  if (pathname === '/api/social/friend-requests' && method === 'POST') return await handleCreateFriendRequest(request, env, db);
+  if (pathname === '/api/social/friend-requests/incoming' && method === 'GET') return await handleListIncomingFriendRequests(request, env, db);
+  const friendAcceptMatch = pathname.match(/^\/api\/social\/friend-requests\/(\d+)\/accept$/);
+  if (friendAcceptMatch && method === 'POST') return await handleAcceptFriendRequest(request, env, db, friendAcceptMatch[1]);
+  if (pathname === '/api/social/messages' && method === 'GET') return await handleListDirectMessages(request, env, db);
+  if (pathname === '/api/social/messages' && method === 'POST') return await handleSendDirectMessage(request, env, db);
 
   if (pathname === '/api/likes/toggle' && method === 'POST') return await handleToggleLike(request, env, db);
   if (pathname === '/api/likes/count' && method === 'GET') return await handleGetLikeCount(request, env, db);

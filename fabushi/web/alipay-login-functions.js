@@ -17,6 +17,17 @@ function buildUrl(baseUrl, path) {
   return `${trimTrailingSlash(baseUrl)}${path}`;
 }
 
+function generateSecureState() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+    return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  }
+  throw new Error('当前运行环境不支持安全随机数生成');
+}
+
 function getWorkerUrl(env) {
   return trimTrailingSlash(env.WORKER_URL || DEFAULT_WORKER_URL);
 }
@@ -80,14 +91,7 @@ async function generateAlipayLoginUrl(env, platform) {
       callbackType
     });
 
-    // 生成state，兼容不同的crypto实现
-    let state;
-    try {
-      state = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
-    } catch (cryptoError) {
-      console.warn('crypto.randomUUID不可用，使用备用方案:', cryptoError);
-      state = Math.random().toString(36).substring(2) + Date.now().toString(36);
-    }
+    const state = generateSecureState();
     const appId = env.ALIPAY_APP_ID;
 
     if (!appId) {
@@ -95,23 +99,18 @@ async function generateAlipayLoginUrl(env, platform) {
       return jsonResponse({ error: '支付宝应用ID未配置' }, 500);
     }
 
-    const workerUrl = getWorkerUrl(env);
-    console.log('使用worker URL:', workerUrl);
-
     const alipayRedirectUrl = getAlipayOAuthRedirectUrl(env, callbackType);
     const redirectUri = encodeURIComponent(alipayRedirectUrl);
-    console.log('OAuth redirect_uri:', alipayRedirectUrl);
 
     const authUrl = `https://openauth.alipay.com/oauth2/publicAppAuthorize.htm?app_id=${appId}&scope=auth_user&redirect_uri=${redirectUri}&state=${state}`;
-
-    console.log('生成的授权URL:', authUrl);
 
     // 存储state用于验证，macOS应用需要特殊标记
     if (env.DB) {
       const stateData = {
-        type: callbackType,
+        type: platform === 'cli' ? 'cli' : callbackType,
         timestamp: Date.now(),
-        valid: true
+        valid: true,
+        status: 'pending'
       };
       const expiresAt = new Date(Date.now() + 600000).toISOString(); // 10分钟后过期
       await env.DB.prepare(
@@ -129,7 +128,7 @@ async function generateAlipayLoginUrl(env, platform) {
       platform: callbackType
     });
 
-    console.log('响应数据:', { authUrl, state, appId, platform: callbackType });
+    console.log('支付宝登录 URL 已生成:', { platform: callbackType });
     return response;
 
   } catch (error) {
@@ -146,7 +145,7 @@ async function getAlipayUserInfo(authCode, env) {
   const alipayPublicKey = env.ALIPAY_PUBLIC_KEY;
 
   console.log('获取支付宝用户信息开始:', {
-    authCode: authCode ? authCode.substring(0, 10) + '...' : 'null',
+    hasAuthCode: Boolean(authCode),
     hasAppId: !!appId,
     hasPrivateKey: !!privateKey,
     hasAlipayPublicKey: !!alipayPublicKey,
@@ -194,7 +193,7 @@ async function getAlipayUserInfo(authCode, env) {
     if (env.USERS_KV) {
       const usedAuthCode = await env.USERS_KV.get(`used_auth_code:${authCode}`);
       if (usedAuthCode) {
-        console.error('授权码已被使用:', authCode);
+        console.error('支付宝授权码已被使用');
         return {
           error: true,
           code: 'CODE_REUSED',
@@ -207,7 +206,11 @@ async function getAlipayUserInfo(authCode, env) {
     const tokenResult = await getAccessToken(authCode, env);
 
     if (!tokenResult || tokenResult.code !== '10000') {
-      console.error('获取access_token失败:', tokenResult);
+      console.error('获取access_token失败:', {
+        code: tokenResult?.code,
+        subCode: tokenResult?.sub_code,
+        message: tokenResult?.msg || tokenResult?.sub_msg
+      });
       // 不再抛出异常，而是返回错误信息
       const errorMsg = tokenResult?.msg || tokenResult?.sub_msg || '未知错误';
 
@@ -233,7 +236,7 @@ async function getAlipayUserInfo(authCode, env) {
     // 成功获取token后，标记授权码为已使用
     if (env.USERS_KV) {
       await env.USERS_KV.put(`used_auth_code:${authCode}`, '1', { expirationTtl: 3600 }); // 1小时内不能重复使用
-      console.log('授权码已标记为已使用:', authCode);
+      console.log('支付宝授权码已标记为已使用');
     }
 
     const { access_token, user_id, alipay_user_id, open_id } = tokenResult;
@@ -275,7 +278,7 @@ async function getAlipayUserInfo(authCode, env) {
     }
 
     const userInfo = userInfoResult;
-    console.log('成功获取支付宝用户信息:', userInfo);
+    console.log('成功获取支付宝用户信息');
 
     return {
       user_id: subject.value,
@@ -928,9 +931,8 @@ async function handleAlipayCallback(request, env) {
     const state = url.searchParams.get('state');
 
     console.log('收到支付宝回调:', {
-      authCode: authCode ? authCode.substring(0, 10) + '...' : 'null',
-      state: state || 'null',
-      fullUrl: request.url
+      hasAuthCode: Boolean(authCode),
+      hasState: Boolean(state)
     });
 
     if (!authCode) {
@@ -940,18 +942,19 @@ async function handleAlipayCallback(request, env) {
     }
 
     if (authCode.length < 10) {
-      console.error('支付宝回调授权码格式无效:', authCode);
+      console.error('支付宝回调授权码格式无效');
       const redirectUrl = createAlipayWebRedirectUrl(env);
       redirectUrl.hash = 'error=invalid_auth_code&error_message=授权码格式无效';
       return Response.redirect(redirectUrl.toString(), 302);
     }
 
+    let callbackStateType = 'web';
     if (state) {
       const storedState = await env.DB.prepare(
         'SELECT state_data FROM alipay_states WHERE state = ? AND expires_at > datetime("now")'
       ).bind(state).first();
       if (!storedState) {
-        console.error('无效的state参数:', state);
+        console.error('支付宝回调 state 参数无效');
         const redirectUrl = createAlipayWebRedirectUrl(env);
         redirectUrl.hash = 'error=invalid_state&error_message=登录状态无效，请重新登录';
         return Response.redirect(redirectUrl.toString(), 302);
@@ -959,6 +962,7 @@ async function handleAlipayCallback(request, env) {
 
       try {
         const stateData = JSON.parse(storedState.state_data);
+        callbackStateType = stateData.type || 'web';
         if (stateData.type === 'mobile') {
           console.log('标准OAuth回调检测到移动端state，转入移动端回调处理');
           return await handleMobileAlipayCallback(request, env);
@@ -971,14 +975,18 @@ async function handleAlipayCallback(request, env) {
         console.warn('解析state数据失败，继续按Web回调处理:', parseError);
       }
 
-      await env.DB.prepare('DELETE FROM alipay_states WHERE state = ?').bind(state).run();
+      if (callbackStateType !== 'cli') {
+        await env.DB.prepare('DELETE FROM alipay_states WHERE state = ?').bind(state).run();
+      }
     }
 
     const alipayUser = await getAlipayUserInfo(authCode, env);
-    console.log('获取到的支付宝用户信息:', alipayUser);
+    console.log('支付宝用户信息已获取:', {
+      hasProviderSubject: Boolean(getAlipayPrimarySubject(alipayUser))
+    });
 
     if (!alipayUser || !alipayUser.user_id) {
-      console.error('支付宝用户信息不完整:', alipayUser);
+      console.error('支付宝用户信息不完整');
       const redirectUrl = createAlipayWebRedirectUrl(env);
       redirectUrl.hash = 'error=invalid_alipay_user&error_message=支付宝用户信息不完整';
       return Response.redirect(redirectUrl.toString(), 302);
@@ -988,17 +996,44 @@ async function handleAlipayCallback(request, env) {
     if (user) {
       await backfillAlipayIdentity(env, user, alipayUser, alipayUser);
       const token = await generateToken({ id: user.id, username: user.username }, env);
+      if (callbackStateType === 'cli' && state) {
+        const cliSession = {
+          type: 'cli',
+          status: 'complete',
+          token,
+          username: user.username,
+          user: serializeAccountUser(user)
+        };
+        const expiresAt = new Date(Date.now() + 600000).toISOString();
+        await env.DB.prepare(
+          'UPDATE alipay_states SET state_data = ?, expires_at = ? WHERE state = ?'
+        ).bind(JSON.stringify(cliSession), expiresAt, state).run();
+        return new Response(
+          '<!doctype html><meta charset="utf-8"><title>大乘 CLI 登录成功</title><main style="font:16px system-ui;max-width:560px;margin:15vh auto;padding:24px"><h1>大乘 CLI 登录成功</h1><p>授权已安全交给正在等待的终端，现在可以关闭此页面。</p></main>',
+          { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+        );
+      }
       const redirectUrl = createAlipayWebRedirectUrl(env);
       redirectUrl.hash = `token=${token}&username=${encodeURIComponent(user.username)}&login_method=alipay&${alipayCallbackUserParams(user, alipayUser)}`;
 
-      console.log('支付宝登录成功，直接跳转到Flutter主应用:', redirectUrl.toString());
+      console.log('支付宝登录成功，正在跳转到 Flutter 主应用');
       return Response.redirect(redirectUrl.toString(), 302);
     }
 
+    if (callbackStateType === 'cli' && state) {
+      const cliRegistration = {
+        type: 'cli',
+        status: 'registration_required',
+        needsRegistration: true
+      };
+      await env.DB.prepare(
+        'UPDATE alipay_states SET state_data = ? WHERE state = ?'
+      ).bind(JSON.stringify(cliRegistration), state).run();
+    }
     const redirectUrl = createAlipayWebRedirectUrl(env);
     redirectUrl.hash = `alipay_auth_code=${authCode}&${alipayRegistrationParams(alipayUser)}&needs_registration=true&login_method=alipay`;
 
-    console.log('新用户或未注册，直接跳转到Flutter主应用注册页面:', redirectUrl.toString());
+    console.log('支付宝账号需要注册，正在跳转到 Flutter 主应用');
     return Response.redirect(redirectUrl.toString(), 302);
 
   } catch (error) {
@@ -1009,6 +1044,55 @@ async function handleAlipayCallback(request, env) {
   }
 }
 
+// CLI OAuth completion is a one-time capability keyed by the random state.
+// The access token is deleted from D1 immediately after the Rust client reads it.
+async function handleAlipayCliSession(request, env) {
+  const state = new URL(request.url).searchParams.get('state')?.trim();
+  if (!state) return jsonResponse({ error: '缺少登录状态' }, 400);
+  const row = await env.DB.prepare(
+    'SELECT state_data FROM alipay_states WHERE state = ? AND expires_at > datetime("now")'
+  ).bind(state).first();
+  if (!row) return jsonResponse({ error: '登录状态不存在或已过期' }, 404);
+
+  let data;
+  try {
+    data = JSON.parse(row.state_data);
+  } catch {
+    return jsonResponse({ error: '登录状态损坏' }, 500);
+  }
+  if (data.type !== 'cli') return jsonResponse({ error: '登录状态类型不匹配' }, 404);
+  if (data.status === 'pending') {
+    return jsonResponse({ success: true, status: 'pending' }, 202);
+  }
+  if (data.status === 'registration_required') {
+    await env.DB.prepare(
+      'DELETE FROM alipay_states WHERE state = ? AND state_data = ?'
+    ).bind(state, row.state_data).run();
+    return jsonResponse({
+      success: false,
+      status: 'registration_required',
+      needsRegistration: true,
+      error: '该支付宝账号需要先在大乘 App 中完成注册'
+    }, 409);
+  }
+  if (data.status !== 'complete' || !data.token) {
+    return jsonResponse({ error: '登录状态无效' }, 409);
+  }
+  const consumed = await env.DB.prepare(
+    'DELETE FROM alipay_states WHERE state = ? AND state_data = ?'
+  ).bind(state, row.state_data).run();
+  if (consumed.meta?.changes === 0) {
+    return jsonResponse({ error: '登录结果已被读取' }, 409);
+  }
+  return jsonResponse({
+    success: true,
+    status: 'complete',
+    token: data.token,
+    username: data.username,
+    user: data.user
+  });
+}
+
 // 处理 macOS 支付宝回调
 async function handleMacOSAlipayCallback(request, env) {
   try {
@@ -1017,9 +1101,8 @@ async function handleMacOSAlipayCallback(request, env) {
     const state = url.searchParams.get('state');
 
     console.log('收到 macOS 支付宝回调:', {
-      authCode: authCode ? authCode.substring(0, 10) + '...' : 'null',
-      state: state || 'null',
-      fullUrl: request.url
+      hasAuthCode: Boolean(authCode),
+      hasState: Boolean(state)
     });
 
     const appScheme = 'com.ombhrum.fabushi://';
@@ -1070,7 +1153,7 @@ async function getAccessToken(authCode, env) {
     const appId = env.ALIPAY_APP_ID;
     const privateKey = env.ALIPAY_PRIVATE_KEY;
 
-    console.log('开始获取access_token，授权码:', authCode ? authCode.substring(0, 10) + '...' : 'null');
+    console.log('开始获取支付宝 access_token:', { hasAuthCode: Boolean(authCode) });
 
     // 验证授权码格式
     if (!authCode || authCode.length < 10) {
@@ -1125,9 +1208,10 @@ async function getAccessToken(authCode, env) {
     const sign = await generateSign(params, privateKeyObj);
     params.sign = sign;
 
-    console.log('生成签名:', sign);
-
-    console.log('获取access_token请求参数:', params);
+    console.log('支付宝 access_token 请求已签名:', {
+      appId: Boolean(appId),
+      sandbox: env.ALIPAY_USE_SANDBOX === 'true'
+    });
 
     const gatewayUrl = env.ALIPAY_USE_SANDBOX === 'true' ?
       'https://openapi-sandbox.dl.alipaydev.com/gateway.do' :
@@ -1145,7 +1229,10 @@ async function getAccessToken(authCode, env) {
     }
 
     const result = await response.json();
-    console.log('支付宝access_token响应:', result);
+    console.log('支付宝 access_token 响应已收到:', {
+      hasSuccessResponse: Boolean(result.alipay_system_oauth_token_response),
+      hasErrorResponse: Boolean(result.error_response)
+    });
 
     if (result.alipay_system_oauth_token_response) {
       const tokenResponse = result.alipay_system_oauth_token_response;
@@ -1196,12 +1283,12 @@ async function getAccessToken(authCode, env) {
       };
     }
 
-    console.error('支付宝API响应格式不正确，完整响应:', JSON.stringify(result));
+    console.error('支付宝 API 响应格式不正确');
     return {
       code: 'INVALID_RESPONSE',
       msg: '支付宝API响应格式不正确',
       sub_code: 'invalid_format',
-      sub_msg: `响应缺少alipay_system_oauth_token_response字段，完整响应: ${JSON.stringify(result)}`
+      sub_msg: '响应缺少 alipay_system_oauth_token_response 字段'
     };
 
   } catch (error) {
@@ -1241,7 +1328,10 @@ async function getUserInfoWithToken(accessToken, env) {
     const sign = await generateSign(params, privateKeyObj);
     params.sign = sign;
 
-    console.log('获取用户信息请求参数:', params);
+    console.log('支付宝用户信息请求已签名:', {
+      appId: Boolean(appId),
+      sandbox: env.ALIPAY_USE_SANDBOX === 'true'
+    });
 
     const gatewayUrl = env.ALIPAY_USE_SANDBOX === 'true' ?
       'https://openapi-sandbox.dl.alipaydev.com/gateway.do' :
@@ -1259,7 +1349,10 @@ async function getUserInfoWithToken(accessToken, env) {
     }
 
     const result = await response.json();
-    console.log('支付宝用户信息响应:', result);
+    console.log('支付宝用户信息响应已收到:', {
+      hasSuccessResponse: Boolean(result.alipay_user_info_share_response),
+      hasErrorResponse: Boolean(result.error_response)
+    });
 
     if (result.alipay_user_info_share_response) {
       const userInfoResponse = result.alipay_user_info_share_response;
@@ -1293,12 +1386,12 @@ async function getUserInfoWithToken(accessToken, env) {
       };
     }
 
-    console.error('支付宝用户信息API响应格式不正确，完整响应:', JSON.stringify(result));
+    console.error('支付宝用户信息 API 响应格式不正确');
     return {
       code: 'INVALID_RESPONSE',
       msg: '支付宝用户信息API响应格式不正确',
       sub_code: 'invalid_format',
-      sub_msg: `响应缺少alipay_user_info_share_response字段，完整响应: ${JSON.stringify(result)}`
+      sub_msg: '响应缺少 alipay_user_info_share_response 字段'
     };
 
   } catch (error) {
@@ -1315,9 +1408,8 @@ async function handleMobileAlipayCallback(request, env) {
     const state = url.searchParams.get('state');
 
     console.log('收到移动端应用支付宝登录回调:', {
-      authCode: authCode ? authCode.substring(0, 10) + '...' : 'null',
-      state: state || 'null',
-      fullUrl: request.url
+      hasAuthCode: Boolean(authCode),
+      hasState: Boolean(state)
     });
 
     const appScheme = 'com.ombhrum.fabushi://';
@@ -1329,7 +1421,7 @@ async function handleMobileAlipayCallback(request, env) {
     }
 
     if (authCode.length < 10) {
-      console.error('移动端支付宝回调授权码格式无效:', authCode);
+      console.error('移动端支付宝回调授权码格式无效');
       const redirectUrl = `${appScheme}error=invalid_auth_code&error_message=${encodeURIComponent('授权码格式无效')}`;
       return Response.redirect(redirectUrl, 302);
     }
@@ -1339,7 +1431,7 @@ async function handleMobileAlipayCallback(request, env) {
         'SELECT state_data FROM alipay_states WHERE state = ? AND expires_at > datetime("now")'
       ).bind(state).first();
       if (!storedStateData) {
-        console.error('移动端支付宝回调无效的state参数:', state);
+        console.error('移动端支付宝回调 state 参数无效');
         const redirectUrl = `${appScheme}error=invalid_state&error_message=${encodeURIComponent('登录状态无效，请重新登录')}`;
         return Response.redirect(redirectUrl, 302);
       }
@@ -1377,7 +1469,9 @@ async function handleMobileAlipayCallback(request, env) {
     }
 
     const alipayUser = alipayUserResult;
-    console.log('移动端应用获取到的支付宝用户信息:', alipayUser);
+    console.log('移动端已获取支付宝用户信息:', {
+      hasProviderSubject: Boolean(getAlipayPrimarySubject(alipayUser))
+    });
 
     if (!alipayUser || !alipayUser.user_id) {
       console.error('移动端应用支付宝用户信息不完整:', alipayUser);
@@ -1390,13 +1484,13 @@ async function handleMobileAlipayCallback(request, env) {
       await backfillAlipayIdentity(env, user, alipayUser, alipayUser);
       console.log('🔐 移动端生成 token 前 - JWT_SECRET 状态:', env.JWT_SECRET ? '已配置' : '未配置');
       const token = await generateToken({ id: user.id, username: user.username }, env);
-      console.log('✅ 移动端 token 已生成:', token.substring(0, 30) + '...');
+      console.log('✅ 移动端 token 已生成');
 
-      console.log('移动端应用支付宝登录成功，用户已注册:', user.username);
+      console.log('移动端应用支付宝登录成功，用户已注册');
 
       const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state}&token=${token}&username=${encodeURIComponent(user.username)}&isNewUser=false&loginMethod=alipay&${alipayCallbackUserParams(user, alipayUser)}`;
 
-      console.log('移动端应用支付宝登录成功，重定向到应用:', redirectUrl);
+      console.log('移动端应用支付宝登录成功，正在重定向到应用');
       return Response.redirect(redirectUrl, 302);
     }
 
@@ -1404,7 +1498,7 @@ async function handleMobileAlipayCallback(request, env) {
 
     const redirectUrl = `${appScheme}alipay_auth_code=${authCode}&state=${state}&isNewUser=true&needsRegistration=true&loginMethod=alipay&${alipayRegistrationParams(alipayUser)}`;
 
-    console.log('移动端应用新用户，重定向到应用进行注册:', redirectUrl);
+    console.log('移动端支付宝账号需要注册，正在重定向到应用');
     return Response.redirect(redirectUrl, 302);
 
   } catch (error) {
@@ -1436,7 +1530,7 @@ async function generateAlipayAuthString(env) {
       console.error('警告: ALIPAY_PID 未配置，SDK授权可能失败');
     }
 
-    const targetId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).substring(2) + Date.now().toString(36));
+    const targetId = generateSecureState();
 
     const authParams = {
       apiname: 'com.alipay.account.auth',
@@ -1455,7 +1549,7 @@ async function generateAlipayAuthString(env) {
       authParams.pid = pid;
     }
 
-    console.log('生成SDK授权字符串，参数:', authParams);
+    console.log('正在生成支付宝 SDK 授权字符串');
 
     const cryptoKey = await importPrivateKey(privateKey);
     const sign = await generateSign(authParams, cryptoKey);
@@ -1472,7 +1566,6 @@ async function generateAlipayAuthString(env) {
     const authString = authStrParts.join('&');
 
     console.log('生成的授权字符串长度:', authString.length);
-    console.log('授权字符串预览:', authString.substring(0, 200) + '...');
 
     return jsonResponse({
       success: true,
@@ -1504,7 +1597,7 @@ async function handleAlipaySDKLogin(request, env) {
       return jsonResponse({ error: '缺少授权码auth_code' }, 400);
     }
 
-    console.log('SDK授权登录，auth_code:', auth_code.substring(0, 10) + '...');
+    console.log('正在完成支付宝 SDK 授权登录');
 
     const alipayUser = await getAlipayUserInfo(auth_code, env);
 
@@ -1524,7 +1617,7 @@ async function handleAlipaySDKLogin(request, env) {
       }, 500);
     }
 
-    console.log('获取到支付宝用户信息:', alipayUser);
+    console.log('支付宝 SDK 用户信息已获取');
 
     if (!alipayUser || !alipayUser.user_id) {
       return jsonResponse({ error: '支付宝用户信息不完整' }, 400);
@@ -1574,4 +1667,4 @@ async function handleAlipaySDKLogin(request, env) {
   }
 }
 
-export { generateAlipayLoginUrl, getAlipayUserInfo, handleAlipayLogin, registerAlipayUser, checkEmailAvailability, sendRegistrationCaptcha, getAccessToken, getUserInfoWithToken, handleAlipayCallback, handleMacOSAlipayCallback, handleMobileAlipayCallback, generateAlipayAuthString, handleGetAlipayAuthString, handleAlipaySDKLogin };
+export { generateAlipayLoginUrl, getAlipayUserInfo, handleAlipayLogin, registerAlipayUser, checkEmailAvailability, sendRegistrationCaptcha, getAccessToken, getUserInfoWithToken, handleAlipayCallback, handleAlipayCliSession, handleMacOSAlipayCallback, handleMobileAlipayCallback, generateAlipayAuthString, handleGetAlipayAuthString, handleAlipaySDKLogin };

@@ -13,6 +13,7 @@ import {
   handleGetAlipayLoginUrl,
   handleAlipayLogin,
   handleAlipayCallback,
+  handleAlipayCliSession,
   handleAlipayRegister,
   handleBindEmail,
   handleMacOSAlipayCallback,
@@ -48,6 +49,7 @@ export async function routeAuthRequest({ pathname, method, request, env, db, ctx
   if (pathname === '/api/auth/alipay/login-url' && method === 'GET') return await handleGetAlipayLoginUrl(request, env);
   if (pathname === '/api/auth/alipay/login' && method === 'POST') return await handleAlipayLogin(request, env);
   if (pathname === '/api/auth/alipay/callback' && method === 'GET') return await handleAlipayCallback(request, env);
+  if (pathname === '/api/auth/alipay/cli-session' && method === 'GET') return await handleAlipayCliSession(request, env);
   if (pathname === '/api/auth/alipay/register' && method === 'POST') return await handleAlipayRegister(request, env);
   if (pathname === '/api/auth/alipay/macos-callback' && method === 'GET') return await handleMacOSAlipayCallback(request, env);
   if (pathname === '/api/auth/alipay/mobile-callback' && method === 'GET') return await handleMobileAlipayCallback(request, env);

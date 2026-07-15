@@ -176,6 +176,11 @@ export async function handleAlipayCallback(request, env) {
   return await handleAlipayCallback(request, env);
 }
 
+export async function handleAlipayCliSession(request, env) {
+  const { handleAlipayCliSession } = await import('../../alipay-login-functions.js');
+  return await handleAlipayCliSession(request, env);
+}
+
 // macOS支付宝回调
 export async function handleMacOSAlipayCallback(request, env) {
   const { handleMacOSAlipayCallback } = await import('../../alipay-login-functions.js');

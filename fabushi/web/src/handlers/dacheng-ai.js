@@ -13,6 +13,7 @@ export function isDachengAiPath(pathname) {
     pathname.startsWith('/api/resources/') ||
     pathname.startsWith('/api/botfather/') ||
     pathname.startsWith('/api/miniapps/') ||
+    pathname.startsWith('/codex-deepseek/') ||
     pathname === '/api/codex/resource-task'
   );
 }

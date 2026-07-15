@@ -13,6 +13,7 @@ test('Dacheng AI proxy includes first-party agent endpoints', () => {
 test('Dacheng AI proxy includes OpenClaw DeepSeek fallback endpoints', () => {
   assert.equal(isDachengAiPath('/api/openclaw/deepseek/v1/chat/completions'), true);
   assert.equal(isDachengAiPath('/api/openclaw/runtime/manifest'), true);
+  assert.equal(isDachengAiPath('/codex-deepseek/v1/responses'), true);
 });
 
 test('Dacheng AI proxy includes Bot Father and MiniApp registry endpoints', () => {
