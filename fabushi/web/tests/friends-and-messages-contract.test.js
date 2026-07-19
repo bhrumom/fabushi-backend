@@ -63,5 +63,6 @@ test('browser embeds the WASM runtime without a cloud Agent gateway', () => {
   );
   assert.match(webRuntimeBridge, /mahayanaWasm\.execute/);
   assert.ok(!webRuntimeBridge.includes('/api/mahayana/execute'));
-  assert.match(webRuntimeBridge, /\/api\/social\/messages/);
+  assert.match(webRuntimeBridge, /mahayanaWasm\.executeProduct/);
+  assert.match(webRuntimeBridge, /executeProduct\(request\)/);
 });

@@ -77,6 +77,7 @@ export const APPLE_IAP_PRODUCTS = {
 export const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Range',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Range, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-Id',
+  'Access-Control-Expose-Headers': 'Mcp-Session-Id, Mcp-Protocol-Version',
   'Content-Type': 'application/json'
 };

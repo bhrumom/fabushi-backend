@@ -1,7 +1,7 @@
 ai.ombhrum.com {
 	encode zstd gzip
 
-	@ai_bridge path /api/ai* /api/agent* /api/resources* /api/openclaw* /api/botfather* /api/miniapps* /api/codex* /codex-deepseek* /health
+	@ai_bridge path /api/ai* /api/agent* /api/resources* /api/openclaw* /api/plugins* /api/mcp* /api/codex* /codex-deepseek* /health
 	reverse_proxy @ai_bridge 127.0.0.1:8788 {
 		flush_interval -1
 		header_up Host {host}

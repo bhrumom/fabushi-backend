@@ -11,10 +11,10 @@ export function isDachengAiPath(pathname) {
     pathname.startsWith('/api/agent/') ||
     pathname.startsWith('/api/openclaw/') ||
     pathname.startsWith('/api/resources/') ||
-    pathname.startsWith('/api/botfather/') ||
-    pathname.startsWith('/api/miniapps/') ||
-    pathname.startsWith('/codex-deepseek/') ||
-    pathname === '/api/codex/resource-task'
+    pathname.startsWith('/api/plugins/') ||
+    pathname.startsWith('/api/mcp/') ||
+    pathname.startsWith('/api/codex/') ||
+    pathname.startsWith('/codex-deepseek/')
   );
 }
 

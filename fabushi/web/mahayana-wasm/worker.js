@@ -1,20 +1,43 @@
 import init, { MahayanaWebRuntime } from './mahayana_runtime.js';
+import initOfficialMiniApps, {
+  OfficialMiniAppRuntime,
+} from './official-miniapps/fabushi_official_miniapps.js';
+
+const OFFICIAL_PLUGIN_IDS = [
+  'global-dharma',
+  'faliu-flashcards',
+  'platform-publish',
+  'hermes-installer',
+  'bot-father',
+  'mahayana-assistant',
+];
 
 const runtimes = new Map();
 let nextRuntimeId = 1;
 let initialized = false;
 let opfsDirectory = null;
+let officialMiniAppsDirectory = null;
 
 async function initialize() {
   if (initialized) return;
   await init({
     module_or_path: new URL('./mahayana_runtime_bg.wasm', import.meta.url),
   });
+  await initOfficialMiniApps({
+    module_or_path: new URL(
+      './official-miniapps/fabushi_official_miniapps_bg.wasm',
+      import.meta.url,
+    ),
+  });
   if (navigator.storage?.getDirectory) {
     const root = await navigator.storage.getDirectory();
     opfsDirectory = await root.getDirectoryHandle('mahayana-runtime', {
       create: true,
     });
+    officialMiniAppsDirectory = await opfsDirectory.getDirectoryHandle(
+      'official-miniapps',
+      { create: true },
+    );
     const metadata = await opfsDirectory.getFileHandle('runtime.json', {
       create: true,
     });
@@ -27,6 +50,70 @@ async function initialize() {
     await writer.close();
   }
   initialized = true;
+}
+
+async function readOfficialMiniAppState(pluginId) {
+  if (!officialMiniAppsDirectory) return '';
+  try {
+    const handle = await officialMiniAppsDirectory.getFileHandle(
+      `${pluginId}.json`,
+    );
+    return await (await handle.getFile()).text();
+  } catch {
+    return '';
+  }
+}
+
+async function writeOfficialMiniAppState(pluginId, stateJson) {
+  if (!officialMiniAppsDirectory) return;
+  const handle = await officialMiniAppsDirectory.getFileHandle(
+    `${pluginId}.json`,
+    { create: true },
+  );
+  const writer = await handle.createWritable();
+  await writer.write(stateJson);
+  await writer.close();
+}
+
+async function registerOfficialMiniApps(hostRuntime) {
+  const registry = self.__mahayanaLocalPlugins || Object.create(null);
+  self.__mahayanaLocalPlugins = registry;
+  for (const pluginId of OFFICIAL_PLUGIN_IDS) {
+    const pluginRuntime = new OfficialMiniAppRuntime(
+      pluginId,
+      await readOfficialMiniAppState(pluginId),
+    );
+    const manifest = JSON.parse(pluginRuntime.manifestJson());
+    const tools = JSON.parse(pluginRuntime.toolsJson());
+    const commandTools = manifest.mahayana?.commands || {};
+    registry[pluginId] = Object.freeze({
+      callTool(tool, args = {}) {
+        const outcome = JSON.parse(
+          pluginRuntime.callToolOutcome(tool, JSON.stringify(args)),
+        );
+        void writeOfficialMiniAppState(pluginId, pluginRuntime.exportState());
+        return outcome.result;
+      },
+      callToolOutcome(tool, args = {}) {
+        const outcome = JSON.parse(
+          pluginRuntime.callToolOutcome(tool, JSON.stringify(args)),
+        );
+        void writeOfficialMiniAppState(pluginId, pluginRuntime.exportState());
+        return outcome;
+      },
+      homeHtml() {
+        return pluginRuntime.homeHtml();
+      },
+    });
+    hostRuntime.register_local_plugin(JSON.stringify({
+      pluginId,
+      title: manifest.plugin?.title || manifest.plugin?.name || pluginId,
+      tools,
+      commandTools,
+      approvedTools: [],
+      uiHtml: pluginRuntime.homeHtml(),
+    }));
+  }
 }
 
 function requireRuntime(runtimeId) {
@@ -47,12 +134,17 @@ self.onmessage = async (event) => {
       case 'createRuntime': {
         await initialize();
         const runtimeId = nextRuntimeId++;
-        runtimes.set(runtimeId, new MahayanaWebRuntime(args[0] || '{}'));
+        const runtime = new MahayanaWebRuntime(args[0] || '{}');
+        await registerOfficialMiniApps(runtime);
+        runtimes.set(runtimeId, runtime);
         value = runtimeId;
         break;
       }
       case 'execute':
         value = requireRuntime(args[0]).execute(args[1]);
+        break;
+      case 'executeProduct':
+        value = await requireRuntime(args[0]).execute_product(args[1]);
         break;
       case 'receive':
         value = requireRuntime(args[0]).receive() ?? null;
@@ -75,4 +167,3 @@ self.onmessage = async (event) => {
     });
   }
 };
-

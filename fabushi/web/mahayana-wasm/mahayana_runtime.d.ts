@@ -8,11 +8,25 @@ export class MahayanaWebRuntime {
     free(): void;
     [Symbol.dispose](): void;
     execute(command_json: string): string;
+    /**
+     * Executes account, marketplace, payment, and social commands inside the
+     * browser-local Rust Worker. Credentials are retained in Rust state and
+     * are removed from every response before it crosses into Flutter/Dart.
+     */
+    execute_product(command_json: string): Promise<string>;
     constructor(config_json: string);
     /**
      * Returns one queued event, or null when the browser queue is empty.
      */
     receive(): string | undefined;
+    /**
+     * Registers a browser-local plugin after the package loader has verified
+     * its Codex manifest, TUF target, runtime variant, and user permissions.
+     * Jco-generated modules expose their callable object through
+     * `globalThis.__mahayanaLocalPlugins[pluginId]`; this Rust host never
+     * substitutes a cloud MCP endpoint.
+     */
+    register_local_plugin(plugin_json: string): void;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -20,19 +34,19 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_mahayanawebruntime_free: (a: number, b: number) => void;
-    readonly mahayanawebruntime_execute: (a: number, b: number, c: number) => [number, number, number, number];
-    readonly mahayanawebruntime_new: (a: number, b: number) => [number, number, number];
-    readonly mahayanawebruntime_receive: (a: number) => [number, number, number, number];
-    readonly wasm_bindgen_1249bbd6df52a242___convert__closures_____invoke___wasm_bindgen_1249bbd6df52a242___JsValue__core_7d5f0a2ba6a62c33___result__Result_____wasm_bindgen_1249bbd6df52a242___JsError___true_: (a: number, b: number, c: any) => [number, number];
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
-    readonly __wbindgen_exn_store: (a: number) => void;
-    readonly __externref_table_alloc: () => number;
-    readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_destroy_closure: (a: number, b: number) => void;
-    readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_start: () => void;
+    readonly mahayanawebruntime_execute: (a: number, b: number, c: number, d: number) => void;
+    readonly mahayanawebruntime_execute_product: (a: number, b: number, c: number) => number;
+    readonly mahayanawebruntime_new: (a: number, b: number, c: number) => void;
+    readonly mahayanawebruntime_receive: (a: number, b: number) => void;
+    readonly mahayanawebruntime_register_local_plugin: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_1233: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_1235: (a: number, b: number, c: number, d: number) => void;
+    readonly __wbindgen_export: (a: number, b: number) => number;
+    readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_export3: (a: number) => void;
+    readonly __wbindgen_export4: (a: number, b: number) => void;
+    readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
+    readonly __wbindgen_export5: (a: number, b: number, c: number) => void;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

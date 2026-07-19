@@ -46,6 +46,11 @@ async function execute(runtimeId, commandJson) {
   return call('execute', [runtimeId, commandJson]);
 }
 
+async function executeProduct(runtimeId, commandJson) {
+  await initialize();
+  return call('executeProduct', [runtimeId, commandJson]);
+}
+
 async function receive(runtimeId) {
   await initialize();
   return call('receive', [runtimeId]);
@@ -60,7 +65,7 @@ window.mahayanaWasm = Object.freeze({
   initialize,
   createRuntime,
   execute,
+  executeProduct,
   receive,
   closeRuntime,
 });
-

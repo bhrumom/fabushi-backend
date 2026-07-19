@@ -16,11 +16,12 @@ test('Dacheng AI proxy includes OpenClaw DeepSeek fallback endpoints', () => {
   assert.equal(isDachengAiPath('/codex-deepseek/v1/responses'), true);
 });
 
-test('Dacheng AI proxy includes Bot Father and MiniApp registry endpoints', () => {
-  assert.equal(isDachengAiPath('/api/botfather/generate-miniapp'), true);
-  assert.equal(isDachengAiPath('/api/miniapps/registry'), true);
-  assert.equal(isDachengAiPath('/api/miniapps/dev/create'), true);
-  assert.equal(isDachengAiPath('/api/miniapps/dev/test_app/index.html'), true);
+test('Dacheng AI proxy includes plugin registry and MCP endpoints', () => {
+  assert.equal(isDachengAiPath('/api/plugins/registry'), true);
+  assert.equal(isDachengAiPath('/api/mcp/apps/global-dharma'), true);
+  assert.equal(isDachengAiPath('/api/codex/apps/global-dharma/turns'), true);
+  assert.equal(isDachengAiPath('/api/miniapps/registry'), false);
+  assert.equal(isDachengAiPath('/api/botfather/generate-miniapp'), false);
 });
 
 test('Dacheng AI proxy still rejects unrelated API endpoints', () => {
@@ -122,4 +123,40 @@ test('Dacheng AI proxy preserves SSE content type on successful streams', async 
 
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
+});
+
+test('Dacheng AI proxy preserves MCP session headers', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(init.headers.get('mcp-session-id'), 'session-1');
+    assert.equal(init.headers.get('mcp-protocol-version'), '2025-06-18');
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [] } }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'mcp-session-id': 'session-1',
+        'mcp-protocol-version': '2025-06-18',
+      },
+    });
+  };
+
+  const response = await handleDachengAiProxy(
+    new Request('https://api.ombhrum.com/api/mcp/apps/global-dharma', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'mcp-session-id': 'session-1',
+        'mcp-protocol-version': '2025-06-18',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+    }),
+    { DACHENG_AI_BACKEND_URL: 'https://ai.example.test' },
+  );
+
+  assert.equal(response.headers.get('mcp-session-id'), 'session-1');
+  assert.match(response.headers.get('access-control-expose-headers') ?? '', /Mcp-Session-Id/i);
 });

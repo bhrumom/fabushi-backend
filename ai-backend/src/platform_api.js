@@ -153,6 +153,46 @@ function ensurePlatformSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_agent_messages_session_created ON agent_messages (session_id, created_at ASC);
 
+    CREATE TABLE IF NOT EXISTS miniapp_messages (
+      user_id TEXT NOT NULL,
+      plugin_instance_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      text TEXT NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'complete',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, plugin_instance_id, message_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_miniapp_messages_timeline
+      ON miniapp_messages (user_id, plugin_instance_id, created_at ASC, message_id ASC);
+
+    CREATE TABLE IF NOT EXISTS miniapp_content_state (
+      user_id TEXT NOT NULL,
+      plugin_instance_id TEXT NOT NULL,
+      state_json TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, plugin_instance_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS miniapp_repair_tasks (
+      task_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      plugin_instance_id TEXT NOT NULL,
+      plugin_id TEXT NOT NULL,
+      source TEXT,
+      context_json TEXT NOT NULL,
+      target_device_id TEXT,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_miniapp_repair_user_status
+      ON miniapp_repair_tasks (user_id, status, created_at ASC);
+
     CREATE TABLE IF NOT EXISTS wallets (
       wallet_id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL UNIQUE,
@@ -339,6 +379,63 @@ function createStatements(db) {
       SELECT message_id AS messageId, direction, payload_json AS payloadJson, status, created_at AS createdAt
       FROM agent_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?
     `),
+    upsertMiniAppMessage: db.prepare(`
+      INSERT INTO miniapp_messages (
+        user_id, plugin_instance_id, message_id, role, text,
+        payload_json, status, created_at, updated_at
+      ) VALUES (
+        @userId, @pluginInstanceId, @messageId, @role, @text,
+        @payloadJson, @status, @createdAt, @updatedAt
+      )
+      ON CONFLICT(user_id, plugin_instance_id, message_id) DO UPDATE SET
+        role = excluded.role,
+        text = excluded.text,
+        payload_json = excluded.payload_json,
+        status = excluded.status,
+        updated_at = excluded.updated_at
+      WHERE excluded.updated_at >= miniapp_messages.updated_at
+    `),
+    listMiniAppMessages: db.prepare(`
+      SELECT message_id AS messageId, role, text, payload_json AS payloadJson,
+        status, created_at AS createdAt, updated_at AS updatedAt
+      FROM miniapp_messages
+      WHERE user_id = @userId AND plugin_instance_id = @pluginInstanceId
+        AND (@after = '' OR created_at > @after)
+      ORDER BY created_at ASC, message_id ASC
+      LIMIT @limit
+    `),
+    getMiniAppContentState: db.prepare(`
+      SELECT state_json AS stateJson, updated_at AS updatedAt
+      FROM miniapp_content_state
+      WHERE user_id = ? AND plugin_instance_id = ?
+      LIMIT 1
+    `),
+    upsertMiniAppContentState: db.prepare(`
+      INSERT INTO miniapp_content_state (user_id, plugin_instance_id, state_json, updated_at)
+      VALUES (@userId, @pluginInstanceId, @stateJson, @updatedAt)
+      ON CONFLICT(user_id, plugin_instance_id) DO UPDATE SET
+        state_json = excluded.state_json,
+        updated_at = excluded.updated_at
+    `),
+    insertMiniAppRepairTask: db.prepare(`
+      INSERT INTO miniapp_repair_tasks (
+        task_id, user_id, plugin_instance_id, plugin_id, source, context_json,
+        target_device_id, status, created_at, updated_at
+      ) VALUES (
+        @taskId, @userId, @pluginInstanceId, @pluginId, @source, @contextJson,
+        @targetDeviceId, @status, @now, @now
+      )
+    `),
+    listMiniAppRepairTasks: db.prepare(`
+      SELECT task_id AS taskId, plugin_instance_id AS pluginInstanceId,
+        plugin_id AS pluginId, source, context_json AS contextJson,
+        target_device_id AS targetDeviceId, status, created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM miniapp_repair_tasks
+      WHERE user_id = @userId AND (@deviceId = '' OR target_device_id = @deviceId OR target_device_id IS NULL)
+        AND status IN ('queued', 'waiting_desktop')
+      ORDER BY created_at ASC LIMIT 100
+    `),
     insertAudit: db.prepare(`
       INSERT INTO audit_logs (
         audit_id, actor_user_id, actor_device_id, agent_id, install_id, task_id,
@@ -401,9 +498,211 @@ function ensureWallet(s, userId, now) {
   return wallet;
 }
 
+function miniAppInstanceId(value) {
+  const id = readText(value);
+  if (!id || id.length > 240 || !/^[a-zA-Z0-9][a-zA-Z0-9._:@+-]*$/.test(id)) return null;
+  return id;
+}
+
+function normalizeContentState(value) {
+  const state = value && typeof value === 'object' ? value : {};
+  const receipts = Array.isArray(state.receipts)
+    ? state.receipts
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => ({
+          itemId: readText(item.itemId),
+          revision: readText(item.revision),
+          readAt: readText(item.readAt) || new Date().toISOString(),
+        }))
+        .filter((item) => item.itemId && item.revision)
+        .slice(-2_000)
+    : [];
+  return {
+    welcomeShown: Boolean(state.welcomeShown),
+    welcomeShownAt: readText(state.welcomeShownAt) || null,
+    receipts,
+  };
+}
+
+function mergeContentState(current, incoming) {
+  if (incoming?.resetOnboarding === true) {
+    return { welcomeShown: false, welcomeShownAt: null, receipts: [] };
+  }
+  const left = normalizeContentState(current);
+  const right = normalizeContentState(incoming);
+  const receipts = new Map();
+  for (const receipt of [...left.receipts, ...right.receipts]) {
+    const key = `${receipt.itemId}\u0000${receipt.revision}`;
+    const previous = receipts.get(key);
+    if (!previous || receipt.readAt > previous.readAt) receipts.set(key, receipt);
+  }
+  return {
+    welcomeShown: left.welcomeShown || right.welcomeShown,
+    welcomeShownAt: [left.welcomeShownAt, right.welcomeShownAt].filter(Boolean).sort()[0] || null,
+    receipts: [...receipts.values()].sort((a, b) => a.readAt.localeCompare(b.readAt)).slice(-2_000),
+  };
+}
+
+function redactRepairText(value) {
+  return String(value ?? '')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
+    .replace(/(authorization\s*[:=]\s*)([^\s,;]+)/gi, '$1[REDACTED]')
+    .replace(/((?:token|cookie|secret|password|api[_-]?key)\s*[:=]\s*)([^\s,;]+)/gi, '$1[REDACTED]');
+}
+
 export function registerPlatformApi({ app, db, resolveUser, asyncHandler }) {
   ensurePlatformSchema(db);
   const s = createStatements(db);
+
+  app.get('/api/miniapps/:pluginInstanceId/messages', asyncHandler(async (req, res) => {
+    const reqId = requestId(req);
+    const user = await resolveUser(req, {});
+    const pluginInstanceId = miniAppInstanceId(req.params.pluginInstanceId);
+    if (!pluginInstanceId) return fail(res, 400, reqId, 'miniapp_instance_invalid', 'pluginInstanceId is invalid');
+    const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 500);
+    const after = readText(req.query.after);
+    const messages = s.listMiniAppMessages.all({ userId: user.userId, pluginInstanceId, after, limit })
+      .map((message) => ({ ...message, payload: readJson(message.payloadJson, {}), payloadJson: undefined }));
+    return ok(res, 200, reqId, { pluginInstanceId, messages, nextCursor: messages.at(-1)?.createdAt ?? null });
+  }));
+
+  app.post('/api/miniapps/:pluginInstanceId/messages', asyncHandler(async (req, res) => {
+    const reqId = requestId(req);
+    const user = await resolveUser(req, req.body || {});
+    const pluginInstanceId = miniAppInstanceId(req.params.pluginInstanceId);
+    if (!pluginInstanceId) return fail(res, 400, reqId, 'miniapp_instance_invalid', 'pluginInstanceId is invalid');
+    const messages = Array.isArray(req.body?.messages) ? req.body.messages : [req.body?.message || req.body];
+    if (messages.length > 100) return fail(res, 413, reqId, 'miniapp_message_batch_too_large', 'at most 100 messages may be merged at once');
+    const now = new Date().toISOString();
+    let stored = 0;
+    for (const message of messages) {
+      const messageId = readText(message?.messageId || message?.id);
+      const role = readText(message?.role);
+      const text = String(message?.text ?? '').replace(/\u0000/g, '');
+      if (!messageId || !['user', 'assistant', 'miniApp', 'miniapp', 'tool', 'error'].includes(role) || text.length > 128_000) {
+        return fail(res, 422, reqId, 'miniapp_message_invalid', 'messageId, supported role, and text up to 128 KiB are required');
+      }
+      const createdAt = readText(message?.createdAt) || now;
+      const updatedAt = readText(message?.updatedAt) || createdAt;
+      const payload = message?.payload && typeof message.payload === 'object' ? message.payload : {};
+      const payloadJson = asJson(payload);
+      if (Buffer.byteLength(payloadJson, 'utf8') > 128 * 1024) return fail(res, 413, reqId, 'miniapp_message_payload_too_large', 'message payload exceeds 128 KiB');
+      s.upsertMiniAppMessage.run({
+        userId: user.userId,
+        pluginInstanceId,
+        messageId,
+        role,
+        text,
+        payloadJson,
+        status: readText(message?.status, 'complete'),
+        createdAt,
+        updatedAt,
+      });
+      stored += 1;
+    }
+    return ok(res, 200, reqId, { pluginInstanceId, stored, mergedAt: now });
+  }));
+
+  app.get('/api/miniapps/:pluginInstanceId/content-state', asyncHandler(async (req, res) => {
+    const reqId = requestId(req);
+    const user = await resolveUser(req, {});
+    const pluginInstanceId = miniAppInstanceId(req.params.pluginInstanceId);
+    if (!pluginInstanceId) return fail(res, 400, reqId, 'miniapp_instance_invalid', 'pluginInstanceId is invalid');
+    const row = s.getMiniAppContentState.get(user.userId, pluginInstanceId);
+    return ok(res, 200, reqId, {
+      pluginInstanceId,
+      state: normalizeContentState(readJson(row?.stateJson, {})),
+      updatedAt: row?.updatedAt ?? null,
+    });
+  }));
+
+  app.put('/api/miniapps/:pluginInstanceId/content-state', asyncHandler(async (req, res) => {
+    const reqId = requestId(req);
+    const user = await resolveUser(req, req.body || {});
+    const pluginInstanceId = miniAppInstanceId(req.params.pluginInstanceId);
+    if (!pluginInstanceId) return fail(res, 400, reqId, 'miniapp_instance_invalid', 'pluginInstanceId is invalid');
+    const current = s.getMiniAppContentState.get(user.userId, pluginInstanceId);
+    const state = mergeContentState(readJson(current?.stateJson, {}), req.body?.state || req.body || {});
+    const updatedAt = new Date().toISOString();
+    s.upsertMiniAppContentState.run({ userId: user.userId, pluginInstanceId, stateJson: asJson(state), updatedAt });
+    return ok(res, 200, reqId, { pluginInstanceId, state, updatedAt });
+  }));
+
+  app.post('/api/miniapps/:pluginInstanceId/repair', asyncHandler(async (req, res) => {
+    const reqId = requestId(req);
+    const user = await resolveUser(req, req.body || {});
+    const pluginInstanceId = miniAppInstanceId(req.params.pluginInstanceId);
+    if (!pluginInstanceId) return fail(res, 400, reqId, 'miniapp_instance_invalid', 'pluginInstanceId is invalid');
+    const source = readText(req.body?.source);
+    const pluginId = readText(req.body?.pluginId);
+    if (!pluginId) return fail(res, 422, reqId, 'miniapp_repair_plugin_required', 'pluginId is required');
+    const context = {
+      request: redactRepairText(req.body?.request),
+      error: redactRepairText(req.body?.error),
+      logs: redactRepairText(req.body?.logs).slice(-24_000),
+      source,
+      checkoutAccess: source ? 'requires_host_check' : 'requires_source',
+      cloneRequiresApproval: true,
+    };
+    const contextJson = asJson(context);
+    if (Buffer.byteLength(contextJson, 'utf8') > 32 * 1024) {
+      return fail(res, 413, reqId, 'miniapp_repair_context_too_large', 'repair handoff exceeds 32 KiB');
+    }
+    if (req.body?.confirmed !== true) {
+      return ok(res, 200, reqId, {
+        requiresConfirmation: true,
+        message: `将把 ${pluginId} 的脱敏错误与最近日志交给已配对桌面。来源：${source || '未声明'}。缺少本地 checkout 时，克隆仓库会再次单独请求批准。`,
+        preview: context,
+      });
+    }
+    const desktop = s.listDevices
+      .all(user.userId)
+      .find((device) => device.deviceType === 'desktop' && device.status === 'online');
+    const taskId = createId('repair');
+    const now = new Date().toISOString();
+    const status = desktop ? 'queued' : 'waiting_desktop';
+    s.insertMiniAppRepairTask.run({
+      taskId,
+      userId: user.userId,
+      pluginInstanceId,
+      pluginId,
+      source: source || null,
+      contextJson,
+      targetDeviceId: desktop?.deviceId || null,
+      status,
+      now,
+    });
+    insertAudit(s, {
+      actorUserId: user.userId,
+      actorDeviceId: desktop?.deviceId || null,
+      taskId,
+      eventType: 'miniapp.repair.handoff',
+      riskLevel: 'medium',
+      decision: 'confirmed',
+      summary: `repair handoff for ${pluginId}`,
+      createdAt: now,
+    });
+    return ok(res, 202, reqId, {
+      taskId,
+      status,
+      targetDeviceId: desktop?.deviceId || null,
+      message: desktop
+        ? `修复任务 ${taskId} 已发送到桌面；桌面仍会在访问 checkout 或克隆仓库前请求批准。`
+        : `修复任务 ${taskId} 已排队，配对桌面上线后继续。`,
+    });
+  }));
+
+  app.get('/api/miniapps/repair-tasks', asyncHandler(async (req, res) => {
+    const reqId = requestId(req);
+    const user = await resolveUser(req, {});
+    const deviceId = readText(req.query.deviceId);
+    const tasks = s.listMiniAppRepairTasks.all({ userId: user.userId, deviceId }).map((task) => ({
+      ...task,
+      context: readJson(task.contextJson, {}),
+      contextJson: undefined,
+    }));
+    return ok(res, 200, reqId, { tasks });
+  }));
 
   app.post('/api/devices/register', asyncHandler(async (req, res) => {
     const reqId = requestId(req);
