@@ -8,6 +8,7 @@ import { asApiError } from '../contracts/api-error.js';
 import { registerAccountCommand } from '../use-cases/account-registration.js';
 import { getAuthenticatedUserInfo } from '../use-cases/authenticated-user.js';
 import { deleteAccountCommand } from '../use-cases/delete-account.js';
+import { isTestAccountRequest, testAccountUser } from '../utils/test-account.js';
 
 export { handleLogin, handleUpdateProfile, handleUploadAvatar };
 
@@ -69,6 +70,9 @@ export async function handleRegister(request, env, db) {
 
 // 获取用户信息
 export async function handleGetUserInfo(request, env, db) {
+  if (await isTestAccountRequest(request, env)) {
+    return jsonResponse(testAccountUser());
+  }
   const repository = new AccountUserRepository(db);
 
   try {

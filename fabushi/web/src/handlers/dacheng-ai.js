@@ -1,5 +1,6 @@
 import { CORS_HEADERS } from '../config/constants.js';
 import { jsonResponse } from '../utils/response.js';
+import { isTestAccountRequest } from '../utils/test-account.js';
 
 const DEFAULT_DACHENG_AI_BACKEND_URL = 'https://ai.ombhrum.com';
 const DEFAULT_DACHENG_AI_BACKEND_TIMEOUT_MS = 120000;
@@ -14,12 +15,24 @@ export function isDachengAiPath(pathname) {
     pathname.startsWith('/api/plugins/') ||
     pathname.startsWith('/api/mcp/') ||
     pathname.startsWith('/api/codex/') ||
+    pathname.startsWith('/v1/ai/') ||
     pathname.startsWith('/codex-deepseek/')
   );
 }
 
 export async function handleDachengAiProxy(request, env) {
-  const origin = (env.DACHENG_AI_BACKEND_URL || DEFAULT_DACHENG_AI_BACKEND_URL).replace(/\/+$/, '');
+  const useTestAccountAdapter =
+    Boolean(env.DACHENG_RESPONSES_ADAPTER_URL) &&
+    (
+      new URL(request.url).pathname.startsWith('/v1/ai/') ||
+      new URL(request.url).pathname.startsWith('/codex-deepseek/v1/')
+    ) &&
+    await isTestAccountRequest(request, env);
+  const origin = (
+    useTestAccountAdapter
+      ? env.DACHENG_RESPONSES_ADAPTER_URL
+      : env.DACHENG_AI_BACKEND_URL || DEFAULT_DACHENG_AI_BACKEND_URL
+  ).replace(/\/+$/, '');
   const timeoutMs = Number(env.DACHENG_AI_BACKEND_TIMEOUT_MS || DEFAULT_DACHENG_AI_BACKEND_TIMEOUT_MS);
   const incomingUrl = new URL(request.url);
   const targetUrl = new URL(`${incomingUrl.pathname}${incomingUrl.search}`, origin);

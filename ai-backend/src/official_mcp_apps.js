@@ -8,6 +8,33 @@ import { z } from 'zod';
 const APP_MIME = 'text/html;profile=mcp-app';
 const VERSION = '1.0.0';
 
+const chatGptTaskPromptTemplates = [
+  {
+    id: 'implement-and-verify',
+    title: '实现并验证',
+    description: '在当前 checkout 中完成实现、运行相应验证，并保留无关改动。',
+    promptPrefix: '请在当前 checkout 中完成下面的实现任务，检查现有改动后继续，运行与风险相称的验证，不要覆盖无关改动：',
+  },
+  {
+    id: 'diagnose-fix-verify',
+    title: '诊断、修复、验证',
+    description: '先用证据定位根因，再修复并完成回归验证。',
+    promptPrefix: '请先用现有代码、日志和测试定位根因，然后修复并完成回归验证；不要只给建议：',
+  },
+  {
+    id: 'review-and-fix',
+    title: '审查并修正',
+    description: '审查现有实现，修正真实问题并验证。',
+    promptPrefix: '请审查当前 checkout 中与目标相关的实现，修正发现的真实问题并完成验证：',
+  },
+  {
+    id: 'continue-to-complete',
+    title: '持续完成目标',
+    description: '从已有进度继续，直到满足全部验收条件。',
+    promptPrefix: '请从当前 checkout 的已有进度继续，不要从头开始；持续工作直到以下目标和验收条件全部满足：',
+  },
+];
+
 const readOnly = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -36,6 +63,11 @@ export const officialMcpApps = [
   app('hermes-installer', 'Hermes 安装器', '安装并运行 Hermes；密钥只存放在 Secret Store'),
   app('bot-father', 'Bot Father', '生成、验证、构建与发布可移植 Codex 插件'),
   app('mahayana-assistant', '大乘助手', '插件状态、诊断与使用帮助'),
+  app(
+    'chatgpt-auto-confirm',
+    'ChatGPT 自动确认',
+    '显式启动后自动确认非敏感 ChatGPT 授权卡；敏感动作始终拦截并保留本地审计',
+  ),
 ];
 
 function app(id, title, description) {
@@ -123,7 +155,17 @@ function miniAppContent(appInfo) {
           },
         ],
       }
-    : { welcome, quickReplies: [], items: [] };
+    : appInfo.id === 'chatgpt-auto-confirm'
+      ? {
+          welcome,
+          quickReplies: [
+            quickTool('queue-status', '查看任务队列', 'queue_status'),
+            quickTool('prompt-templates', '内置任务提示词', 'prompt_templates'),
+            quickTool('wait-review', '等待验收任务', 'wait_for_review', { timeout: 60 }),
+          ],
+          items: [],
+        }
+      : { welcome, quickReplies: [], items: [] };
   const revision = crypto
     .createHash('sha256')
     .update(JSON.stringify(content))
@@ -144,6 +186,10 @@ function miniAppContent(appInfo) {
 
 function quickMessage(id, label, alias, value) {
   return { id, label, aliases: [alias], action: { type: 'message', value } };
+}
+
+function quickTool(id, label, name, args = {}) {
+  return { id, label, aliases: [], action: { type: 'tool', name, arguments: args } };
 }
 
 function resourceUri(id) {
@@ -196,7 +242,7 @@ function renderHomeUi(appInfo, actionNames) {
     .filter((name) => name !== 'home')
     .map((name) => `<button data-tool="${escapeHtml(name)}">/${escapeHtml(name)}</button>`)
     .join('');
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; img-src data:"><style>:root{color-scheme:light dark}body{font:15px system-ui;margin:0;padding:20px;background:#101722;color:#edf3ff}h1{font-size:21px;margin:0 0 6px}.sub{color:#9eb0ca;margin:0 0 18px}.tools{display:flex;flex-wrap:wrap;gap:8px}button{border:1px solid #3d526f;border-radius:10px;padding:9px 12px;background:#182538;color:inherit;cursor:pointer}pre{white-space:pre-wrap;background:#0b111a;padding:12px;border-radius:10px;min-height:42px}</style></head><body><h1>${escapeHtml(appInfo.title)}</h1><p class="sub">${escapeHtml(appInfo.description)}</p><div class="tools">${actions}</div><pre id="output">MCP App 已连接</pre><script>(()=>{let id=0;const pending=new Map();const output=document.querySelector('#output');addEventListener('message',event=>{const message=event.data;if(!message||message.jsonrpc!=='2.0')return;if(message.id!==undefined&&pending.has(message.id)){const done=pending.get(message.id);pending.delete(message.id);done(message)}if(message.method==='ui/notifications/tool-result')output.textContent=JSON.stringify(message.params,null,2)});function call(tool,args={}){const requestId=++id;return new Promise(resolve=>{pending.set(requestId,resolve);parent.postMessage({jsonrpc:'2.0',id:requestId,method:'tools/call',params:{name:tool,arguments:args}},'*')})}document.querySelectorAll('[data-tool]').forEach(button=>button.onclick=async()=>{output.textContent='调用 '+button.dataset.tool+'…';const response=await call(button.dataset.tool);output.textContent=JSON.stringify(response.result??response.error,null,2)})})()</script></body></html>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; img-src data:"><style>:root{color-scheme:light dark}body{font:15px system-ui;margin:0;padding:20px;background:#101722;color:#edf3ff}h1{font-size:21px;margin:0 0 6px}.sub{color:#9eb0ca;margin:0 0 18px}.tools{display:flex;flex-wrap:wrap;gap:8px}button{border:1px solid #3d526f;border-radius:10px;padding:9px 12px;background:#182538;color:inherit;cursor:pointer}pre{white-space:pre-wrap;background:#0b111a;padding:12px;border-radius:10px;min-height:42px}</style></head><body><h1>${escapeHtml(appInfo.title)}</h1><p class="sub">${escapeHtml(appInfo.description)}</p><div class="tools">${actions}</div><pre id="output">MCP App 已连接</pre><script>(()=>{let id=0;const pending=new Map();const output=document.querySelector('#output');addEventListener('message',event=>{const message=event.data;if(!message||message.jsonrpc!=='2.0')return;const isResponse=message.result!==undefined||message.error!==undefined;if(isResponse&&message.id!==undefined&&pending.has(message.id)){const done=pending.get(message.id);pending.delete(message.id);done(message)}if(message.method==='ui/notifications/tool-result')output.textContent=JSON.stringify(message.params,null,2)});function call(tool,args={}){const requestId=++id;return new Promise(resolve=>{pending.set(requestId,resolve);parent.postMessage({jsonrpc:'2.0',id:requestId,method:'tools/call',params:{name:tool,arguments:args}},'*')})}document.querySelectorAll('[data-tool]').forEach(button=>button.onclick=async()=>{output.textContent='调用 '+button.dataset.tool+'…';const response=await call(button.dataset.tool);output.textContent=JSON.stringify(response.result??response.error,null,2)})})()</script></body></html>`;
 }
 
 function escapeHtml(value) {
@@ -419,7 +465,7 @@ function registerHermes(server, appInfo, state) {
   });
 }
 
-function pluginBundle(name, description) {
+function pluginBundle(name, description, profile = 'portable') {
   const normalized = name.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || `plugin-${crypto.randomUUID().slice(0, 8)}`;
   const localServer = `${normalized}-local`;
   const httpServer = `${normalized}-http`;
@@ -442,6 +488,14 @@ function pluginBundle(name, description) {
   const files = {
     '.codex-plugin/plugin.json': `${JSON.stringify(manifest, null, 2)}\n`,
     '.mcp.json': `${JSON.stringify(mcp, null, 2)}\n`,
+    '.mahayana/plugin.json': `${JSON.stringify({
+      schemaVersion: 1,
+      miniapp: {
+        permissions: profile === 'desktop-approval'
+          ? ['mcp.call', 'storage.local', 'desktop.accessibility', 'desktop.chatgpt.approvals']
+          : ['mcp.call', 'storage.local'],
+      },
+    }, null, 2)}\n`,
     'package.json': `${JSON.stringify({
       name: `@generated/${normalized}`,
       version: '0.1.0',
@@ -459,6 +513,7 @@ function pluginBundle(name, description) {
     name: normalized,
     version: '0.1.0',
     description,
+    profile,
     files,
     runtimeVariants: manifest.runtimeVariants,
   };
@@ -495,11 +550,15 @@ function registerBotFather(server, appInfo, state) {
   registerHome(server, appInfo, tools);
   server.registerTool('create_plugin', {
     description: '创建完整可移植 Codex 插件包。',
-    inputSchema: { name: z.string().min(1).max(64), description: z.string().min(1).max(500) },
+    inputSchema: {
+      name: z.string().min(1).max(64),
+      description: z.string().min(1).max(500),
+      profile: z.enum(['portable', 'desktop-approval']).default('portable'),
+    },
     annotations: writeLocal,
-  }, async ({ name, description }) => {
+  }, async ({ name, description, profile }) => {
     const id = crypto.randomUUID();
-    const bundle = pluginBundle(name, description);
+    const bundle = pluginBundle(name, description, profile);
     state.plugins.set(id, { id, bundle, status: 'created' });
     return result('插件包已创建。', { pluginId: id, bundle });
   });
@@ -542,6 +601,279 @@ function registerAssistant(server, appInfo) {
   server.registerTool('diagnose_plugin', { description: '诊断插件 MCP 生命周期、Tools 和 UI Resource。', inputSchema: { plugin_id: z.string() }, annotations: readOnly }, async ({ plugin_id }) => result('插件诊断完成。', { pluginId: plugin_id, checks: { initialize: 'ok', toolsList: 'ok', home: 'ok', uiResource: 'ok', secretExposure: 'ok' } }));
 }
 
+function registerChatGptAutoConfirm(server, appInfo) {
+  const tools = [
+    'home', 'start', 'stop', 'status', 'scan_once', 'relaunch_and_confirm',
+    'audit_log', 'diagnose', 'send_and_watch', 'add_connector', 'get_reply',
+    'chat_status', 'prompt_templates', 'enqueue_tasks', 'start_queue',
+    'queue_status', 'wait_for_review', 'review_task', 'pause_queue',
+    'resume_queue', 'retry_task', 'cancel_task',
+  ];
+  registerHome(server, appInfo, tools);
+  const hostRequest = (capability, params, approval) => result(
+    `已向大乘桌面宿主提交 ${capability}。`,
+    {
+      handled: true,
+      hostRequest: {
+        transport: 'mcp-host-bridge',
+        capability,
+        params,
+        approval,
+      },
+    },
+  );
+  const rule = z.object({
+    application: z.string().trim().min(1).max(256),
+    action: z.string().trim().min(1).max(256),
+    resource: z.string().trim().min(1).max(256),
+  }).refine(
+    (value) => ![value.application, value.action, value.resource].some(
+      (part) => part === '*' || part === '.*',
+    ),
+    '规则必须使用精确文本，不能使用全匹配',
+  );
+  const queuedTask = z.object({
+    id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/).optional(),
+    title: z.string().trim().min(1).max(160),
+    prompt: z.string().trim().min(1).max(10000),
+    promptTemplate: z.enum(chatGptTaskPromptTemplates.map((item) => item.id)).default('continue-to-complete'),
+    connector: z.string().trim().min(1).max(256).default('devspace1'),
+    dependsOn: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/)).max(50).default([]),
+    resourceLocks: z.array(z.string().trim().min(1).max(256)).max(20).default([]),
+    priority: z.number().int().min(-100).max(100).default(0),
+    timeout: z.number().int().min(60).max(7200).default(3600),
+    maxTaskContinuations: z.number().int().min(0).max(20).default(8),
+    maxRuntimeRetries: z.number().int().min(0).max(5).default(2),
+  });
+  server.registerTool('start', {
+    description: '启动 ChatGPT 授权卡监听；可用 approveAll 自动确认非敏感卡，也可使用精确规则。',
+    inputSchema: {
+      rules: z.array(rule).max(20).default([]),
+      approveAll: z.boolean().default(true),
+      chatUrls: z.array(z.string().url().refine(
+        (value) => /^https:\/\/chatgpt\.com\/(?:$|c\/)/.test(value),
+        '必须是 ChatGPT 对话地址',
+      )).max(20).default([]),
+      intervalMs: z.number().int().min(400).max(5000).default(750),
+    },
+    annotations: writeLocal,
+  }, async ({ rules, approveAll, chatUrls, intervalMs }) => {
+    // Re-parse at the execution boundary. Some MCP clients only apply the
+    // exported JSON Schema and cannot preserve Zod refinements on nested
+    // objects, so the wildcard safety invariant must not rely on discovery.
+    const scopedRules = z.array(rule).max(20).parse(rules ?? []);
+    if (!approveAll && scopedRules.length === 0) {
+      throw new Error('请启用 approveAll 或提供 1-20 条 application/action/resource 精确规则');
+    }
+    return hostRequest(
+      'desktop.chatgpt-approvals.start',
+      { rules: scopedRules, approveAll, chatUrls, intervalMs },
+      'required',
+    );
+  });
+  server.registerTool('stop', {
+    description: '停止自动确认监听。',
+    annotations: writeLocal,
+  }, async () => hostRequest('desktop.chatgpt-approvals.stop', {}, 'required'));
+  server.registerTool('status', {
+    description: '读取监听、权限和规则状态。',
+    annotations: readOnly,
+  }, async () => hostRequest('desktop.chatgpt-approvals.status', {}, 'none'));
+  server.registerTool('scan_once', {
+    description: '立即扫描一次并仅执行精确允许规则。',
+    annotations: writeLocal,
+  }, async () => hostRequest('desktop.chatgpt-approvals.scan-once', {}, 'required'));
+  server.registerTool('relaunch_and_confirm', {
+    description: '重新启动 ChatGPT 调试通道并立即执行授权卡扫描。',
+    inputSchema: { approveAll: z.boolean().default(true) },
+    annotations: writeLocal,
+  }, async ({ approveAll }) => hostRequest(
+    'desktop.chatgpt-approvals.relaunch-and-confirm',
+    { approveAll },
+    'required',
+  ));
+  server.registerTool('audit_log', {
+    description: '读取仅保存在本机的最近审计记录。',
+    inputSchema: { limit: z.number().int().min(1).max(100).default(20) },
+    annotations: readOnly,
+  }, async ({ limit }) => hostRequest(
+    'desktop.chatgpt-approvals.audit',
+    { limit },
+    'none',
+  ));
+  server.registerTool('diagnose', {
+    description: '只读诊断 ChatGPT、CDP 和辅助功能连接。',
+    annotations: readOnly,
+  }, async () => hostRequest('desktop.chatgpt-approvals.diagnose', {}, 'none'));
+  server.registerTool('send_and_watch', {
+    description: '在隐藏的第二个 ChatGPT.app 实例的 Chat 页面中选择应用、发送指令、自动确认授权卡并等待最终回复；不使用当前 Work/worker 页面回退。',
+    inputSchema: {
+      message: z.string().trim().min(1).max(10000),
+      connector: z.string().trim().min(1).max(256).optional(),
+      conversationId: z.string().regex(/^[A-Za-z0-9-]{8,128}$/).optional(),
+      chatUrl: z.string().url().refine(
+        (value) => /^https:\/\/chatgpt\.com\/(?:$|c\/)/.test(value),
+        '必须是 ChatGPT 对话地址',
+      ).optional(),
+      newChat: z.boolean().default(true),
+      timeout: z.number().int().min(10).max(7200).default(3600),
+      stagnationTimeout: z.number().int().min(60).max(3600).default(1200),
+      maxRecoveryAttempts: z.number().int().min(0).max(5).default(5),
+      autoContinueIncomplete: z.boolean().default(true),
+      maxTaskContinuations: z.number().int().min(0).max(20).default(8),
+      continuationMessage: z.string().trim().max(4000).optional(),
+      resumeExisting: z.boolean().default(false),
+      approveAll: z.boolean().default(true),
+      pollIntervalMs: z.number().int().min(200).max(5000).default(500),
+    },
+    annotations: writeLocal,
+  }, async ({ message, connector, conversationId, chatUrl, newChat, timeout, stagnationTimeout, maxRecoveryAttempts, autoContinueIncomplete, maxTaskContinuations, continuationMessage, resumeExisting, approveAll, pollIntervalMs }) => hostRequest(
+    'desktop.chatgpt-approvals.send-and-watch',
+    { message, connector: connector ?? null, conversationId: resumeExisting ? (conversationId ?? null) : null, chatUrl: resumeExisting ? (chatUrl ?? null) : null, newChat: !resumeExisting, timeout, stagnationTimeout, maxRecoveryAttempts, autoContinueIncomplete, maxTaskContinuations, continuationMessage: continuationMessage ?? null, resumeExisting, approveAll, pollIntervalMs },
+    'required',
+  ));
+  server.registerTool('add_connector', {
+    description: '在 ChatGPT 当前对话的 Apps 菜单中选择指定应用。',
+    inputSchema: {
+      connector: z.string().trim().min(1).max(256),
+      conversationId: z.string().regex(/^[A-Za-z0-9-]{8,128}$/).optional(),
+      chatUrl: z.string().url().refine(
+        (value) => /^https:\/\/chatgpt\.com\/(?:$|c\/)/.test(value),
+        '必须是 ChatGPT 对话地址',
+      ).optional(),
+    },
+    annotations: writeLocal,
+  }, async ({ connector, conversationId, chatUrl }) => hostRequest(
+    'desktop.chatgpt-approvals.add-connector',
+    { connector, conversationId: conversationId ?? null, chatUrl: chatUrl ?? null },
+    'required',
+  ));
+  server.registerTool('get_reply', {
+    description: '读取 ChatGPT 最新回复、等待状态和流式状态。',
+    inputSchema: {
+      conversationId: z.string().regex(/^[A-Za-z0-9-]{8,128}$/).optional(),
+      chatUrl: z.string().url().refine(
+        (value) => /^https:\/\/chatgpt\.com\/(?:$|c\/)/.test(value),
+        '必须是 ChatGPT 对话地址',
+      ).optional(),
+    },
+    annotations: readOnly,
+  }, async ({ conversationId, chatUrl }) => hostRequest(
+    'desktop.chatgpt-approvals.get-reply',
+    { conversationId: conversationId ?? null, chatUrl: chatUrl ?? null },
+    'none',
+  ));
+  server.registerTool('chat_status', {
+    description: '读取 ChatGPT 当前对话、已选应用和回复状态。',
+    inputSchema: {
+      conversationId: z.string().regex(/^[A-Za-z0-9-]{8,128}$/).optional(),
+      chatUrl: z.string().url().refine(
+        (value) => /^https:\/\/chatgpt\.com\/(?:$|c\/)/.test(value),
+        '必须是 ChatGPT 对话地址',
+      ).optional(),
+    },
+    annotations: readOnly,
+  }, async ({ conversationId, chatUrl }) => hostRequest(
+    'desktop.chatgpt-approvals.chat-status',
+    { conversationId: conversationId ?? null, chatUrl: chatUrl ?? null },
+    'none',
+  ));
+  server.registerTool('prompt_templates', {
+    description: '读取小程序内置的任务提示词模板和机器可读最终总结协议。',
+    annotations: readOnly,
+  }, async () => result('已加载内置任务提示词。', {
+    templates: chatGptTaskPromptTemplates,
+    reportProtocol: {
+      protocol: 'mahayana.task-report.v1',
+      markers: ['MAHAYANA_TASK_REPORT_V1_BEGIN', 'MAHAYANA_TASK_REPORT_V1_END'],
+      statuses: ['complete', 'incomplete', 'blocked'],
+      fields: ['summary', 'completed', 'remaining', 'blockers', 'verification', 'next_task'],
+    },
+  }));
+  server.registerTool('enqueue_tasks', {
+    description: '把一个或多个任务加入本地持久队列；无依赖且资源锁不冲突的任务可以并发。',
+    inputSchema: {
+      tasks: z.array(queuedTask).min(1).max(50),
+      maxConcurrent: z.number().int().min(1).max(4).default(2),
+      reviewGate: z.boolean().default(true),
+      start: z.boolean().default(true),
+    },
+    annotations: writeLocal,
+  }, async ({ tasks, maxConcurrent, reviewGate, start }) => hostRequest(
+    'desktop.chatgpt-approvals.queue-enqueue',
+    { tasks, maxConcurrent, reviewGate, start },
+    'required',
+  ));
+  server.registerTool('start_queue', {
+    description: '启动或恢复持久任务队列；可等待首个需要验收或处理的任务并把结果返回当前 Work。',
+    inputSchema: {
+      maxConcurrent: z.number().int().min(1).max(4).optional(),
+      waitForReview: z.boolean().default(true),
+      waitTimeout: z.number().int().min(1).max(7200).default(3600),
+    },
+    annotations: writeLocal,
+  }, async ({ maxConcurrent, waitForReview, waitTimeout }) => hostRequest(
+    'desktop.chatgpt-approvals.queue-start',
+    { maxConcurrent: maxConcurrent ?? null, waitForReview, waitTimeout },
+    'required',
+  ));
+  server.registerTool('queue_status', {
+    description: '读取任务队列、单一专用 ChatGPT worker、验收 Chat、恢复状态和待处理结果；页面操作按队列串行。',
+    annotations: readOnly,
+  }, async () => hostRequest('desktop.chatgpt-approvals.queue-status', {}, 'none'));
+  server.registerTool('wait_for_review', {
+    description: '等待队列出现已完成待验收、阻塞或失败的任务，并把总结和 Chat 会话引用返回当前 Work。',
+    inputSchema: { timeout: z.number().int().min(1).max(7200).default(3600) },
+    annotations: readOnly,
+  }, async ({ timeout }) => hostRequest(
+    'desktop.chatgpt-approvals.queue-wait-review',
+    { timeout },
+    'none',
+  ));
+  server.registerTool('review_task', {
+    description: '提交验收结论；通过后自动释放后续任务，未通过则带验收意见重新排队。',
+    inputSchema: {
+      taskId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/),
+      accepted: z.boolean(),
+      feedback: z.string().trim().max(4000).default(''),
+    },
+    annotations: writeLocal,
+  }, async ({ taskId, accepted, feedback }) => hostRequest(
+    'desktop.chatgpt-approvals.queue-review',
+    { taskId, accepted, feedback },
+    'required',
+  ));
+  server.registerTool('pause_queue', {
+    description: '暂停启动新的队列任务；已经运行的 worker 会继续保存进度。',
+    annotations: writeLocal,
+  }, async () => hostRequest('desktop.chatgpt-approvals.queue-pause', {}, 'required'));
+  server.registerTool('resume_queue', {
+    description: '从本地持久状态恢复队列和仍存活的 worker。',
+    annotations: writeLocal,
+  }, async () => hostRequest('desktop.chatgpt-approvals.queue-resume', {}, 'required'));
+  server.registerTool('retry_task', {
+    description: '保留任务、工作区和落盘进度，立即新建 Chat 从中断处继续。',
+    inputSchema: {
+      taskId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/),
+      feedback: z.string().trim().max(4000).default(''),
+    },
+    annotations: writeLocal,
+  }, async ({ taskId, feedback }) => hostRequest(
+    'desktop.chatgpt-approvals.queue-retry',
+    { taskId, feedback },
+    'required',
+  ));
+  server.registerTool('cancel_task', {
+    description: '取消一个排队中或运行中的任务，并关闭它的隐藏 Chat 页面。',
+    inputSchema: { taskId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/) },
+    annotations: destructive,
+  }, async ({ taskId }) => hostRequest(
+    'desktop.chatgpt-approvals.queue-cancel',
+    { taskId },
+    'required',
+  ));
+}
+
 export function createOfficialMcpServer(id, scopeId = 'contract-test') {
   const appInfo = appById.get(id);
   if (!appInfo) return null;
@@ -552,7 +884,8 @@ export function createOfficialMcpServer(id, scopeId = 'contract-test') {
   else if (id === 'platform-publish') registerPlatformPublish(server, appInfo, state);
   else if (id === 'hermes-installer') registerHermes(server, appInfo, state);
   else if (id === 'bot-father') registerBotFather(server, appInfo, state);
-  else registerAssistant(server, appInfo);
+  else if (id === 'mahayana-assistant') registerAssistant(server, appInfo);
+  else registerChatGptAutoConfirm(server, appInfo);
   return server;
 }
 

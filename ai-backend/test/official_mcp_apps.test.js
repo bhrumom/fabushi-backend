@@ -21,6 +21,13 @@ const expectedTools = {
   'hermes-installer': ['home', 'install', 'start', 'status', 'chat', 'stop', 'reset'],
   'bot-father': ['home', 'create_plugin', 'validate_plugin', 'build_plugin', 'install_plugin', 'publish_plugin', 'deployment_status'],
   'mahayana-assistant': ['home', 'help', 'list_plugins', 'plugin_status', 'diagnose_plugin'],
+  'chatgpt-auto-confirm': [
+    'home', 'start', 'stop', 'status', 'scan_once', 'relaunch_and_confirm',
+    'audit_log', 'diagnose', 'send_and_watch', 'add_connector', 'get_reply',
+    'chat_status', 'prompt_templates', 'enqueue_tasks', 'start_queue',
+    'queue_status', 'wait_for_review', 'review_task', 'pause_queue',
+    'resume_queue', 'retry_task', 'cancel_task',
+  ],
 };
 
 async function connected(id, scopeId = 'contract-test') {
@@ -56,6 +63,8 @@ for (const app of officialMcpApps) {
       const resource = await client.readResource({ uri });
       assert.equal(resource.contents[0].mimeType, 'text/html;profile=mcp-app');
       assert.match(resource.contents[0].text, /method:'tools\/call'/);
+      assert.match(resource.contents[0].text, /const isResponse=/);
+      assert.doesNotMatch(resource.contents[0].text, /if\(message\.id!==undefined&&pending\.has/);
       assert.match(resource.contents[0].text, /Content-Security-Policy/);
       assert.match(resource.contents[0].text, /connect-src 'none'/);
       assert.doesNotMatch(resource.contents[0].text, /FabushiMiniApp|bot\.chat|localhost|127\.0\.0\.1/);
@@ -66,7 +75,7 @@ for (const app of officialMcpApps) {
   });
 }
 
-test('official plugin packages cover all four platforms with one referenced server per variant', () => {
+test('official plugin packages declare exact per-system availability and one server per variant', () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const marketplacePath = path.join(root, '.agents/plugins/marketplace.json');
   const marketplace = JSON.parse(fs.readFileSync(marketplacePath, 'utf8'));
@@ -92,7 +101,10 @@ test('official plugin packages cover all four platforms with one referenced serv
     assert.equal(mcp.mcpServers[local.server].type, 'stdio');
     assert.equal(mcp.mcpServers[local.server].command, './runtime/cli/fabushi-plugin-cli');
     assert.deepEqual(mcp.mcpServers[local.server].args, ['--plugin', app.id, 'mcp-serve']);
-    assert.deepEqual(account.platforms, ['cli', 'desktop', 'mobile', 'web']);
+    const expectedAccountPlatforms = app.id === 'chatgpt-auto-confirm'
+      ? ['cli', 'desktop']
+      : ['cli', 'desktop', 'mobile', 'web'];
+    assert.deepEqual(account.platforms, expectedAccountPlatforms);
     assert.equal(account.server, app.id);
     assert.equal(mcp.mcpServers[account.server].type, 'http');
     assert.ok(local.priority > account.priority);
@@ -102,7 +114,7 @@ test('official plugin packages cover all four platforms with one referenced serv
     assert.deepEqual(extension.runtime.cli.args, ['--plugin', app.id]);
     assert.equal(extension.runtime.wasm.module, './runtime/wasm/fabushi_official_miniapps_bg.wasm');
     assert.equal(extension.runtime.wasm.export, 'OfficialMiniAppRuntime');
-    assert.deepEqual([...covered].sort(), ['cli', 'desktop', 'mobile', 'web']);
+    assert.deepEqual([...covered].sort(), expectedAccountPlatforms.slice().sort());
   }
 });
 
@@ -260,6 +272,119 @@ test('Bot Father creates a complete portable plugin bundle', async () => {
       arguments: { plugin_id: created.structuredContent.pluginId },
     });
     assert.equal(validated.structuredContent.valid, true);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('Bot Father desktop approval profile declares host-only permissions', async () => {
+  const { client, server } = await connected('bot-father', 'desktop-profile');
+  try {
+    const created = await client.callTool({
+      name: 'create_plugin',
+      arguments: {
+        name: 'Approval Helper',
+        description: '桌面授权助手',
+        profile: 'desktop-approval',
+      },
+    });
+    const bundle = created.structuredContent.bundle;
+    const extension = JSON.parse(bundle.files['.mahayana/plugin.json']);
+    assert.equal(bundle.profile, 'desktop-approval');
+    assert.deepEqual(extension.miniapp.permissions, [
+      'mcp.call',
+      'storage.local',
+      'desktop.accessibility',
+      'desktop.chatgpt.approvals',
+    ]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('ChatGPT auto confirm emits only scoped desktop host requests', async () => {
+  const { client, server } = await connected('chatgpt-auto-confirm', 'approval-contract');
+  try {
+    const started = await client.callTool({
+      name: 'start',
+      arguments: {
+        rules: [{
+          application: 'GitHub',
+          action: 'Enable auto-merge',
+          resource: 'bhrumom/fabushi',
+        }],
+      },
+    });
+    assert.equal(
+      started.structuredContent.hostRequest.capability,
+      'desktop.chatgpt-approvals.start',
+    );
+    assert.equal(started.structuredContent.hostRequest.approval, 'required');
+    const status = await client.callTool({ name: 'status', arguments: {} });
+    assert.equal(status.structuredContent.hostRequest.approval, 'none');
+    const sent = await client.callTool({
+      name: 'send_and_watch',
+      arguments: { message: '只读检查', connector: 'devspace1' },
+    });
+    assert.equal(
+      sent.structuredContent.hostRequest.capability,
+      'desktop.chatgpt-approvals.send-and-watch',
+    );
+    assert.equal(sent.structuredContent.hostRequest.params.connector, 'devspace1');
+    const reply = await client.callTool({ name: 'get_reply', arguments: {} });
+    assert.equal(
+      reply.structuredContent.hostRequest.capability,
+      'desktop.chatgpt-approvals.get-reply',
+    );
+    assert.equal(reply.structuredContent.hostRequest.approval, 'none');
+    const queued = await client.callTool({
+      name: 'enqueue_tasks',
+      arguments: {
+        tasks: [{
+          id: 'release', title: '发布', prompt: '完成发布',
+          resourceLocks: ['repo:fabushi'],
+        }],
+        maxConcurrent: 2,
+      },
+    });
+    assert.equal(
+      queued.structuredContent.hostRequest.capability,
+      'desktop.chatgpt-approvals.queue-enqueue',
+    );
+    assert.deepEqual(
+      queued.structuredContent.hostRequest.params.tasks[0].resourceLocks,
+      ['repo:fabushi'],
+    );
+    const wait = await client.callTool({
+      name: 'wait_for_review', arguments: { timeout: 60 },
+    });
+    assert.equal(wait.structuredContent.hostRequest.approval, 'none');
+    const retried = await client.callTool({
+      name: 'retry_task', arguments: { taskId: 'release', feedback: '从落盘进度续作' },
+    });
+    assert.equal(
+      retried.structuredContent.hostRequest.capability,
+      'desktop.chatgpt-approvals.queue-retry',
+    );
+    const templates = await client.callTool({ name: 'prompt_templates', arguments: {} });
+    assert.equal(templates.structuredContent.reportProtocol.protocol, 'mahayana.task-report.v1');
+    const unsafe = await client.callTool({
+      name: 'start',
+      arguments: {
+        rules: [{ application: 'GitHub', action: '*', resource: 'bhrumom/fabushi' }],
+      },
+    });
+    assert.equal(unsafe.isError, true);
+    assert.equal(unsafe.structuredContent?.hostRequest, undefined);
+
+    const broad = await client.callTool({
+      name: 'start',
+      arguments: { approveAll: true },
+    });
+    assert.equal(broad.structuredContent.hostRequest.params.approveAll, true);
+    assert.deepEqual(broad.structuredContent.hostRequest.params.rules, []);
   } finally {
     await client.close();
     await server.close();

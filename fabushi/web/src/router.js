@@ -39,6 +39,11 @@ import {
   handleAutomationSyncAppVersionPolicy,
 } from './handlers/app-version.js';
 import { handleOfficialSiteReleaseCollection } from './handlers/official-site-release.js';
+import {
+  handleMarketplaceBrowse,
+  handleMarketplaceDownload,
+  handleMarketplacePublish,
+} from './handlers/marketplace.js';
 import { routeAuthRequest } from './routes/auth-routes.js';
 import { routeMembershipRequest } from './routes/membership-routes.js';
 import { routeMeditationRequest } from './routes/meditation-routes.js';
@@ -101,6 +106,16 @@ export async function route(request, env, db, ctx) {
 
   if (pathname === '/health') {
     return jsonResponse({ status: 'ok', timestamp: new Date().toISOString() });
+  }
+
+  if (pathname === '/v1/marketplace/plugins' && method === 'GET') {
+    return await handleMarketplaceBrowse(request, env);
+  }
+  if (pathname === '/v1/marketplace/releases' && method === 'POST') {
+    return await handleMarketplacePublish(request, env, db);
+  }
+  if (method === 'GET' && /^\/v1\/marketplace\/plugins\/[^/]+\/releases\/[^/]+\/download$/.test(pathname)) {
+    return await handleMarketplaceDownload(request, env);
   }
 
   if (isDachengAiPath(pathname)) {

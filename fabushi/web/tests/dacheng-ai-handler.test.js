@@ -64,6 +64,106 @@ test('Dacheng AI proxy forwards OpenClaw DeepSeek fallback requests', async (t) 
   assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
 });
 
+test('Dacheng AI proxy routes only the configured test account to the Responses adapter', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const testToken = 'test-account-token-with-at-least-thirty-two-characters';
+
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url.toString(), 'https://responses.example.test/v1/ai/responses');
+    assert.equal(init.headers.get('Authorization'), `Bearer ${testToken}`);
+    return new Response('event: response.completed\ndata: {}\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+    });
+  };
+
+  const response = await handleDachengAiProxy(
+    new Request('https://api.ombhrum.com/v1/ai/responses', {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${testToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ input: 'test', stream: true }),
+    }),
+    {
+      DACHENG_AI_BACKEND_URL: 'https://ai.example.test',
+      DACHENG_RESPONSES_ADAPTER_URL: 'https://responses.example.test',
+      TEST_ACCOUNT_TOKEN: testToken,
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
+});
+
+test('Dacheng AI proxy routes the CLI Codex Responses path for the test account', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const testToken = 'test-account-token-with-at-least-thirty-two-characters';
+
+  globalThis.fetch = async (url) => {
+    assert.equal(
+      url.toString(),
+      'https://responses.example.test/codex-deepseek/v1/responses',
+    );
+    return new Response(JSON.stringify({ status: 'completed', output: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  const response = await handleDachengAiProxy(
+    new Request('https://api.ombhrum.com/codex-deepseek/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${testToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ input: 'test', stream: false }),
+    }),
+    {
+      DACHENG_AI_BACKEND_URL: 'https://ai.example.test',
+      DACHENG_RESPONSES_ADAPTER_URL: 'https://responses.example.test',
+      TEST_ACCOUNT_TOKEN: testToken,
+    },
+  );
+  assert.equal(response.status, 200);
+});
+
+test('Dacheng AI proxy keeps ordinary accounts on the existing backend', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  globalThis.fetch = async (url) => {
+    assert.equal(url.toString(), 'https://ai.example.test/v1/ai/usage');
+    return new Response(JSON.stringify({ remainingTokens: 10 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  const response = await handleDachengAiProxy(
+    new Request('https://api.ombhrum.com/v1/ai/usage', {
+      headers: { Authorization: 'Bearer ordinary-account-token' },
+    }),
+    {
+      DACHENG_AI_BACKEND_URL: 'https://ai.example.test',
+      DACHENG_RESPONSES_ADAPTER_URL: 'https://responses.example.test',
+      TEST_ACCOUNT_TOKEN: 'test-account-token-with-at-least-thirty-two-characters',
+    },
+  );
+  assert.equal(response.status, 200);
+});
+
 test('Dacheng AI proxy converts Cloudflare tunnel HTML into JSON error', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {

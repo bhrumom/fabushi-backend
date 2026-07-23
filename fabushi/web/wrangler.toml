@@ -48,6 +48,12 @@ binding = "DB"
 database_name = "fabushi-db"
 database_id = "7b6318f0-fbc2-42f9-9887-85f878ae76d0"
 
+[[d1_databases]]
+binding = "PLATFORM_DB"
+database_name = "mahayana-platform"
+database_id = "24e53e28-5abd-4850-ae99-cd5d2bdfffb0"
+migrations_dir = "../../third_party/mahayana/mahayana-rs/mahayana-platform-worker/migrations"
+
 # Email Workers配置
 [[send_email]]
 name = "EMAIL"
@@ -60,6 +66,7 @@ FROM_EMAIL = "amitabha@ombhrum.com"
 BACKEND_ONLY = "true"
 FRONTEND_URL = "https://flutter.ombhrum.com"
 DACHENG_AI_BACKEND_URL = "https://ai.ombhrum.com"
+DACHENG_RESPONSES_ADAPTER_URL = "https://dacheng-responses-adapter.bhrumom.workers.dev"
 
 # 生产环境配置
 [env.production]
@@ -94,6 +101,12 @@ binding = "DB"
 database_name = "fabushi-db"
 database_id = "7b6318f0-fbc2-42f9-9887-85f878ae76d0"
 
+[[env.production.d1_databases]]
+binding = "PLATFORM_DB"
+database_name = "mahayana-platform"
+database_id = "24e53e28-5abd-4850-ae99-cd5d2bdfffb0"
+migrations_dir = "../../third_party/mahayana/mahayana-rs/mahayana-platform-worker/migrations"
+
 [[env.production.durable_objects.bindings]]
 name = "ONLINE_COUNTER"
 class_name = "OnlineCounter"
@@ -113,6 +126,7 @@ ALIPAY_PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAi0qnuA0SPHg/sB4
 WORKER_URL = "https://api.ombhrum.com"
 FRONTEND_URL = "https://flutter.ombhrum.com"
 DACHENG_AI_BACKEND_URL = "https://ai.ombhrum.com"
+DACHENG_RESPONSES_ADAPTER_URL = "https://dacheng-responses-adapter.bhrumom.workers.dev"
 ALIPAY_MOBILE_AUTH_REDIRECT_URL = "https://api.ombhrum.com/api/auth/alipay/callback"
 ALIPAY_NOTIFY_URL = "https://api.ombhrum.com/api/alipay/notify"
 ALIPAY_RETURN_URL = "https://flutter.ombhrum.com/payment-success.html"
@@ -161,6 +175,7 @@ ALIPAY_PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAi0qnuA0SPHg/sB4
 WORKER_URL = "https://fabushi-flutter-web-dev.bhrumom.workers.dev"
 FRONTEND_URL = "https://flutter.ombhrum.com"
 DACHENG_AI_BACKEND_URL = "https://ai.ombhrum.com"
+DACHENG_RESPONSES_ADAPTER_URL = "https://dacheng-responses-adapter.bhrumom.workers.dev"
 ALIPAY_MOBILE_AUTH_REDIRECT_URL = "https://fabushi-flutter-web-dev.bhrumom.workers.dev/api/auth/alipay/callback"
 
 [observability.logs]

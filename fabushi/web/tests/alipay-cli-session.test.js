@@ -57,7 +57,8 @@ test('CLI Alipay polling returns and deletes a completed token exactly once', as
   );
   assert.equal(response.status, 200);
   const payload = await response.json();
-  assert.equal(payload.token, 'secret-token');
+  assert.equal(payload.accessToken, 'secret-token');
+  assert.equal(payload.token, undefined);
   assert.equal(payload.user.id, 42);
   assert.equal(fixture.calls.length, 2);
   assert.match(fixture.calls[1].sql, /DELETE FROM alipay_states/);
