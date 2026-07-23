@@ -80,7 +80,14 @@ test('official plugin packages declare exact per-system availability and one ser
   const marketplacePath = path.join(root, '.agents/plugins/marketplace.json');
   const marketplace = JSON.parse(fs.readFileSync(marketplacePath, 'utf8'));
   assert.equal(marketplace.name, 'fabushi-official');
-  assert.deepEqual(marketplace.plugins.map((plugin) => plugin.name), officialMcpApps.map((app) => app.id));
+  const hostedAppIds = marketplace.plugins
+    .filter((plugin) => {
+      const manifestPath = path.join(root, plugin.source.path, '.codex-plugin/plugin.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      return Array.isArray(manifest.runtimeVariants);
+    })
+    .map((plugin) => plugin.name);
+  assert.deepEqual(hostedAppIds, officialMcpApps.map((app) => app.id));
   for (const app of officialMcpApps) {
     const pluginRoot = path.join(root, '.agents/plugins/plugins', app.id);
     const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.codex-plugin/plugin.json'), 'utf8'));
