@@ -78,11 +78,16 @@ for (const app of officialMcpApps) {
 test('official plugin packages declare exact per-system availability and one server per variant', () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const marketplacePath = path.join(root, '.agents/plugins/marketplace.json');
+  const marketplaceRoot = path.dirname(marketplacePath);
   const marketplace = JSON.parse(fs.readFileSync(marketplacePath, 'utf8'));
   assert.equal(marketplace.name, 'fabushi-official');
   const hostedAppIds = marketplace.plugins
     .filter((plugin) => {
-      const manifestPath = path.join(root, plugin.source.path, '.codex-plugin/plugin.json');
+      const manifestPath = path.join(
+        marketplaceRoot,
+        plugin.source.path,
+        '.codex-plugin/plugin.json',
+      );
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
       return Array.isArray(manifest.runtimeVariants);
     })
