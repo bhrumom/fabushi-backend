@@ -637,6 +637,10 @@ function registerChatGptAutoConfirm(server, appInfo) {
     title: z.string().trim().min(1).max(160),
     prompt: z.string().trim().min(1).max(10000),
     promptTemplate: z.enum(chatGptTaskPromptTemplates.map((item) => item.id)).default('continue-to-complete'),
+    revision: z.number().int().min(1).default(1),
+    specSources: z.array(z.string().trim().min(1).max(512)).max(20).default([]),
+    directive: z.string().trim().max(10000).default(''),
+    applyMode: z.literal('next_chat').default('next_chat'),
     connector: z.string().trim().min(1).max(256).default('devspace1'),
     dependsOn: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/)).max(50).default([]),
     resourceLocks: z.array(z.string().trim().min(1).max(256)).max(20).default([]),
@@ -821,6 +825,26 @@ function registerChatGptAutoConfirm(server, appInfo) {
     description: '读取任务队列、单一专用 ChatGPT worker、验收 Chat、恢复状态和待处理结果；页面操作按队列串行。',
     annotations: readOnly,
   }, async () => hostRequest('desktop.chatgpt-approvals.queue-status', {}, 'none'));
+  server.registerTool('update_task', {
+    description: '更新已有任务的 revision 和规范快照；不停止长期 Action，最新要求在下一轮新 Chat 生效。',
+    inputSchema: {
+      taskId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/),
+      revision: z.number().int().min(1),
+      expectedRevision: z.number().int().min(1).optional(),
+      title: z.string().trim().min(1).max(160).optional(),
+      prompt: z.string().trim().min(1).max(10000).optional(),
+      directive: z.string().trim().max(10000).optional(),
+      specSources: z.array(z.string().trim().min(1).max(512)).max(20).default([]),
+      specSnapshot: z.string().max(60000).optional(),
+      specDigest: z.string().max(80).optional(),
+      applyMode: z.literal('next_chat').default('next_chat'),
+    },
+    annotations: writeLocal,
+  }, async (params) => hostRequest(
+    'desktop.chatgpt-approvals.queue-update',
+    params,
+    'required',
+  ));
   server.registerTool('wait_for_review', {
     description: '等待队列出现已完成待验收、阻塞或失败的任务，并把总结和 Chat 会话引用返回当前 Work。',
     inputSchema: { timeout: z.number().int().min(1).max(7200).default(3600) },

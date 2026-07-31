@@ -25,7 +25,7 @@ const expectedTools = {
     'home', 'start', 'stop', 'status', 'scan_once', 'relaunch_and_confirm',
     'audit_log', 'diagnose', 'send_and_watch', 'add_connector', 'get_reply',
     'chat_status', 'prompt_templates', 'enqueue_tasks', 'start_queue',
-    'queue_status', 'wait_for_review', 'review_task', 'pause_queue',
+    'queue_status', 'update_task', 'wait_for_review', 'review_task', 'pause_queue',
     'resume_queue', 'retry_task', 'cancel_task',
   ],
 };
@@ -380,6 +380,20 @@ test('ChatGPT auto confirm emits only scoped desktop host requests', async () =>
       retried.structuredContent.hostRequest.capability,
       'desktop.chatgpt-approvals.queue-retry',
     );
+    const updated = await client.callTool({
+      name: 'update_task',
+      arguments: {
+        taskId: 'release', revision: 2,
+        specSources: ['docs/plugin-marketplace.md'],
+        specSnapshot: 'updated marketplace architecture',
+        specDigest: 'sha256:updated',
+      },
+    });
+    assert.equal(
+      updated.structuredContent.hostRequest.capability,
+      'desktop.chatgpt-approvals.queue-update',
+    );
+    assert.equal(updated.structuredContent.hostRequest.params.revision, 2);
     const templates = await client.callTool({ name: 'prompt_templates', arguments: {} });
     assert.equal(templates.structuredContent.reportProtocol.protocol, 'mahayana.task-report.v1');
     const unsafe = await client.callTool({
