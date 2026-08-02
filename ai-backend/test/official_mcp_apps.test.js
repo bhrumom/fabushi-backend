@@ -92,41 +92,51 @@ test('official plugin packages declare exact per-system availability and one ser
       return Array.isArray(manifest.runtimeVariants);
     })
     .map((plugin) => plugin.name);
-  assert.deepEqual(hostedAppIds, officialMcpApps.map((app) => app.id));
-  for (const app of officialMcpApps) {
-    const pluginRoot = path.join(root, '.agents/plugins/plugins', app.id);
+  const localOnlyPluginIds = ['wechat-article-downloader'];
+  assert.deepEqual(hostedAppIds, [
+    ...officialMcpApps.map((app) => app.id),
+    ...localOnlyPluginIds,
+  ]);
+  for (const appId of hostedAppIds) {
+    const pluginRoot = path.join(root, '.agents/plugins/plugins', appId);
     const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.codex-plugin/plugin.json'), 'utf8'));
     const mcp = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.mcp.json'), 'utf8'));
-    assert.equal(manifest.name, app.id);
+    assert.equal(manifest.name, appId);
     assert.equal(manifest.mcpServers, './.mcp.json');
     assert.ok(Array.isArray(manifest.runtimeVariants));
     const covered = new Set();
     for (const variant of manifest.runtimeVariants) {
-      assert.ok(mcp.mcpServers[variant.server], `${app.id}:${variant.id} references a missing server`);
+      assert.ok(mcp.mcpServers[variant.server], `${appId}:${variant.id} references a missing server`);
       assert.equal(typeof variant.priority, 'number');
       variant.platforms.forEach((platform) => covered.add(platform));
     }
     const local = manifest.runtimeVariants.find((variant) => variant.id === 'local-cli');
     const account = manifest.runtimeVariants.find((variant) => variant.id === 'account-http');
     assert.deepEqual(local.platforms, ['cli', 'desktop']);
-    assert.equal(local.server, `${app.id}-local`);
+    assert.equal(local.server, `${appId}-local`);
     assert.equal(mcp.mcpServers[local.server].type, 'stdio');
     assert.equal(mcp.mcpServers[local.server].command, './runtime/cli/fabushi-plugin-cli');
-    assert.deepEqual(mcp.mcpServers[local.server].args, ['--plugin', app.id, 'mcp-serve']);
-    const expectedAccountPlatforms = app.id === 'chatgpt-auto-confirm'
-      ? ['cli', 'desktop']
-      : ['cli', 'desktop', 'mobile', 'web'];
-    assert.deepEqual(account.platforms, expectedAccountPlatforms);
-    assert.equal(account.server, app.id);
-    assert.equal(mcp.mcpServers[account.server].type, 'http');
-    assert.ok(local.priority > account.priority);
+    assert.deepEqual(mcp.mcpServers[local.server].args, ['--plugin', appId, 'mcp-serve']);
+    let expectedPlatforms;
+    if (localOnlyPluginIds.includes(appId)) {
+      assert.equal(account, undefined);
+      expectedPlatforms = ['cli', 'desktop'];
+    } else {
+      expectedPlatforms = appId === 'chatgpt-auto-confirm'
+        ? ['cli', 'desktop']
+        : ['cli', 'desktop', 'mobile', 'web'];
+      assert.deepEqual(account.platforms, expectedPlatforms);
+      assert.equal(account.server, appId);
+      assert.equal(mcp.mcpServers[account.server].type, 'http');
+      assert.ok(local.priority > account.priority);
+    }
 
     const extension = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.mahayana/plugin.json'), 'utf8'));
     assert.equal(extension.runtime.cli.executable, './runtime/cli/fabushi-plugin-cli');
-    assert.deepEqual(extension.runtime.cli.args, ['--plugin', app.id]);
+    assert.deepEqual(extension.runtime.cli.args, ['--plugin', appId]);
     assert.equal(extension.runtime.wasm.module, './runtime/wasm/fabushi_official_miniapps_bg.wasm');
     assert.equal(extension.runtime.wasm.export, 'OfficialMiniAppRuntime');
-    assert.deepEqual([...covered].sort(), expectedAccountPlatforms.slice().sort());
+    assert.deepEqual([...covered].sort(), expectedPlatforms.slice().sort());
   }
 });
 
