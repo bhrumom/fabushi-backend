@@ -10,7 +10,6 @@ export function isDachengAiPath(pathname) {
   return (
     pathname.startsWith('/api/ai/') ||
     pathname.startsWith('/api/agent/') ||
-    pathname.startsWith('/api/openclaw/') ||
     pathname.startsWith('/api/resources/') ||
     pathname.startsWith('/api/plugins/') ||
     pathname.startsWith('/api/mcp/') ||

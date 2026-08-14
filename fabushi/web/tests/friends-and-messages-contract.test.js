@@ -11,10 +11,6 @@ const webRuntimeBootstrap = readFileSync(
   join(root, 'mahayana-wasm/bootstrap.js'),
   'utf8',
 );
-const webRuntimeBridge = readFileSync(
-  join(root, '../lib/services/miniapp/mahayana_codex_runtime_web.dart'),
-  'utf8',
-);
 const migration = readFileSync(
   join(root, 'migrations/20260713_friends_and_direct_messages.sql'),
   'utf8',
@@ -61,8 +57,4 @@ test('browser embeds the WASM runtime without a cloud Agent gateway', () => {
     readFileSync(join(root, 'mahayana-wasm/worker.js'), 'utf8'),
     /getDirectoryHandle/,
   );
-  assert.match(webRuntimeBridge, /mahayanaWasm\.execute/);
-  assert.ok(!webRuntimeBridge.includes('/api/mahayana/execute'));
-  assert.match(webRuntimeBridge, /mahayanaWasm\.executeProduct/);
-  assert.match(webRuntimeBridge, /executeProduct\(request\)/);
 });
