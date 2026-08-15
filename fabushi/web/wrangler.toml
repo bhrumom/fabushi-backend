@@ -155,10 +155,8 @@ id = "59c5263942b4436191e6dffbaacc5957"
 binding = "R2_BUCKET"
 bucket_name = "bushi-dev"
 
-[[env.development.d1_databases]]
-binding = "DB"
-database_name = "search_database_dev"
-database_id = "YOUR_DEV_DATABASE_ID"
+# D1 and Durable Object bindings for development are resolved and injected by
+# .github/scripts/prepare-development-wrangler.py during staging deployment.
 
 [[env.development.send_email]]
 name = "EMAIL"
