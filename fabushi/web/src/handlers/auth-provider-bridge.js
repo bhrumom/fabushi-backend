@@ -23,8 +23,12 @@ function alipayConfigured(env) {
   return Boolean(env.ALIPAY_APP_ID && env.ALIPAY_PRIVATE_KEY && env.ALIPAY_PUBLIC_KEY);
 }
 
+function cloudflareEmailReady(env) {
+  return Boolean(env.EMAIL && String(env.AUTH_REGISTRATION_EMAIL_READY || '').toLowerCase() === 'true');
+}
+
 function emailConfigured(env) {
-  return Boolean(env.EMAIL || (env.RESEND_API_KEY && env.FROM_EMAIL));
+  return Boolean(cloudflareEmailReady(env) || (env.RESEND_API_KEY && env.FROM_EMAIL));
 }
 
 function bridgeUnauthorized() {
@@ -137,7 +141,7 @@ async function handleRegistrationEmail(request, env) {
   const text = `你的 Fabushi 注册验证码是：${code}\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略这封邮件。`;
   const from = env.FROM_EMAIL || 'amitabha@ombhrum.com';
   try {
-    if (env.EMAIL?.send) {
+    if (cloudflareEmailReady(env) && env.EMAIL?.send) {
       await env.EMAIL.send({ to: email, from, subject, text });
       return jsonResponse({ ok: true, provider: 'cloudflare-email' });
     }

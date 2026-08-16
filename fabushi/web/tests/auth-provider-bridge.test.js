@@ -31,9 +31,22 @@ assert.equal(authorized.status, 200);
 assert.deepEqual(await authorized.json(), { ok: true, alipay: true, email: false });
 
 let sentEmail = null;
-const emailEnv = {
+const bindingOnlyEnv = {
   ...baseEnv,
   FROM_EMAIL: 'amitabha@ombhrum.com',
+  EMAIL: { async send() { throw new Error('must stay gated'); } },
+};
+const bindingOnlyCapabilities = await handleAuthProviderBridgeRequest({
+  pathname: '/api/internal/auth-provider/capabilities',
+  method: 'GET',
+  request: new Request('https://legacy.example/api/internal/auth-provider/capabilities', { headers }),
+  env: bindingOnlyEnv,
+});
+assert.deepEqual(await bindingOnlyCapabilities.json(), { ok: true, alipay: true, email: false });
+
+const emailEnv = {
+  ...bindingOnlyEnv,
+  AUTH_REGISTRATION_EMAIL_READY: 'true',
   EMAIL: {
     async send(message) { sentEmail = message; return { messageId: 'test-message' }; },
   },
