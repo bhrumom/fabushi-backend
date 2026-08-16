@@ -24,7 +24,7 @@ function alipayConfigured(env) {
 }
 
 function emailConfigured(env) {
-  return Boolean(env.RESEND_API_KEY && env.FROM_EMAIL);
+  return Boolean(env.EMAIL || (env.RESEND_API_KEY && env.FROM_EMAIL));
 }
 
 function bridgeUnauthorized() {
@@ -133,24 +133,30 @@ async function handleRegistrationEmail(request, env) {
   if (email.length > 254 || !email.includes('@') || !/^\d{6}$/.test(code)) {
     return jsonResponse({ ok: false, error: 'invalid_registration_email' }, 400);
   }
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: env.FROM_EMAIL,
-      to: [email],
-      subject: 'Fabushi 注册验证码',
-      text: `你的 Fabushi 注册验证码是：${code}\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略这封邮件。`,
-    }),
-  });
-  if (!response.ok) {
-    response.body?.cancel?.();
+  const subject = 'Fabushi 注册验证码';
+  const text = `你的 Fabushi 注册验证码是：${code}\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略这封邮件。`;
+  const from = env.FROM_EMAIL || 'amitabha@ombhrum.com';
+  try {
+    if (env.EMAIL?.send) {
+      await env.EMAIL.send({ to: email, from, subject, text });
+      return jsonResponse({ ok: true, provider: 'cloudflare-email' });
+    }
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ from, to: [email], subject, text }),
+    });
+    if (!response.ok) {
+      response.body?.cancel?.();
+      return jsonResponse({ ok: false, error: 'email_delivery_failed' }, 502);
+    }
+    return jsonResponse({ ok: true, provider: 'resend' });
+  } catch {
     return jsonResponse({ ok: false, error: 'email_delivery_failed' }, 502);
   }
-  return jsonResponse({ ok: true });
 }
 
 export async function handleAuthProviderBridgeRequest({ pathname, method, request, env }) {

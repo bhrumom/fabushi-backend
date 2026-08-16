@@ -30,6 +30,38 @@ const authorized = await handleAuthProviderBridgeRequest({
 assert.equal(authorized.status, 200);
 assert.deepEqual(await authorized.json(), { ok: true, alipay: true, email: false });
 
+let sentEmail = null;
+const emailEnv = {
+  ...baseEnv,
+  FROM_EMAIL: 'amitabha@ombhrum.com',
+  EMAIL: {
+    async send(message) { sentEmail = message; return { messageId: 'test-message' }; },
+  },
+};
+const emailCapabilities = await handleAuthProviderBridgeRequest({
+  pathname: '/api/internal/auth-provider/capabilities',
+  method: 'GET',
+  request: new Request('https://legacy.example/api/internal/auth-provider/capabilities', { headers }),
+  env: emailEnv,
+});
+assert.deepEqual(await emailCapabilities.json(), { ok: true, alipay: true, email: true });
+
+const emailResponse = await handleAuthProviderBridgeRequest({
+  pathname: '/api/internal/auth-provider/email/send-registration-code',
+  method: 'POST',
+  request: new Request('https://legacy.example/api/internal/auth-provider/email/send-registration-code', {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'user@example.com', code: '123456' }),
+  }),
+  env: emailEnv,
+});
+assert.equal(emailResponse.status, 200);
+assert.equal((await emailResponse.json()).provider, 'cloudflare-email');
+assert.equal(sentEmail.to, 'user@example.com');
+assert.equal(sentEmail.from, 'amitabha@ombhrum.com');
+assert.match(sentEmail.text, /123456/);
+
 const state = `fbs_${'b'.repeat(32)}`;
 const redirect = await handleAuthProviderBridgeRequest({
   pathname: '/api/internal/auth-provider/alipay/authorize',
