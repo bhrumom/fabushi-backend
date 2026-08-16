@@ -54,11 +54,6 @@ database_name = "mahayana-platform"
 database_id = "24e53e28-5abd-4850-ae99-cd5d2bdfffb0"
 migrations_dir = "../../third_party/mahayana/mahayana-rs/mahayana-platform-worker/migrations"
 
-# Email Workers配置
-[[send_email]]
-name = "EMAIL"
-destination_address = "131551832@qq.com"
-
 # 环境变量
 [vars]
 FROM_EMAIL = "amitabha@ombhrum.com"
@@ -112,10 +107,6 @@ name = "ONLINE_COUNTER"
 class_name = "OnlineCounter"
 script_name = "fabushi-flutter-web-prod"
 
-[[env.production.send_email]]
-name = "EMAIL"
-destination_address = "131551832@qq.com"
-
 [env.production.vars]
 FROM_EMAIL = "amitabha@ombhrum.com"
 JWT_SECRET = "prod_secret_key_2025_ombhrum_fabushi"
@@ -157,10 +148,6 @@ bucket_name = "bushi-dev"
 
 # D1 and Durable Object bindings for development are resolved and injected by
 # .github/scripts/prepare-development-wrangler.py during staging deployment.
-
-[[env.development.send_email]]
-name = "EMAIL"
-destination_address = "131551832@qq.com"
 
 [env.development.vars]
 FROM_EMAIL = "amitabha@ombhrum.com"

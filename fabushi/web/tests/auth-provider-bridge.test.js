@@ -30,26 +30,33 @@ const authorized = await handleAuthProviderBridgeRequest({
 assert.equal(authorized.status, 200);
 assert.deepEqual(await authorized.json(), { ok: true, alipay: true, email: false });
 
-let sentEmail = null;
-const bindingOnlyEnv = {
+const incompleteEmailEnv = {
   ...baseEnv,
-  FROM_EMAIL: 'amitabha@ombhrum.com',
-  EMAIL: { async send() { throw new Error('must stay gated'); } },
+  AUTH_SYSTEM_MAIL_URL: 'https://ai.ombhrum.com/internal/fabushi-mail/v1/send',
 };
-const bindingOnlyCapabilities = await handleAuthProviderBridgeRequest({
+const incompleteEmailCapabilities = await handleAuthProviderBridgeRequest({
   pathname: '/api/internal/auth-provider/capabilities',
   method: 'GET',
   request: new Request('https://legacy.example/api/internal/auth-provider/capabilities', { headers }),
-  env: bindingOnlyEnv,
+  env: incompleteEmailEnv,
 });
-assert.deepEqual(await bindingOnlyCapabilities.json(), { ok: true, alipay: true, email: false });
+assert.deepEqual(await incompleteEmailCapabilities.json(), { ok: true, alipay: true, email: false });
+
+const disabledEmailEnv = {
+  ...incompleteEmailEnv,
+  AUTH_SYSTEM_MAIL_TOKEN: 'm'.repeat(64),
+};
+const disabledEmailCapabilities = await handleAuthProviderBridgeRequest({
+  pathname: '/api/internal/auth-provider/capabilities',
+  method: 'GET',
+  request: new Request('https://legacy.example/api/internal/auth-provider/capabilities', { headers }),
+  env: disabledEmailEnv,
+});
+assert.deepEqual(await disabledEmailCapabilities.json(), { ok: true, alipay: true, email: false });
 
 const emailEnv = {
-  ...bindingOnlyEnv,
-  AUTH_REGISTRATION_EMAIL_READY: 'true',
-  EMAIL: {
-    async send(message) { sentEmail = message; return { messageId: 'test-message' }; },
-  },
+  ...disabledEmailEnv,
+  AUTH_SYSTEM_MAIL_ENABLED: 'true',
 };
 const emailCapabilities = await handleAuthProviderBridgeRequest({
   pathname: '/api/internal/auth-provider/capabilities',
@@ -59,6 +66,15 @@ const emailCapabilities = await handleAuthProviderBridgeRequest({
 });
 assert.deepEqual(await emailCapabilities.json(), { ok: true, alipay: true, email: true });
 
+const originalFetch = globalThis.fetch;
+let mailRequest = null;
+globalThis.fetch = async (url, init) => {
+  mailRequest = { url: String(url), init };
+  return new Response(JSON.stringify({ ok: true, provider: 'bhrum2-postfix' }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+};
 const emailResponse = await handleAuthProviderBridgeRequest({
   pathname: '/api/internal/auth-provider/email/send-registration-code',
   method: 'POST',
@@ -70,10 +86,15 @@ const emailResponse = await handleAuthProviderBridgeRequest({
   env: emailEnv,
 });
 assert.equal(emailResponse.status, 200);
-assert.equal((await emailResponse.json()).provider, 'cloudflare-email');
-assert.equal(sentEmail.to, 'user@example.com');
-assert.equal(sentEmail.from, 'amitabha@ombhrum.com');
-assert.match(sentEmail.text, /123456/);
+assert.equal((await emailResponse.json()).provider, 'bhrum2-postfix');
+assert.equal(mailRequest.url, emailEnv.AUTH_SYSTEM_MAIL_URL);
+assert.equal(mailRequest.init.headers.Authorization, `Bearer ${emailEnv.AUTH_SYSTEM_MAIL_TOKEN}`);
+assert.deepEqual(JSON.parse(mailRequest.init.body), {
+  email: 'user@example.com',
+  subject: 'Fabushi 注册验证码',
+  text: '你的 Fabushi 注册验证码是：123456\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略这封邮件。',
+});
+globalThis.fetch = originalFetch;
 
 const state = `fbs_${'b'.repeat(32)}`;
 const redirect = await handleAuthProviderBridgeRequest({

@@ -1,4 +1,5 @@
 import { jsonResponse } from '../utils/response.js';
+import { sendSystemMail, systemMailConfigured } from '../utils/system-mail.js';
 
 const BRIDGE_HEADER = 'X-Fabushi-Auth-Bridge';
 const ALIPAY_AUTHORIZE_URL = 'https://openauth.alipay.com/oauth2/publicAppAuthorize.htm';
@@ -23,12 +24,8 @@ function alipayConfigured(env) {
   return Boolean(env.ALIPAY_APP_ID && env.ALIPAY_PRIVATE_KEY && env.ALIPAY_PUBLIC_KEY);
 }
 
-function cloudflareEmailReady(env) {
-  return Boolean(env.EMAIL && String(env.AUTH_REGISTRATION_EMAIL_READY || '').toLowerCase() === 'true');
-}
-
 function emailConfigured(env) {
-  return Boolean(cloudflareEmailReady(env) || (env.RESEND_API_KEY && env.FROM_EMAIL));
+  return systemMailConfigured(env);
 }
 
 function bridgeUnauthorized() {
@@ -139,25 +136,9 @@ async function handleRegistrationEmail(request, env) {
   }
   const subject = 'Fabushi 注册验证码';
   const text = `你的 Fabushi 注册验证码是：${code}\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略这封邮件。`;
-  const from = env.FROM_EMAIL || 'amitabha@ombhrum.com';
   try {
-    if (cloudflareEmailReady(env) && env.EMAIL?.send) {
-      await env.EMAIL.send({ to: email, from, subject, text });
-      return jsonResponse({ ok: true, provider: 'cloudflare-email' });
-    }
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ from, to: [email], subject, text }),
-    });
-    if (!response.ok) {
-      response.body?.cancel?.();
-      return jsonResponse({ ok: false, error: 'email_delivery_failed' }, 502);
-    }
-    return jsonResponse({ ok: true, provider: 'resend' });
+    const provider = await sendSystemMail({ email, subject, text }, env);
+    return jsonResponse({ ok: true, provider });
   } catch {
     return jsonResponse({ ok: false, error: 'email_delivery_failed' }, 502);
   }

@@ -1,9 +1,14 @@
 import { jsonResponse } from '../utils/response.js';
+import { sendSystemMail, systemMailConfigured } from '../utils/system-mail.js';
 
 // 发送验证码
 export async function handleSendVerificationCode(request, env, ctx) {
   const { email, type = 'register' } = await request.json();
   if (!email) return jsonResponse({ error: '邮箱地址不能为空' }, 400);
+
+  if (!systemMailConfigured(env)) {
+    return jsonResponse({ error: '邮件服务暂不可用' }, 503);
+  }
 
   const normalizedEmail = email.toLowerCase();
   const rateKey = `rate:verify:${normalizedEmail}`;
@@ -18,11 +23,15 @@ export async function handleSendVerificationCode(request, env, ctx) {
   await env.USERS_KV.put(`verify:${normalizedEmail}`, JSON.stringify({ code, expiry, type }));
   await env.USERS_KV.put(rateKey, '1', { expirationTtl: 60 });
 
-  // 发送邮件（后台）
   const subject = type === 'register' ? '注册验证码' : '密码重置验证码';
   const body = `您的验证码是：${code}\n有效期10分钟，请尽快使用。`;
-  
-  ctx.waitUntil(sendEmail(normalizedEmail, subject, body, env));
+  try {
+    await sendSystemMail({ email: normalizedEmail, subject, text: body }, env);
+  } catch {
+    await env.USERS_KV.delete(`verify:${normalizedEmail}`);
+    await env.USERS_KV.delete(rateKey);
+    return jsonResponse({ error: '验证码邮件发送失败，请稍后再试' }, 502);
+  }
 
   return jsonResponse({ message: '验证码已发送，请查收邮件。' });
 }
@@ -32,6 +41,10 @@ export async function handleForgotPassword(request, env, db) {
   const { email } = await request.json();
   if (!email) return jsonResponse({ error: '邮箱地址不能为空' }, 400);
 
+  if (!systemMailConfigured(env)) {
+    return jsonResponse({ error: '邮件服务暂不可用' }, 503);
+  }
+
   const user = await db.getUserByEmail(email.toLowerCase());
   if (!user) return jsonResponse({ error: '该邮箱未注册' }, 400);
 
@@ -39,7 +52,16 @@ export async function handleForgotPassword(request, env, db) {
   await env.USERS_KV.put(`reset:${email.toLowerCase()}`, resetToken, { expirationTtl: 30 * 60 });
 
   const resetUrl = `${new URL(request.url).origin}/reset-password.html?token=${resetToken}&email=${email}`;
-  await sendEmail(email, '密码重置请求', `点击以下链接重置您的密码：\n${resetUrl}\n链接30分钟内有效。`, env);
+  try {
+    await sendSystemMail({
+      email: email.toLowerCase(),
+      subject: '密码重置请求',
+      text: `点击以下链接重置您的密码：\n${resetUrl}\n链接30分钟内有效。`,
+    }, env);
+  } catch {
+    await env.USERS_KV.delete(`reset:${email.toLowerCase()}`);
+    return jsonResponse({ error: '重置邮件发送失败，请稍后再试' }, 502);
+  }
 
   return jsonResponse({ message: '重置邮件已发送' });
 }
@@ -69,23 +91,4 @@ export async function handleResetPassword(request, env, db) {
 
   await env.USERS_KV.delete(`reset:${email.toLowerCase()}`);
   return jsonResponse({ message: '密码重置成功' });
-}
-
-async function sendEmail(to, subject, body, env) {
-  // 邮件发送逻辑（保持原有实现）
-  if (env.RESEND_API_KEY) {
-    await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        from: env.FROM_EMAIL || 'onboarding@resend.dev',
-        to: [to],
-        subject,
-        text: body
-      })
-    });
-  }
 }
