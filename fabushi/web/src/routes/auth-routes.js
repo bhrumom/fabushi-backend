@@ -1,3 +1,4 @@
+import { handleAuthProviderBridgeRequest } from '../handlers/auth-provider-bridge.js';
 import {
   handleRegister,
   handleLogin,
@@ -28,6 +29,8 @@ import {
 } from '../handlers/verification.js';
 
 export async function routeAuthRequest({ pathname, method, request, env, db, ctx }) {
+  const bridgeResponse = await handleAuthProviderBridgeRequest({ pathname, method, request, env });
+  if (bridgeResponse) return bridgeResponse;
   if (pathname === '/api/auth/register' && method === 'POST') return await handleRegister(request, env, db);
   if (pathname === '/api/auth/login' && method === 'POST') return await handleLogin(request, env, db);
   if (pathname === '/api/auth/user-info' && method === 'GET') return await handleGetUserInfo(request, env, db);

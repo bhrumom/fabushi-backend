@@ -927,6 +927,22 @@ async function checkEmailAvailability(request, env) {
 async function handleAlipayCallback(request, env) {
   try {
     const url = new URL(request.url);
+    const brokerState = url.searchParams.get('state') || '';
+    if (/^fbs_[a-f0-9]{32}$/i.test(brokerState)) {
+      const returnBase = String(env.AUTH_PROVIDER_BRIDGE_RETURN_BASE || '').replace(/\/+$/, '');
+      if (!returnBase) {
+        return jsonResponse({ error: 'Fabushi browser auth return is not configured' }, 503);
+      }
+      const target = new URL('/api/auth/oauth/callback', returnBase);
+      target.searchParams.set('state', brokerState);
+      const authCode = url.searchParams.get('auth_code');
+      const error = url.searchParams.get('error');
+      if (authCode) target.searchParams.set('auth_code', authCode);
+      if (error) target.searchParams.set('error', error);
+      const errorDescription = url.searchParams.get('error_description');
+      if (errorDescription) target.searchParams.set('error_description', errorDescription);
+      return Response.redirect(target.toString(), 302);
+    }
     const authCode = url.searchParams.get('auth_code');
     const state = url.searchParams.get('state');
 
