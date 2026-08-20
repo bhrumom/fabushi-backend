@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node src/server.js",
     "check": "node --check src/server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:platform-api": "node --test test/collaboration_api.test.js test/profile_feedback_api.test.js test/egress_api.test.js"
   },
   "engines": {
     "node": ">=20"
