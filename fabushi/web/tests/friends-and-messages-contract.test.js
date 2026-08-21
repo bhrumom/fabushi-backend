@@ -35,7 +35,7 @@ test('friend handlers require stable authenticated account identities', () => {
   assert.match(handler, /deduplicated \? 200 : 201/);
 });
 
-test('router exposes the endpoints already consumed by Flutter and the CLI', () => {
+test('router exposes the endpoints consumed by canonical apps and the CLI', () => {
   for (const path of [
     '/api/social/users/search',
     '/api/social/friends',
