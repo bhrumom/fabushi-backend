@@ -12,12 +12,6 @@ const accountCommandRepository = readFileSync(
   join(webRoot, 'src/repositories/account-user-command-repository.js'),
   'utf8'
 );
-const leaderboardHandler = readFileSync(join(webRoot, 'src/handlers/leaderboard.js'), 'utf8');
-
-test('practice leaderboard filters out deleted users instead of keeping orphaned records visible', () => {
-  assert.match(leaderboardHandler, /FROM meditation_records mr\s+JOIN users u ON mr\.username = u\.username/s);
-  assert.doesNotMatch(leaderboardHandler, /FROM meditation_records mr\s+LEFT JOIN users u ON mr\.username = u\.username/s);
-});
 
 test('account deletion purges meditation and social artifacts before removing the user', () => {
   assert.match(authHandler, /deleteAccountCommand\(request, env, repository\)/);

@@ -13,6 +13,7 @@ function createR2Object(bytes) {
 
 function createEnv(bytes) {
   return {
+    R2_PUBLIC_PREFIXES: 'models/',
     R2_BUCKET: {
       async head(key) {
         assert.equal(key, 'models/buddha_model.model');

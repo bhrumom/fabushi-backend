@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const handler = readFileSync(join(root, 'src/handlers/friends.js'), 'utf8');
 const router = readFileSync(join(root, 'src/router.js'), 'utf8');
+const communityRouter = readFileSync(join(root, 'src/routes/community-routes.js'), 'utf8');
 const webRuntimeBootstrap = readFileSync(
   join(root, 'mahayana-wasm/bootstrap.js'),
   'utf8',
@@ -43,9 +44,9 @@ test('router exposes the endpoints consumed by canonical apps and the CLI', () =
     '/api/social/friend-requests/incoming',
     '/api/social/messages',
   ]) {
-    assert.ok(router.includes(path), `missing ${path}`);
+    assert.ok(communityRouter.includes(path), `missing ${path}`);
   }
-  assert.match(router, /friend-requests\\\/\(\\d\+\)\\\/accept/);
+  assert.match(communityRouter, /friend-requests\\\/\(\\d\+\)\\\/accept/);
 });
 
 test('browser embeds the WASM runtime without a cloud Agent gateway', () => {

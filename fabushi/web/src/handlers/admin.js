@@ -1,35 +1,35 @@
 import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
 import { isAdmin } from '../utils/helpers.js';
+import { MEMBERSHIP_PLANS } from '../config/constants.js';
 
-// 检查管理员状态
+async function resolveAdminActor(request, env, db, requireAdmin = true) {
+  const authHeader = request.headers.get('Authorization') || '';
+  if (!authHeader.startsWith('Bearer ')) return { response: jsonResponse({ error: '未提供认证信息' }, 401) };
+  const tokenData = await verifyToken(authHeader.slice(7), env);
+  if (!tokenData) return { response: jsonResponse({ error: '认证失败' }, 401) };
+
+  let user = null;
+  if (tokenData.userId !== undefined && tokenData.userId !== null && db.getUserById) {
+    user = await db.getUserById(tokenData.userId);
+  }
+  if (!user && tokenData.username) user = await db.getUser(tokenData.username);
+  if (!user) return { response: jsonResponse({ error: '用户不存在' }, 404) };
+  const admin = isAdmin(user.email, env);
+  if (requireAdmin && !admin) return { response: jsonResponse({ error: '权限不足' }, 403) };
+  return { user, tokenData, admin };
+}
+
+function adminTestPricingEnabled(env) {
+  return env?.ENVIRONMENT === 'development' && env?.ALLOW_ADMIN_TEST_PRICING === 'true';
+}
+
 export async function handleCheckAdminStatus(request, env, db) {
-  console.log('🔍 handleCheckAdminStatus 被调用');
-  const authHeader = request.headers.get('Authorization');
-  console.log('📋 Authorization header:', authHeader ? authHeader.substring(0, 30) + '...' : 'null');
-
-  if (!authHeader?.startsWith('Bearer ')) {
-    console.log('❌ 未提供认证信息');
-    return jsonResponse({ error: '未提供认证信息' }, 401);
-  }
-
-  const token = authHeader.substring(7);
-  console.log('🔑 Token preview:', token.substring(0, 30) + '...');
-  console.log('🔐 JWT_SECRET 状态:', env.JWT_SECRET ? '已配置' : '未配置（将使用默认值）');
-
-  const tokenData = await verifyToken(token, env);
-  console.log('✅ Token 验证结果:', tokenData ? '成功' : '失败');
-
-  if (!tokenData) {
-    console.log('❌ Token 验证失败，返回 401');
-    return jsonResponse({ error: '认证失败' }, 401);
-  }
-
-  const user = await db.getUser(tokenData.username);
-  if (!user) return jsonResponse({ error: '用户不存在' }, 404);
-
+  const actor = await resolveAdminActor(request, env, db, false);
+  if (actor.response) return actor.response;
+  const { user, admin } = actor;
   return jsonResponse({
-    isAdmin: isAdmin(user.email),
+    isAdmin: admin,
     email: user.email,
     username: user.username,
     nickname: user.nickname || user.username,
@@ -51,81 +51,36 @@ export async function handleCheckAdminStatus(request, env, db) {
   });
 }
 
-// 查询兑换码列表
 export async function handleListRedeemCodes(request, env, db) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return jsonResponse({ error: '未提供认证信息' }, 401);
-  }
-
-  const token = authHeader.substring(7);
-  const tokenData = await verifyToken(token, env);
-  if (!tokenData) return jsonResponse({ error: '认证失败' }, 401);
-
-  const user = await db.getUser(tokenData.username);
-  if (!isAdmin(user.email)) {
-    return jsonResponse({ error: '权限不足' }, 403);
-  }
-
+  const actor = await resolveAdminActor(request, env, db);
+  if (actor.response) return actor.response;
   const url = new URL(request.url);
-  const page = parseInt(url.searchParams.get('page') || '1');
-  const limit = parseInt(url.searchParams.get('limit') || '20');
+  const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
+  const limit = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '20', 10) || 20));
   const status = url.searchParams.get('status');
-
   const codes = await db.listRedeemCodes(status, page, limit);
   return jsonResponse(codes);
 }
 
-// 删除兑换码
 export async function handleDeleteRedeemCode(request, env, db) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return jsonResponse({ error: '未提供认证信息' }, 401);
-  }
-
-  const token = authHeader.substring(7);
-  const tokenData = await verifyToken(token, env);
-  if (!tokenData) return jsonResponse({ error: '认证失败' }, 401);
-
-  const user = await db.getUser(tokenData.username);
-  if (!isAdmin(user.email)) {
-    return jsonResponse({ error: '权限不足' }, 403);
-  }
-
+  const actor = await resolveAdminActor(request, env, db);
+  if (actor.response) return actor.response;
   const { code } = await request.json();
-  if (!code) return jsonResponse({ error: '兑换码不能为空' }, 400);
-
-  await db.deleteRedeemCode(code.toUpperCase());
+  const normalized = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{8,64}$/.test(normalized)) return jsonResponse({ error: '兑换码无效' }, 400);
+  await db.deleteRedeemCode(normalized);
   return jsonResponse({ message: '兑换码删除成功' });
 }
 
-// 获取管理员价格
 export async function handleGetAdminPrice(request, env, db) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return jsonResponse({ error: '未提供认证信息' }, 401);
-  }
-
-  const token = authHeader.substring(7);
-  const tokenData = await verifyToken(token, env);
-  if (!tokenData) return jsonResponse({ error: '认证失败' }, 401);
-
-  const user = await db.getUser(tokenData.username);
+  const actor = await resolveAdminActor(request, env, db, false);
+  if (actor.response) return actor.response;
   const { plan } = await request.json();
-  const { MEMBERSHIP_PLANS } = await import('../config/constants.js');
+  const planInfo = MEMBERSHIP_PLANS[plan];
+  if (!planInfo) return jsonResponse({ error: '无效的会员方案' }, 400);
 
-  if (isAdmin(user.email)) {
-    return jsonResponse({
-      isAdmin: true,
-      originalPrice: MEMBERSHIP_PLANS[plan].price,
-      adminPrice: MEMBERSHIP_PLANS[plan].adminPrice,
-      plan
-    });
+  if (actor.admin && adminTestPricingEnabled(env)) {
+    return jsonResponse({ isAdmin: true, originalPrice: planInfo.price, adminPrice: planInfo.adminPrice, plan, testPricing: true });
   }
-
-  return jsonResponse({
-    isAdmin: false,
-    price: MEMBERSHIP_PLANS[plan].price,
-    plan
-  });
+  return jsonResponse({ isAdmin: actor.admin, price: planInfo.price, plan, testPricing: false });
 }

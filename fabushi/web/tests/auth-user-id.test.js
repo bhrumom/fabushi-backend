@@ -5,6 +5,8 @@ import { createPasswordHash, generateToken, verifyToken } from '../auth-utils.js
 import { handlePasswordLogin } from '../src/handlers/password-login.js';
 import { handleGetUserInfo } from '../src/handlers/auth.js';
 
+const TEST_ENV = { JWT_SECRET: 'test-auth-secret-that-is-at-least-32-bytes-long' };
+
 function createDb(user) {
   return {
     async getUser(username) {
@@ -23,12 +25,11 @@ function createDb(user) {
 }
 
 test('new token keeps userId and old token remains compatible', async () => {
-  const env = { JWT_SECRET: 'test-secret' };
-  const newToken = await generateToken({ id: 42, username: 'stable_user' }, env);
-  const oldToken = await generateToken('legacy_user', env);
+  const newToken = await generateToken({ id: 42, username: 'stable_user' }, TEST_ENV);
+  const oldToken = await generateToken('legacy_user', TEST_ENV);
 
-  const newPayload = await verifyToken(newToken, env);
-  const oldPayload = await verifyToken(oldToken, env);
+  const newPayload = await verifyToken(newToken, TEST_ENV);
+  const oldPayload = await verifyToken(oldToken, TEST_ENV);
 
   assert.equal(newPayload.userId, 42);
   assert.equal(newPayload.username, 'stable_user');
@@ -37,7 +38,6 @@ test('new token keeps userId and old token remains compatible', async () => {
 });
 
 test('password login issues userId-first token and returns userId', async () => {
-  const env = { JWT_SECRET: 'test-secret' };
   const creds = await createPasswordHash('correct-password');
   const user = {
     id: 7,
@@ -62,20 +62,19 @@ test('password login issues userId-first token and returns userId', async () => 
     body: JSON.stringify({ username: user.email, password: 'correct-password' })
   });
 
-  const response = await handlePasswordLogin(request, env, {
+  const response = await handlePasswordLogin(request, TEST_ENV, {
     ...db,
     async getUserByEmail() { return { ...user }; }
   });
   const payload = await response.json();
   assert.equal(response.status, 200);
   assert.equal(payload.userId, 7);
-  const tokenPayload = await verifyToken(payload.token, env);
+  const tokenPayload = await verifyToken(payload.token, TEST_ENV);
   assert.equal(tokenPayload.userId, 7);
   assert.equal(tokenPayload.username, 'login_user');
 });
 
 test('auth handler prefers token userId over mismatched username', async () => {
-  const env = { JWT_SECRET: 'test-secret' };
   const user = {
     id: 9,
     username: 'right_user',
@@ -88,11 +87,11 @@ test('auth handler prefers token userId over mismatched username', async () => {
     created_at: '2026-05-01T00:00:00Z'
   };
   const db = createDb(user);
-  const token = await generateToken({ id: 9, username: 'wrong_user' }, env);
+  const token = await generateToken({ id: 9, username: 'wrong_user' }, TEST_ENV);
   const request = new Request('https://example.com/api/auth/user-info', {
     headers: { Authorization: `Bearer ${token}` }
   });
-  const response = await handleGetUserInfo(request, env, db);
+  const response = await handleGetUserInfo(request, TEST_ENV, db);
   const payload = await response.json();
   assert.equal(response.status, 200);
   assert.equal(payload.userId, 9);

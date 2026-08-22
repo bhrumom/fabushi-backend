@@ -4,7 +4,7 @@ import test from 'node:test';
 import { generateToken } from '../auth-utils.js';
 import { handleCheckAlipayMembership } from '../src/handlers/membership.js';
 
-const env = { JWT_SECRET: 'membership-user-id-test-secret' };
+const env = { JWT_SECRET: 'membership-user-id-test-secret-at-least-32-bytes' };
 
 test('Alipay membership status resolves stale token username through userId', async () => {
   const token = await generateToken({ id: 88, username: 'stale_desktop_name' }, env);

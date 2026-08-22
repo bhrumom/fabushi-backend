@@ -1,294 +1,46 @@
-import { handleRegister, handleLogin, handleGetUserInfo, handleUpdateProfile, handleFirebasePhoneLogin, handleAppleLogin, handleDeleteAccount } from './handlers/auth.js';
-import { handleSendSmsCode, handleSmsLogin } from './handlers/sms.js';
-import { handleGetComments, handlePostComment, handleDeleteComment, handleGetTaggedPosts, handleGetHotFeed, handleGetPostDetail, handleBatchGetCommentCounts } from './handlers/comments.js';
-import { handleSendVerificationCode, handleForgotPassword, handleResetPassword } from './handlers/verification.js';
-import { handleGetWechatLoginUrl, handleGetAlipayLoginUrl, handleAlipayLogin, handleAlipayCallback, handleAlipayCliSession, handleAlipayRegister, handleBindEmail, handleMacOSAlipayCallback, handleMobileAlipayCallback, handleGetAlipayAuthString, handleAlipaySDKLogin } from './handlers/thirdparty.js';
-import { handleCreateAlipayOrder, handleQueryAlipayOrder, handleAlipayNotify, handleCheckPurchaseEntitlement } from './handlers/payment.js';
-import { handleVerifyAppleReceipt } from './handlers/apple-iap.js';
-import { handleCreateRedeemCode, handleUseRedeemCode, handleGetPurchaseHistory, handleGetRedeemHistory } from './handlers/redeem.js';
-import { handleCheckMembershipStatus, handleCheckAlipayMembership } from './handlers/membership.js';
-import { handleMigrateKvToD1 } from './handlers/migration.js';
-import { handleCheckAdminStatus, handleListRedeemCodes, handleDeleteRedeemCode, handleGetAdminPrice } from './handlers/admin.js';
-import { handleGetAssetsList, handleR2List, handleR2Proxy } from './handlers/assets.js';
-import { handleSearch, handleGetTextContent, handleGetCategories } from './handlers/search.js';
-import { handleGetCbetaSendTexts, handleProxyCbetaRequest } from './handlers/cbeta.js';
-import { handleGetLeaderboard, handleGetLeaderboardRecords, handleGetPracticeLeaderboard, handleUpdateTransferData } from './handlers/leaderboard.js';
-import { handleToggleLike, handleGetLikeCount, handleBatchGetLikeCounts, handleGetMyLikes, handleGetReceivedLikeCount } from './handlers/likes.js';
-import { handleToggleFavorite, handleGetMyFavorites, handleBatchCheckFavorites } from './handlers/favorites.js';
-import { handleBatchGetContentStats } from './handlers/content-stats.js';
-import { handleOnlineJoin, handleOnlineHeartbeat, handleOnlineLeave, handleOnlineCount } from './handlers/online.js';
-import { handleSyncRecord, handleGetRecords, handleUpdateRecord, handleDeleteRecord, handleGetStats, handleGetWeeklyStats, handleGetMonthlyStats, handleSetGoal, handleGetGoals, handleMeditationSettings, handleGetMeditationGroups, handleCreateMeditationGroup, handleJoinMeditationGroup, handleGetMeditationGroupDetail, handleReviewMeditationGroupJoin } from './handlers/meditation.js';
-import { handleGetSyncData, handlePushSyncData, handleGetSyncState } from './handlers/sync.js';
-import { handleToggleFollow, handleGetFollowList, handleGetFollowSummary, handleGetPracticePrivacy, handleUpdatePracticePrivacy } from './handlers/social.js';
-import {
-  handleAcceptFriendRequest,
-  handleCreateFriendRequest,
-  handleListDirectMessages,
-  handleListFriends,
-  handleListIncomingFriendRequests,
-  handleSearchFriendUsers,
-  handleSendDirectMessage,
-} from './handlers/friends.js';
-import { handleBuiltinMigration, handleFullTextSearch, handleGetCategories as handleBuiltinCategories } from '../migrate-builtin-handler-fixed.js';
-import { handleReport, handleBlockUser, handleGetReports, handleReviewReport, handleGetBlocks } from './handlers/moderation.js';
-import { handleSubmitFeedback } from './handlers/feedback.js';
-import { handleDachengAiProxy, isDachengAiPath } from './handlers/dacheng-ai.js';
-import {
-  handleAppVersionPolicy,
-  handleAdminUpsertAppVersionPolicy,
-  handleAutomationSyncAppVersionPolicy,
-} from './handlers/app-version.js';
-import { handleOfficialSiteReleaseCollection } from './handlers/official-site-release.js';
-import {
-  handleMarketplaceBrowse,
-  handleMarketplaceDownload,
-  handleMarketplacePublish,
-} from './handlers/marketplace.js';
-import { routeAuthRequest } from './routes/auth-routes.js';
-import { routeMembershipRequest } from './routes/membership-routes.js';
-import { routeMeditationRequest } from './routes/meditation-routes.js';
-import { verifyToken } from '../auth-utils.js';
 import { CORS_HEADERS } from './config/constants.js';
 import { jsonResponse } from './utils/response.js';
+import { routePlatformGateway } from './routes/platform-gateway-routes.js';
+import { routeCoreRequest } from './routes/core-routes.js';
+import { routeAuthRequest } from './routes/auth-routes.js';
+import { routeMembershipRequest } from './routes/membership-routes.js';
+import { routeCommerceRequest } from './routes/commerce-routes.js';
+import { routeCommunityRequest } from './routes/community-routes.js';
+import { routeContentRequest } from './routes/content-routes.js';
+import { routeOpsRequest } from './routes/ops-routes.js';
+import { routeLegacyPracticeRequest } from './routes/legacy-practice-routes.js';
 
-function jsonStringifyAscii(value) {
-  return JSON.stringify(value).replace(/[\u0080-\uffff]/g, (char) => {
-    return `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
-  });
-}
-
-function createLegacyMeditationToken(username, userId = null) {
-  const payload = btoa(jsonStringifyAscii({ username, userId }));
-  return `legacy.${payload}.signature`;
-}
-
-async function normalizeMeditationAuthRequest(request, env, pathname) {
-  if (!pathname.startsWith('/api/meditation/')) {
-    return { request };
-  }
-
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return { request };
-  }
-
-  try {
-    const tokenData = await verifyToken(authHeader.substring(7), env);
-    const username = tokenData?.username || tokenData?.sub;
-    if (!username) {
-      return {
-        response: jsonResponse({ success: false, error: '认证失败，请重新登录' }, 401),
-      };
-    }
-
-    const headers = new Headers(request.headers);
-    const userId = tokenData?.userId ?? tokenData?.user_id ?? tokenData?.id ?? null;
-    headers.set('Authorization', `Bearer ${createLegacyMeditationToken(username, userId)}`);
-    return {
-      request: new Request(request, { headers }),
-    };
-  } catch (error) {
-    console.warn('修行接口认证预处理失败:', error);
-    return {
-      response: jsonResponse({ success: false, error: '认证失败，请重新登录' }, 401),
-    };
-  }
-}
+const ROUTERS = Object.freeze([
+  routePlatformGateway,
+  routeCoreRequest,
+  routeAuthRequest,
+  routeMembershipRequest,
+  routeCommerceRequest,
+  routeCommunityRequest,
+  routeContentRequest,
+  routeOpsRequest,
+  routeLegacyPracticeRequest,
+]);
 
 export async function route(request, env, db, ctx) {
   const url = new URL(request.url);
   const pathname = url.pathname;
   const method = request.method;
 
-  if (method === 'OPTIONS') {
-    return new Response(null, { headers: CORS_HEADERS });
-  }
-
+  if (method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
   if (pathname === '/health') {
-    return jsonResponse({ status: 'ok', timestamp: new Date().toISOString() });
+    return jsonResponse({
+      status: 'ok',
+      role: 'legacy-compatibility-gateway',
+      controlPlane: 'mahayana-platform',
+      timestamp: new Date().toISOString(),
+    });
   }
 
-  if (pathname === '/v1/marketplace/plugins' && method === 'GET') {
-    return await handleMarketplaceBrowse(request, env);
+  const context = { pathname, method, request, env, db, ctx, url };
+  for (const domainRouter of ROUTERS) {
+    const response = await domainRouter(context);
+    if (response) return response;
   }
-  if (pathname === '/v1/marketplace/releases' && method === 'POST') {
-    return await handleMarketplacePublish(request, env, db);
-  }
-  if (method === 'GET' && /^\/v1\/marketplace\/plugins\/[^/]+\/releases\/[^/]+\/download$/.test(pathname)) {
-    return await handleMarketplaceDownload(request, env);
-  }
-
-  if (isDachengAiPath(pathname)) {
-    return await handleDachengAiProxy(request, env);
-  }
-
-  if (pathname === '/api/app/version-policy' && method === 'GET') {
-    return await handleAppVersionPolicy(request, env, db);
-  }
-  if (pathname === '/api/admin/app-version-policy' && method === 'POST') {
-    return await handleAdminUpsertAppVersionPolicy(request, env, db);
-  }
-  if (pathname === '/api/internal/app-version-policy/sync' && method === 'POST') {
-    return await handleAutomationSyncAppVersionPolicy(request, env, db);
-  }
-  if (pathname === '/api/site/releases' && method === 'GET') {
-    return await handleOfficialSiteReleaseCollection(request, env, db);
-  }
-  const normalizedMeditationAuth = await normalizeMeditationAuthRequest(request, env, pathname);
-  if (normalizedMeditationAuth.response) {
-    return normalizedMeditationAuth.response;
-  }
-  request = normalizedMeditationAuth.request;
-
-  const authResponse = await routeAuthRequest({ pathname, method, request, env, db, ctx });
-  if (authResponse) {
-    return authResponse;
-  }
-
-  const membershipResponse = await routeMembershipRequest({ pathname, method, request, env, db, ctx });
-  if (membershipResponse) {
-    return membershipResponse;
-  }
-
-  const meditationResponse = await routeMeditationRequest({ pathname, method, request, env, db, ctx });
-  if (meditationResponse) {
-    return meditationResponse;
-  }
-
-  if (pathname === '/api/sms/send' && method === 'POST') return await handleSendSmsCode(request, env, db);
-  if (pathname === '/api/sms/login' && method === 'POST') return await handleSmsLogin(request, env, db);
-
-  if (pathname === '/api/auth/register' && method === 'POST') return await handleRegister(request, env, db);
-  if (pathname === '/api/auth/login' && method === 'POST') return await handleLogin(request, env, db);
-  if (pathname === '/api/auth/user-info' && method === 'GET') return await handleGetUserInfo(request, env, db);
-  if (pathname === '/api/auth/send-verification-code' && method === 'POST') return await handleSendVerificationCode(request, env, ctx);
-  if (pathname === '/api/auth/forgot-password' && method === 'POST') return await handleForgotPassword(request, env, db);
-  if (pathname === '/api/auth/reset-password' && method === 'POST') return await handleResetPassword(request, env, db);
-  if (pathname === '/api/auth/bind-email' && method === 'POST') return await handleBindEmail(request, env, db);
-  if (pathname === '/api/auth/bind-email' && method === 'POST') return await handleBindEmail(request, env, db);
-  if (pathname === '/api/auth/update-profile' && method === 'POST') return await handleUpdateProfile(request, env, db);
-  if (pathname === '/api/auth/firebase-phone-login' && method === 'POST') return await handleFirebasePhoneLogin(request, env, db);
-  if (pathname === '/api/auth/apple-login' && method === 'POST') return await handleAppleLogin(request, env, db);
-  if (pathname === '/api/auth/delete' && method === 'DELETE') return await handleDeleteAccount(request, env, db);
-
-  if (pathname === '/api/comments' && method === 'GET') return await handleGetComments(request, env, db);
-  if (pathname === '/api/comments' && method === 'POST') return await handlePostComment(request, env, db);
-  if (pathname === '/api/comments' && method === 'DELETE') return await handleDeleteComment(request, env, db);
-  if (pathname === '/api/comments/batch-counts' && method === 'POST') return await handleBatchGetCommentCounts(request, env, db);
-
-  if (pathname === '/api/posts' && method === 'GET') return await handleGetTaggedPosts(request, env, db);
-  if (pathname === '/api/posts/detail' && method === 'GET') return await handleGetPostDetail(request, env, db);
-  if (pathname === '/api/feed/hot' && method === 'GET') return await handleGetHotFeed(request, env, db);
-
-  if (pathname === '/api/auth/wechat/login-url' && method === 'GET') return await handleGetWechatLoginUrl(request, env);
-  if (pathname === '/api/auth/alipay/login-url' && method === 'GET') return await handleGetAlipayLoginUrl(request, env);
-  if (pathname === '/api/auth/alipay/login' && method === 'POST') return await handleAlipayLogin(request, env);
-  if (pathname === '/api/auth/alipay/callback' && method === 'GET') return await handleAlipayCallback(request, env);
-  if (pathname === '/api/auth/alipay/cli-session' && method === 'GET') return await handleAlipayCliSession(request, env);
-  if (pathname === '/api/auth/alipay/register' && method === 'POST') return await handleAlipayRegister(request, env);
-  if (pathname === '/api/auth/alipay/macos-callback' && method === 'GET') return await handleMacOSAlipayCallback(request, env);
-  if (pathname === '/api/auth/alipay/mobile-callback' && method === 'GET') return await handleMobileAlipayCallback(request, env);
-  if (pathname === '/api/auth/alipay/auth-string' && method === 'GET') return await handleGetAlipayAuthString(request, env);
-  if (pathname === '/api/auth/alipay/sdk-login' && method === 'POST') return await handleAlipaySDKLogin(request, env);
-
-  if (pathname === '/api/alipay/create-order' && method === 'POST') return await handleCreateAlipayOrder(request, env, db);
-  if (pathname === '/api/alipay/query-order' && method === 'GET') return await handleQueryAlipayOrder(request, env, db);
-  if (pathname === '/api/alipay/notify' && method === 'POST') return await handleAlipayNotify(request, env, db);
-  if (pathname === '/api/alipay/check-membership' && method === 'GET') return await handleCheckAlipayMembership(request, env, db);
-  if (pathname === '/api/purchases/entitlement' && method === 'GET') return await handleCheckPurchaseEntitlement(request, env, db);
-  if (pathname === '/api/apple/verify-receipt' && method === 'POST') return await handleVerifyAppleReceipt(request, env, db);
-
-  if (pathname === '/api/stripe/membership-status' && method === 'GET') return await handleCheckMembershipStatus(request, env, db);
-
-  if (pathname === '/api/feedback' && method === 'POST') return await handleSubmitFeedback(request, env, db);
-
-  if (pathname === '/api/admin/create-redeem-code' && method === 'POST') return await handleCreateRedeemCode(request, env, db);
-  if (pathname === '/api/admin/use-redeem-code' && method === 'POST') return await handleUseRedeemCode(request, env, db);
-  if (pathname === '/api/admin/purchase-history' && method === 'GET') return await handleGetPurchaseHistory(request, env, db);
-  if (pathname === '/api/admin/redeem-history' && method === 'GET') return await handleGetRedeemHistory(request, env, db);
-  if (pathname === '/api/admin/redeem-codes' && method === 'GET') return await handleListRedeemCodes(request, env, db);
-  if (pathname === '/api/admin/delete-redeem-code' && method === 'DELETE') return await handleDeleteRedeemCode(request, env, db);
-  if (pathname === '/api/admin/check-status' && method === 'GET') return await handleCheckAdminStatus(request, env, db);
-  if (pathname === '/api/admin/get-price' && method === 'POST') return await handleGetAdminPrice(request, env, db);
-
-  if (pathname === '/api/assets/list' && method === 'GET') return await handleGetAssetsList(request, env);
-  if (pathname === '/r2' && url.searchParams.has('list')) return await handleR2List(request, env);
-  if (pathname === '/r2' && url.searchParams.has('file')) return await handleR2Proxy(request, env);
-
-  if (pathname === '/api/search' && method === 'GET') return await handleSearch(request, env, db);
-  if (pathname === '/api/search/content' && method === 'GET') return await handleGetTextContent(request, env, db);
-  if (pathname === '/api/search/categories' && method === 'GET') return await handleGetCategories(request, env, db);
-  if (pathname === '/api/cbeta/send-texts' && method === 'GET') return await handleGetCbetaSendTexts(request, env);
-  if (pathname.startsWith('/api/cbeta/') && (method === 'GET' || method === 'HEAD')) return await handleProxyCbetaRequest(request, env);
-
-  if (pathname === '/api/leaderboard' && method === 'GET') return await handleGetLeaderboard(request, env, db);
-  if (pathname === '/api/leaderboard/practice' && method === 'GET') return await handleGetPracticeLeaderboard(request, env, db);
-  if (pathname === '/api/leaderboard/practice/records' && method === 'GET') return await handleGetLeaderboardRecords(request, env, db);
-  if (pathname === '/api/leaderboard/records' && method === 'GET') return await handleGetLeaderboardRecords(request, env, db);
-  if (pathname === '/api/leaderboard/update' && method === 'POST') return await handleUpdateTransferData(request, env, db);
-
-  if (pathname === '/api/social/follow/toggle' && method === 'POST') return await handleToggleFollow(request, env, db);
-  if (pathname === '/api/social/follows' && method === 'GET') return await handleGetFollowList(request, env, db);
-  if (pathname === '/api/social/follow-summary' && method === 'GET') return await handleGetFollowSummary(request, env, db);
-  if (pathname === '/api/social/practice-privacy' && method === 'GET') return await handleGetPracticePrivacy(request, env, db);
-  if (pathname === '/api/social/practice-privacy' && method === 'POST') return await handleUpdatePracticePrivacy(request, env, db);
-  if (pathname === '/api/social/users/search' && method === 'GET') return await handleSearchFriendUsers(request, env, db);
-  if (pathname === '/api/social/friends' && method === 'GET') return await handleListFriends(request, env, db);
-  if (pathname === '/api/social/friend-requests' && method === 'POST') return await handleCreateFriendRequest(request, env, db);
-  if (pathname === '/api/social/friend-requests/incoming' && method === 'GET') return await handleListIncomingFriendRequests(request, env, db);
-  const friendAcceptMatch = pathname.match(/^\/api\/social\/friend-requests\/(\d+)\/accept$/);
-  if (friendAcceptMatch && method === 'POST') return await handleAcceptFriendRequest(request, env, db, friendAcceptMatch[1]);
-  if (pathname === '/api/social/messages' && method === 'GET') return await handleListDirectMessages(request, env, db);
-  if (pathname === '/api/social/messages' && method === 'POST') return await handleSendDirectMessage(request, env, db);
-
-  if (pathname === '/api/likes/toggle' && method === 'POST') return await handleToggleLike(request, env, db);
-  if (pathname === '/api/likes/count' && method === 'GET') return await handleGetLikeCount(request, env, db);
-  if (pathname === '/api/likes/batch-counts' && method === 'POST') return await handleBatchGetLikeCounts(request, env, db);
-  if (pathname === '/api/likes/my-likes' && method === 'GET') return await handleGetMyLikes(request, env, db);
-  if (pathname === '/api/likes/received-count' && method === 'GET') return await handleGetReceivedLikeCount(request, env, db);
-
-  if (pathname === '/api/favorites/toggle' && method === 'POST') return await handleToggleFavorite(request, env, db);
-  if (pathname === '/api/favorites/my-favorites' && method === 'GET') return await handleGetMyFavorites(request, env, db);
-  if (pathname === '/api/favorites/batch-check' && method === 'POST') return await handleBatchCheckFavorites(request, env, db);
-
-  if (pathname === '/api/content/batch-stats' && method === 'POST') return await handleBatchGetContentStats(request, env, db);
-
-  if (pathname === '/api/online/join' && method === 'POST') return await handleOnlineJoin(request, env);
-  if (pathname === '/api/online/heartbeat' && method === 'POST') return await handleOnlineHeartbeat(request, env);
-  if (pathname === '/api/online/leave' && method === 'POST') return await handleOnlineLeave(request, env);
-  if (pathname === '/api/online/count' && method === 'GET') return await handleOnlineCount(request, env);
-
-  if (pathname === '/api/meditation/record' && method === 'POST') return await handleSyncRecord(request, env, db);
-  if (pathname === '/api/meditation/records' && method === 'GET') return await handleGetRecords(request, env, db);
-  if (pathname === '/api/meditation/records' && method === 'PUT') return await handleUpdateRecord(request, env, db);
-  if (pathname === '/api/meditation/records' && method === 'DELETE') return await handleDeleteRecord(request, env, db);
-  if (pathname === '/api/meditation/stats' && method === 'GET') return await handleGetStats(request, env, db);
-  if (pathname === '/api/meditation/weekly' && method === 'GET') return await handleGetWeeklyStats(request, env, db);
-  if (pathname === '/api/meditation/monthly' && method === 'GET') return await handleGetMonthlyStats(request, env, db);
-  if (pathname === '/api/meditation/goal' && method === 'POST') return await handleSetGoal(request, env, db);
-  if (pathname === '/api/meditation/goal' && method === 'GET') return await handleGetGoals(request, env, db);
-  if (pathname === '/api/meditation/settings' && (method === 'GET' || method === 'POST')) return await handleMeditationSettings(request, env, db);
-  if (pathname === '/api/meditation/groups' && method === 'GET') return await handleGetMeditationGroups(request, env, db);
-  if (pathname === '/api/meditation/groups' && method === 'POST') return await handleCreateMeditationGroup(request, env, db);
-  if (pathname === '/api/meditation/groups/join' && method === 'POST') return await handleJoinMeditationGroup(request, env, db);
-  if (pathname === '/api/meditation/groups/detail' && method === 'GET') return await handleGetMeditationGroupDetail(request, env, db);
-  if (pathname === '/api/meditation/groups/review' && method === 'POST') return await handleReviewMeditationGroupJoin(request, env, db);
-
-  if (pathname === '/api/sync' && method === 'GET') return await handleGetSyncData(request, env, db);
-  if (pathname === '/api/sync' && method === 'POST') return await handlePushSyncData(request, env, db);
-  if (pathname === '/api/sync/state' && method === 'GET') return await handleGetSyncState(request, env, db);
-
-  if (pathname === '/api/admin/migrate-kv-to-d1' && method === 'POST') return await handleMigrateKvToD1(request, env, db);
-
-  if (pathname === '/migrate-builtin-complete' && method === 'POST') return await handleBuiltinMigration(request, env);
-  if (pathname === '/api/builtin/search' && method === 'GET') return await handleFullTextSearch(request, env);
-  if (pathname === '/api/builtin/categories' && method === 'GET') return await handleBuiltinCategories(request, env);
-
-  if (pathname === '/api/report' && method === 'POST') return await handleReport(request, env, db);
-  if (pathname === '/api/block-user' && method === 'POST') return await handleBlockUser(request, env, db);
-  if (pathname === '/api/admin/reports' && method === 'GET') return await handleGetReports(request, env, db);
-  if (pathname === '/api/admin/reports/review' && method === 'POST') return await handleReviewReport(request, env, db);
-  if (pathname === '/api/admin/blocks' && method === 'GET') return await handleGetBlocks(request, env, db);
-
   return null;
 }

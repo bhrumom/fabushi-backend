@@ -1,436 +1,248 @@
 import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
 import { APPLE_IAP_PRODUCTS } from '../config/constants.js';
+import { verifyAppleTransactionJws } from '../security/apple-jws-verifier.js';
 
-const PERMANENT_ENTITLEMENT_VALID_TO = '9999-12-31T23:59:59.999Z';
+const PERMANENT_VALID_TO = '9999-12-31T23:59:59.999Z';
 
-function normalizeAppleEnv(env) {
+function config(env) {
   return {
     issuerId: String(env.APPLE_ISSUER_ID || '').trim(),
     keyId: String(env.APPLE_KEY_ID || '').trim(),
     privateKey: String(env.APPLE_PRIVATE_KEY || '').trim().replace(/\\n/g, '\n'),
-    bundleId: String(env.APPLE_BUNDLE_ID || '').trim()
+    bundleId: String(env.APPLE_BUNDLE_ID || '').trim(),
   };
 }
 
-async function resolveAuthenticatedUser(db, tokenData) {
-  if (tokenData.userId !== undefined && tokenData.userId !== null && typeof db.getUserById === 'function') {
-    const user = await db.getUserById(tokenData.userId);
+function b64url(bytes) {
+  let binary = '';
+  for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+async function appleJwt(env) {
+  const c = config(env);
+  if (!c.issuerId || !c.keyId || !c.privateKey || !c.bundleId) throw new Error('Apple IAP is not configured');
+  const derText = c.privateKey.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s+/g, '');
+  const der = Uint8Array.from(atob(derText), (ch) => ch.charCodeAt(0));
+  const key = await crypto.subtle.importKey('pkcs8', der, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(new TextEncoder().encode(JSON.stringify({ alg: 'ES256', kid: c.keyId, typ: 'JWT' })));
+  const payload = b64url(new TextEncoder().encode(JSON.stringify({
+    iss: c.issuerId, iat: now, exp: now + 300, aud: 'appstoreconnect-v1', bid: c.bundleId,
+  })));
+  const input = `${header}.${payload}`;
+  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(input));
+  return `${input}.${b64url(signature)}`;
+}
+
+async function fetchTransaction(transactionId, env, options = {}) {
+  const token = await appleJwt(env);
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
+  const endpoints = [
+    {
+      url: `https://api.storekit.apple.com/inApps/v1/transactions/${encodeURIComponent(transactionId)}`,
+      environment: 'Production',
+    },
+    {
+      url: `https://api.storekit-sandbox.itunes.apple.com/inApps/v1/transactions/${encodeURIComponent(transactionId)}`,
+      environment: 'Sandbox',
+    },
+  ];
+  const fetchImpl = options.fetchImpl || fetch;
+  const verifyJws = options.verifyJws || verifyAppleTransactionJws;
+  let lastStatus = 0;
+  for (const endpoint of endpoints) {
+    const response = await fetchImpl(endpoint.url, { method: 'GET', headers, redirect: 'error' });
+    lastStatus = response.status;
+    if ([401, 404].includes(response.status)) continue;
+    if (!response.ok) throw new Error(`Apple transaction lookup failed: ${response.status}`);
+    const body = await response.json();
+    if (!body?.signedTransactionInfo) throw new Error('Apple response omitted signedTransactionInfo');
+    const transaction = await verifyJws(body.signedTransactionInfo);
+    if (transaction.environment !== endpoint.environment) {
+      throw new Error(`Apple transaction environment mismatch: expected ${endpoint.environment}`);
+    }
+    return transaction;
+  }
+  throw new Error(`Apple transaction not found (${lastStatus})`);
+}
+
+async function userForClaims(db, claims) {
+  if (claims.userId != null && typeof db.getUserById === 'function') {
+    const user = await db.getUserById(claims.userId);
     if (user) return user;
   }
-
-  if (tokenData.username && typeof db.getUser === 'function') {
-    return await db.getUser(tokenData.username);
-  }
-
-  return null;
+  return claims.username && typeof db.getUser === 'function' ? db.getUser(claims.username) : null;
 }
 
-function sameUserPurchase(purchase, user) {
-  if (!purchase || !user) return false;
-
-  const purchaseUserId = purchase.account_user_id ?? purchase.user_id;
-  if (purchaseUserId != null && user.id != null && String(purchaseUserId) === String(user.id)) {
-    return true;
-  }
-  if (purchaseUserId != null && user.username != null && String(purchaseUserId) === String(user.username)) {
-    return true;
-  }
-
-  return purchase.username != null && user.username != null && purchase.username === user.username;
+function purchaseBelongsTo(purchase, user) {
+  const purchaseUserId = purchase?.account_user_id ?? purchase?.user_id;
+  if (purchaseUserId != null && user?.id != null && String(purchaseUserId) === String(user.id)) return true;
+  return Boolean(purchase?.username && user?.username && purchase.username === user.username);
 }
 
-async function restoreMembershipFromPurchaseIfNewer(db, user, purchase) {
-  const purchaseValidTo = purchase?.valid_to || purchase?.validTo;
-  if (!purchaseValidTo) {
-    return user?.membership_expires_at || null;
-  }
-
-  const restoredExpiry = new Date(purchaseValidTo);
-  if (Number.isNaN(restoredExpiry.getTime())) {
-    return user?.membership_expires_at || null;
-  }
-
-  const currentExpiry = user?.membership_expires_at ? new Date(user.membership_expires_at) : null;
-  if (!currentExpiry || Number.isNaN(currentExpiry.getTime()) || restoredExpiry > currentExpiry) {
-    await db.updateUser(user.username, {
-      membership_type: 'paid',
-      membership_expires_at: restoredExpiry.toISOString()
-    });
-    return restoredExpiry.toISOString();
-  }
-
-  return user.membership_expires_at;
+export async function deterministicAppAccountToken(user) {
+  const stable = String(user?.id ?? user?.username ?? '');
+  if (!stable) throw new Error('user has no stable identity');
+  const digest = new Uint8Array(await crypto.subtle.digest(
+    'SHA-256', new TextEncoder().encode(`com.ombhrum.fabushi:app-account:${stable}`),
+  ));
+  const bytes = digest.slice(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((v) => v.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-/**
- * 将 Base64Url 转换为 Uint8Array
- */
-function base64UrlToUint8Array(base64Url) {
-  const padding = '='.repeat((4 - base64Url.length % 4) % 4);
-  const base64 = (base64Url + padding).replace(/\-/g, '+').replace(/_/g, '/');
-  const rawData = atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
+function rawDatabase(env, db) {
+  return db?.db || env.DB || null;
 }
 
-/**
- * 将 PEM 格式的私钥转换为 CryptoKey
- */
-async function importPrivateKey(pemContent) {
-  // 移除 PEM 头尾和换行符
-  const pemHeader = '-----BEGIN PRIVATE KEY-----';
-  const pemFooter = '-----END PRIVATE KEY-----';
-  const pemContents = pemContent
-    .replace(pemHeader, '')
-    .replace(pemFooter, '')
-    .replace(/\s+/g, '');
-
-  const binaryDer = base64UrlToUint8Array(pemContents);
-
-  return await crypto.subtle.importKey(
-    'pkcs8',
-    binaryDer,
-    {
-      name: 'ECDSA',
-      namedCurve: 'P-256',
-    },
-    false,
-    ['sign']
-  );
+async function ensureLedger(database) {
+  await database.prepare(`
+    CREATE TABLE IF NOT EXISTS apple_iap_receipts (
+      transaction_id TEXT PRIMARY KEY,
+      original_transaction_id TEXT,
+      user_id INTEGER NOT NULL,
+      username TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      app_account_token TEXT NOT NULL,
+      purchased_at TEXT NOT NULL,
+      fulfilled_at TEXT NOT NULL
+    )
+  `).run();
 }
 
-/**
- * 将 Buffer 转换为 Base64Url 字符串
- */
-function bufferToBase64Url(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  // 转换为 Base64
-  const base64 = btoa(binary);
-  // 转换为 Base64Url
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/={1,2}$/, '');
+function validToFor(transaction, product) {
+  if (product.productType === 'asset_unlock') return PERMANENT_VALID_TO;
+  const timestamp = Number(transaction.expiresDate);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) throw new Error('Apple subscription has no valid expiresDate');
+  const expiry = new Date(timestamp);
+  if (Number.isNaN(expiry.getTime())) throw new Error('Apple subscription expiry is invalid');
+  return expiry.toISOString();
 }
 
-/**
- * 生成 App Store Server API 所需的 ES256 JWT
- */
-async function generateAppleJWT(env) {
-  const {
-    issuerId: APPLE_ISSUER_ID,
-    keyId: APPLE_KEY_ID,
-    privateKey: APPLE_PRIVATE_KEY,
-    bundleId: APPLE_BUNDLE_ID
-  } = normalizeAppleEnv(env);
-
-  console.log('🍎 generateAppleJWT: 检查环境变量...');
-  console.log(`  APPLE_ISSUER_ID: ${APPLE_ISSUER_ID ? APPLE_ISSUER_ID.substring(0, 8) + '...' : '❌ 未设置'}`);
-  console.log(`  APPLE_KEY_ID: ${APPLE_KEY_ID ? APPLE_KEY_ID : '❌ 未设置'}`);
-  console.log(`  APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY ? `已设置 (长度: ${APPLE_PRIVATE_KEY.length})` : '❌ 未设置'}`);
-  console.log(`  APPLE_BUNDLE_ID: ${APPLE_BUNDLE_ID ? APPLE_BUNDLE_ID : '❌ 未设置'}`);
-
-  if (!APPLE_ISSUER_ID || !APPLE_KEY_ID || !APPLE_PRIVATE_KEY || !APPLE_BUNDLE_ID) {
-    throw new Error('Missing Apple IAP configuration in environment variables');
-  }
-
-  const header = {
-    alg: 'ES256',
-    kid: APPLE_KEY_ID,
-    typ: 'JWT'
-  };
-
-  const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    iss: APPLE_ISSUER_ID,
-    iat: now,
-    exp: now + 3000, // Token validity is 50 minutes (max allowed by Apple)
-    aud: 'appstoreconnect-v1',
-    bid: APPLE_BUNDLE_ID
-  };
-
-  console.log('🍎 generateAppleJWT: JWT payload =', JSON.stringify(payload));
-
-  const encodedHeader = bufferToBase64Url(new TextEncoder().encode(JSON.stringify(header)));
-  const encodedPayload = bufferToBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
-  const dataToSign = `${encodedHeader}.${encodedPayload}`;
-
-  const privateKey = await importPrivateKey(APPLE_PRIVATE_KEY);
-  console.log('🍎 generateAppleJWT: 私钥导入成功');
-  
-  const signatureBuffer = await crypto.subtle.sign(
-    { name: 'ECDSA', hash: { name: 'SHA-256' } },
-    privateKey,
-    new TextEncoder().encode(dataToSign)
-  );
-
-  const signature = bufferToBase64Url(signatureBuffer);
-  console.log('🍎 generateAppleJWT: JWT 签名生成成功');
-
-  return `${dataToSign}.${signature}`;
+async function findPurchase(db, transactionId) {
+  return typeof db.prepare === 'function'
+    ? db.prepare('SELECT * FROM purchase_history WHERE order_id = ?').bind(transactionId).first()
+    : null;
 }
 
-/**
- * 解析和验证 Apple 返回的 JWS 数据
- * 注意：在生产环境中，应严格验证 JWS Header 里的 x5c 证书链，确保数据确实来自苹果。
- * 此处作为轻量级实现，仅提取有效载荷。
- */
-function decodeAppStoreJWS(jwsToken) {
-  try {
-    const parts = jwsToken.split('.');
-    if (parts.length !== 3) {
-      throw new Error('Invalid JWS format');
+async function restoreExisting(db, user, purchase, product) {
+  const validTo = purchase?.valid_to || purchase?.validTo || user?.membership_expires_at || null;
+  if (product.productType === 'membership' && validTo) {
+    const candidate = new Date(validTo);
+    const current = user.membership_expires_at ? new Date(user.membership_expires_at) : null;
+    if (!Number.isNaN(candidate.getTime()) && (!current || Number.isNaN(current.getTime()) || candidate > current)) {
+      await db.updateUser(user.username, { membership_type: 'paid', membership_expires_at: candidate.toISOString() });
     }
-    
-    // 解析 payload (Middle part)
-    const base64Url = parts[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-    }).join(''));
-
-    return JSON.parse(jsonPayload);
-  } catch (e) {
-    throw new Error(`Failed to decode JWS payload: ${e.message}`);
   }
+  return jsonResponse({
+    success: true,
+    message: '交易已处理',
+    alreadyProcessed: true,
+    productType: product.productType,
+    membershipType: product.productType === 'membership' ? 'paid' : user.membership_type,
+    expiresAt: validTo,
+    unlocked: product.productType === 'asset_unlock',
+  });
 }
 
-/**
- * 请求 App Store Server API 获取交易信息
- */
-async function fetchTransactionInfo(transactionId, env) {
-  console.log(`🍎 fetchTransactionInfo: 开始验证交易 ${transactionId}`);
-  const jwt = await generateAppleJWT(env);
-  
-  const prodUrl = `https://api.storekit.apple.com/inApps/v1/transactions/${transactionId}`;
-  const sandboxUrl = `https://api.storekit-sandbox.itunes.apple.com/inApps/v1/transactions/${transactionId}`;
-  
-  const headers = {
-    'Authorization': `Bearer ${jwt}`,
-    'Accept': 'application/json'
-  };
+export async function handleVerifyAppleReceipt(request, env, db, options = {}) {
+  const authorization = request.headers.get('Authorization') || '';
+  if (!authorization.startsWith('Bearer ')) return jsonResponse({ error: '未提供认证信息' }, 401);
+  const claims = await verifyToken(authorization.slice(7), env);
+  if (!claims) return jsonResponse({ error: '认证失败' }, 401);
+  const user = await userForClaims(db, claims);
+  if (!user) return jsonResponse({ error: '用户不存在' }, 404);
 
-  // 先尝试 Sandbox（Apple Production API 对 Sandbox 交易返回 401 而非 404，无法通过状态码区分）
-  // 如果 Sandbox 找不到（404），再尝试 Production
-  console.log(`🍎 fetchTransactionInfo: 先尝试 Sandbox URL: ${sandboxUrl}`);
-  let response = await fetch(sandboxUrl, { method: 'GET', headers });
-  console.log(`🍎 fetchTransactionInfo: Sandbox 响应状态: ${response.status}`);
-  
-  if ([401, 404].includes(response.status)) {
-    // Sandbox 没有这条交易，尝试 Production
-    console.log(`🍎 fetchTransactionInfo: Sandbox 未找到，尝试 Production: ${prodUrl}`);
-    response = await fetch(prodUrl, { method: 'GET', headers });
-    console.log(`🍎 fetchTransactionInfo: Production 响应状态: ${response.status}`);
+  let body;
+  try { body = await request.json(); } catch { return jsonResponse({ error: '请求格式无效' }, 400); }
+  const transactionId = String(body?.transactionId || '').trim();
+  const productId = String(body?.productId || '').trim();
+  const product = APPLE_IAP_PRODUCTS[productId];
+  if (!/^[A-Za-z0-9._-]{6,128}$/.test(transactionId) || !product) {
+    return jsonResponse({ error: '交易或商品参数无效' }, 400);
   }
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    console.error(`🍎 App Store Server API error: ${response.status} - ${errorBody}`);
-    console.error(`🍎 提示: 401 通常意味着 APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_PRIVATE_KEY 不正确，或密钥不是 App Store Server API 密钥`);
-    throw new Error(`Apple API rejected the request with status ${response.status}`);
+  const previous = await findPurchase(db, transactionId);
+  if (previous) {
+    if (!purchaseBelongsTo(previous, user)) return jsonResponse({ error: '该交易已属于其他账号' }, 409);
+    return restoreExisting(db, user, previous, product);
   }
 
-  const responseData = await response.json();
-  console.log(`🍎 fetchTransactionInfo: 成功获取交易数据`);
-  if (!responseData.signedTransactionInfo) {
-    throw new Error('Missing signedTransactionInfo in Apple API response');
-  }
-
-  // 解码 JWS 获取详细的 transaction 数据
-  const transactionInfo = decodeAppStoreJWS(responseData.signedTransactionInfo);
-  console.log(`🍎 fetchTransactionInfo: 交易详情 - productId: ${transactionInfo.productId}, bundleId: ${transactionInfo.bundleId}`);
-  return transactionInfo;
-}
-
-
-/**
- * 验证 Apple IAP 收据的主处理器
- */
-export async function handleVerifyAppleReceipt(request, env, db) {
-  // 1. 验证用户认证信息
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return jsonResponse({ error: '未提供认证信息' }, 401);
-  }
-
-  const token = authHeader.substring(7);
-  const tokenData = await verifyToken(token, env);
-  if (!tokenData) {
-    return jsonResponse({ error: '认证失败' }, 401);
-  }
-
-  // 2. 解析请求参数
-  const requestData = await request.json();
-  const { transactionId, productId } = requestData;
-  console.log(`🍎 handleVerifyAppleReceipt: transactionId=${transactionId}, productId=${productId}, user=${tokenData.username}`);
-
-  if (!transactionId || !productId) {
-    return jsonResponse({ error: '参数不完整 (transactionId / productId required)' }, 400);
-  }
-
-  // 检查系统环境变量是否已配置 Apple credentials
-  const appleEnv = normalizeAppleEnv(env);
-
-  if (!appleEnv.privateKey) {
-     console.error('Apple Server API isn\'t configured in Cloudflare Worker.');
-     return jsonResponse({ error: '服务器 IAP 验证暂未配置，请联系客服' }, 500);
-  }
-
-  // 获取该商品对应的系统会员套餐类型
-  const planInfo = APPLE_IAP_PRODUCTS[productId];
-  if (!planInfo) {
-    return jsonResponse({ error: '未知的苹果内购商品ID' }, 400);
-  }
-  const { plan } = planInfo;
+  const c = config(env);
+  if (!c.issuerId || !c.keyId || !c.privateKey || !c.bundleId) return jsonResponse({ error: '服务器 IAP 验证暂未配置' }, 503);
 
   try {
-    // 3. 请求苹果服务器验证并获取解码后的详细交易信息
-    const transactionInfo = await fetchTransactionInfo(transactionId, env);
-    
-    // 4. 验证交易真实性
-    // 首先确认这是我们的内购项，并且交易是扣款成功的
-    if (transactionInfo.bundleId !== appleEnv.bundleId) {
-        return jsonResponse({ error: 'Bundle ID 不匹配，非法凭证' }, 403);
-    }
-    
-    if (transactionInfo.productId !== productId) {
-        return jsonResponse({ error: '凭证记录的商品ID与请求不符' }, 403);
-    }
-    
-    // App Store StoreKit 2 的 transaction_reason / inAppOwnershipType 可以用来辅助判断。
-    // 但是对于最基础的校验，主要看 revocationDate。如果它存在，说明这笔交易已经被苹果退款或撤销。
-    if (transactionInfo.revocationDate) {
-        return jsonResponse({ error: '该交易已被苹果撤销或退款' }, 403);
-    }
-    
-    // 5. 判断此订单是否已经给发过货 (防重放)
-    // 根据苹果的特性：普通内购是唯一的 transactionId。
-    // 但订阅会有 originalTransactionId 且续订有新的 transactionId。
-    // 我们检查此 transactionId 是否已被处理：
-    const existingPurchase = await db.prepare('SELECT * FROM purchase_history WHERE order_id = ?').bind(transactionId).first();
-    if (existingPurchase) {
-       const user = await resolveAuthenticatedUser(db, tokenData);
-       if (!sameUserPurchase(existingPurchase, user)) {
-          return jsonResponse({ error: 'Transaction already belongs to another account' }, 409);
-       }
-       const expiresAt = planInfo.productType === 'membership'
-          ? await restoreMembershipFromPurchaseIfNewer(db, user, existingPurchase)
-          : user?.membership_expires_at || null;
-       // 重复验证，直接返回当前状态但不走充值逻辑
-       return jsonResponse({ 
-           success: true, 
-           message: '交易已处理', 
-           membershipType: planInfo.productType === 'membership' ? 'paid' : user?.membership_type,
-           expiresAt,
-           productType: planInfo.productType || 'membership',
-           unlocked: planInfo.productType === 'asset_unlock',
-           alreadyProcessed: true 
-       });
-    }
+    const transaction = await fetchTransaction(transactionId, env, options);
+    if (String(transaction.transactionId || '') !== transactionId) return jsonResponse({ error: 'Apple 交易号不匹配' }, 403);
+    if (transaction.bundleId !== c.bundleId) return jsonResponse({ error: 'Bundle ID 不匹配' }, 403);
+    if (transaction.productId !== productId) return jsonResponse({ error: '商品 ID 不匹配' }, 403);
+    if (transaction.revocationDate) return jsonResponse({ error: '该交易已被撤销或退款' }, 403);
 
-    // 6. 验证成功，为用户发货
-    const user = await resolveAuthenticatedUser(db, tokenData);
-    if (!user) {
-      return jsonResponse({ error: '用户不存在' }, 404);
-    }
-
-    const now = new Date();
-    const purchasedAt = transactionInfo.purchaseDate
-      ? new Date(transactionInfo.purchaseDate).toISOString()
-      : now.toISOString();
-
-    if (planInfo.productType === 'asset_unlock') {
-      await db.addPurchaseHistory({
-        username: user.username,
-        userId: user.id,
-        orderId: transactionId,
-        plan,
-        amount: planInfo.price,
-        currency: 'CNY',
-        status: 'completed',
-        paymentMethod: 'apple_iap',
-        purchasedAt,
-        validFrom: now.toISOString(),
-        validTo: PERMANENT_ENTITLEMENT_VALID_TO
-      });
-
+    const expectedAccountToken = await deterministicAppAccountToken(user);
+    if (!transaction.appAccountToken || String(transaction.appAccountToken).toLowerCase() !== expectedAccountToken) {
       return jsonResponse({
-        success: true,
-        message: '3D佛像素材已解锁',
-        productType: 'asset_unlock',
-        unlocked: true
-      });
+        error: 'Apple 交易未绑定到当前 Fabushi 账号',
+        code: 'APP_ACCOUNT_TOKEN_MISMATCH',
+        appAccountToken: expectedAccountToken,
+      }, 409);
     }
 
-    let startDate = now;
-    
-    // 检测是否为 Sandbox 环境（Sandbox transactionId 以 2000000 开头）
-    const isSandbox = transactionInfo.environment === 'Sandbox' || transactionId.startsWith('2000000') || transactionId.startsWith('2000001');
-    console.log(`🍎 环境检测: ${isSandbox ? 'Sandbox' : 'Production'}, transactionId=${transactionId}`);
-    
-    // 如果用户已有剩余付费会员，则从原有到期日叠加时间
-    const currentExp = (user.membership_type === 'paid' && user.membership_expires_at) 
-        ? new Date(user.membership_expires_at) : null;
-    
-    if (currentExp && currentExp > now) {
-        startDate = currentExp;
-        console.log(`🍎 用户已有会员到期日: ${currentExp.toISOString()}，从此日期开始叠加`);
-    }
-    
-    // 始终使用 planInfo.duration 来计算会员时长（从 startDate 叠加）
-    // 不使用 Apple 的 expiresDate，因为 Sandbox 环境的订阅时间极短（月=5分钟），
-    // 会覆盖用户已有的长期会员
-    const endDate = new Date(startDate.getTime() + planInfo.duration);
-    console.log(`🍎 会员计算: startDate=${startDate.toISOString()}, endDate=${endDate.toISOString()}, plan=${plan}`);
-    
-    // 安全检查：endDate 绝不能比用户当前的到期日更早（保护用户权益）
-    if (currentExp && endDate < currentExp) {
-        console.warn(`🍎 ⚠️ 计算的 endDate(${endDate.toISOString()}) < 当前到期日(${currentExp.toISOString()})，跳过更新`);
-        return jsonResponse({
-            success: true,
-            message: '交易验证成功（会员时间未变更，当前会员时长更长）',
-            membershipType: 'paid',
-            expiresAt: currentExp.toISOString()
-        });
+    const database = rawDatabase(env, db);
+    if (!database?.prepare || !database?.batch) throw new Error('atomic Apple IAP database unavailable');
+    await ensureLedger(database);
+    const ledger = await database.prepare('SELECT user_id, username FROM apple_iap_receipts WHERE transaction_id = ?').bind(transactionId).first();
+    if (ledger) {
+      if (String(ledger.user_id) !== String(user.id) && ledger.username !== user.username) return jsonResponse({ error: '该交易已属于其他账号' }, 409);
+      return jsonResponse({ success: true, alreadyProcessed: true, productType: product.productType });
     }
 
-    // 更新用户表
-    await db.updateUser(user.username, {
-      membership_type: 'paid',
-      membership_expires_at: endDate.toISOString()
-    });
+    const purchasedAt = Number(transaction.purchaseDate) > 0 ? new Date(Number(transaction.purchaseDate)) : new Date();
+    if (Number.isNaN(purchasedAt.getTime())) throw new Error('Apple purchaseDate is invalid');
+    const validTo = validToFor(transaction, product);
+    const now = new Date().toISOString();
+    const statements = [
+      database.prepare(`INSERT INTO apple_iap_receipts (
+        transaction_id, original_transaction_id, user_id, username, product_id, app_account_token, purchased_at, fulfilled_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+        transactionId, transaction.originalTransactionId || null, Number(user.id), user.username,
+        productId, expectedAccountToken, purchasedAt.toISOString(), now,
+      ),
+      database.prepare(`INSERT INTO purchase_history (
+        username, user_id, order_id, plan, amount, currency, status, payment_method, purchased_at, valid_from, valid_to
+      ) VALUES (?, ?, ?, ?, ?, 'CNY', 'completed', 'apple_iap', ?, ?, ?)`).bind(
+        user.username, Number(user.id), transactionId, product.plan, product.price,
+        purchasedAt.toISOString(), purchasedAt.toISOString(), validTo,
+      ),
+    ];
+    if (product.productType === 'membership') {
+      statements.push(database.prepare(
+        `UPDATE users SET membership_type = 'paid', membership_expires_at = ?, updated_at = ? WHERE id = ?`,
+      ).bind(validTo, now, Number(user.id)));
+    }
 
-    // 插入购买记录历史。这里的 order_id 我们存为 transactionId。
-    // Apple 价格是本地化和分层的，这里我们可以固定按套餐原价登记或仅标识来源
-    await db.addPurchaseHistory({
-      username: user.username,
-      userId: user.id,
-      orderId: transactionId,         // App Store 交易号
-      plan: plan,
-      amount: planInfo.price,        // 我们记账按套餐预设，具体结算看苹果后台
-      currency: 'CNY',
-      status: 'completed',
-      paymentMethod: 'apple_iap',
-      purchasedAt,
-      validFrom: startDate.toISOString(),
-      validTo: endDate.toISOString()
-    });
+    try {
+      await database.batch(statements);
+    } catch (error) {
+      const winner = await database.prepare('SELECT user_id, username FROM apple_iap_receipts WHERE transaction_id = ?').bind(transactionId).first();
+      if (!winner) throw error;
+      if (String(winner.user_id) !== String(user.id) && winner.username !== user.username) return jsonResponse({ error: '该交易已属于其他账号' }, 409);
+      return jsonResponse({ success: true, alreadyProcessed: true, productType: product.productType, expiresAt: validTo });
+    }
 
     return jsonResponse({
-        success: true,
-        message: '会员激活成功',
-        membershipType: 'paid',
-        expiresAt: endDate.toISOString(),
-        productType: 'membership'
+      success: true,
+      message: product.productType === 'asset_unlock' ? '素材已解锁' : 'Apple IAP 验证成功',
+      productType: product.productType,
+      membershipType: product.productType === 'membership' ? 'paid' : user.membership_type,
+      expiresAt: validTo,
+      unlocked: product.productType === 'asset_unlock',
     });
-
-  } catch (e) {
-    console.error(`Apple Verify Receipt Failed: `, e);
-    return jsonResponse({ error: `Apple IAP 验证失败: ${e.message}` }, 500);
+  } catch (error) {
+    console.error('Apple IAP verification failed:', error?.message || error);
+    return jsonResponse({ error: 'Apple IAP 验证失败' }, 502);
   }
 }

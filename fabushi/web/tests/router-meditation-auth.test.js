@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { generateToken } from '../auth-utils.js';
 import { route } from '../src/router.js';
 
-const TEST_ENV = { JWT_SECRET: 'test-secret' };
+const TEST_ENV = { JWT_SECRET: 'meditation-route-test-secret-at-least-32-bytes' };
 
 function createDbMock() {
   return {
@@ -83,5 +83,5 @@ test('router rejects invalid signed JWTs before legacy meditation handlers can a
   assert.equal(response.status, 401);
   const body = await response.json();
   assert.equal(body.success, false);
-  assert.match(body.error, /认证失败/);
+  assert.match(body.error, /Token无效或已过期/);
 });

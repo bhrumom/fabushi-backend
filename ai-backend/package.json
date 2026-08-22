@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "description": "Dacheng AI gateway for DeepSeek, Codex SDK orchestration, resource search, and local conversation history.",
-  "main": "src/server.js",
+  "main": "src/secure-entry.js",
   "scripts": {
-    "start": "node src/server.js",
-    "check": "node --check src/server.js",
+    "start": "node src/secure-entry.js",
+    "check": "node --check src/server.js && node --check src/secure-entry.js",
     "test": "node --test test/*.test.js",
     "test:platform-api": "node --test test/collaboration_api.test.js test/profile_feedback_api.test.js test/egress_api.test.js"
   },

@@ -3,151 +3,154 @@ import { verifyToken } from '../../auth-utils.js';
 import { REDEEM_CODE_TYPES } from '../config/constants.js';
 import { isAdmin, generateRedeemCode } from '../utils/helpers.js';
 
-// 生成兑换码
+async function authenticatedUser(request, env, db) {
+  const authHeader = request.headers.get('Authorization') || '';
+  if (!authHeader.startsWith('Bearer ')) return null;
+  const tokenData = await verifyToken(authHeader.slice(7), env);
+  if (!tokenData) return null;
+  if (tokenData.userId !== undefined && tokenData.userId !== null && db.getUserById) {
+    const user = await db.getUserById(tokenData.userId);
+    if (user) return { user, tokenData };
+  }
+  if (tokenData.username) {
+    const user = await db.getUser(tokenData.username);
+    if (user) return { user, tokenData };
+  }
+  return null;
+}
+
+async function ensureRedeemClaims(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS redeem_claims (
+      code TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      username TEXT NOT NULL,
+      claimed_at TEXT NOT NULL
+    )
+  `).run();
+}
+
 export async function handleCreateRedeemCode(request, env, db) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return jsonResponse({ error: '未提供认证信息' }, 401);
-  }
-
-  const token = authHeader.substring(7);
-  const tokenData = await verifyToken(token, env);
-  if (!tokenData) {
-    return jsonResponse({ error: '认证失败' }, 401);
-  }
-
-  const user = await db.getUser(tokenData.username);
-  if (!isAdmin(user.email)) {
-    return jsonResponse({ error: '权限不足' }, 403);
-  }
+  const auth = await authenticatedUser(request, env, db);
+  if (!auth) return jsonResponse({ error: '认证失败' }, 401);
+  if (!isAdmin(auth.user.email, env)) return jsonResponse({ error: '权限不足' }, 403);
 
   const { type, quantity = 1, description = '' } = await request.json();
   const codeType = REDEEM_CODE_TYPES[type];
-  
-  if (!codeType) {
-    return jsonResponse({ error: '无效的兑换码类型' }, 400);
+  const normalizedQuantity = Number(quantity);
+  if (!codeType) return jsonResponse({ error: '无效的兑换码类型' }, 400);
+  if (!Number.isInteger(normalizedQuantity) || normalizedQuantity < 1 || normalizedQuantity > 100) {
+    return jsonResponse({ error: '单次生成数量必须在 1 到 100 之间' }, 400);
   }
+  if (String(description).length > 500) return jsonResponse({ error: '描述过长' }, 400);
 
   const codes = [];
-  for (let i = 0; i < quantity; i++) {
-    const code = generateRedeemCode();
-    await db.createRedeemCode({
-      code,
-      type: codeType.type,
-      days: codeType.days,
-      name: codeType.name,
-      description,
-      createdBy: tokenData.username,
-      createdAt: new Date().toISOString()
-    });
-    codes.push(code);
+  for (let i = 0; i < normalizedQuantity; i += 1) {
+    let created = false;
+    for (let attempt = 0; attempt < 5 && !created; attempt += 1) {
+      const code = generateRedeemCode();
+      try {
+        await db.createRedeemCode({
+          code,
+          type: codeType.type,
+          days: codeType.days,
+          name: codeType.name,
+          description: String(description),
+          createdBy: auth.user.username,
+          createdAt: new Date().toISOString()
+        });
+        codes.push(code);
+        created = true;
+      } catch (error) {
+        if (attempt === 4) throw error;
+      }
+    }
   }
 
-  return jsonResponse({
-    success: true,
-    message: `成功生成${quantity}个兑换码`,
-    codes,
-    type: codeType.name
-  });
+  return jsonResponse({ success: true, message: `成功生成${codes.length}个兑换码`, codes, type: codeType.name });
 }
 
-// 使用兑换码
 export async function handleUseRedeemCode(request, env, db) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return jsonResponse({ error: '未提供认证信息' }, 401);
-  }
+  const auth = await authenticatedUser(request, env, db);
+  if (!auth) return jsonResponse({ error: '认证失败' }, 401);
 
-  const token = authHeader.substring(7);
-  const tokenData = await verifyToken(token, env);
-  if (!tokenData) {
-    return jsonResponse({ error: '认证失败' }, 401);
-  }
+  const body = await request.json();
+  const code = String(body?.code || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{8,64}$/.test(code)) return jsonResponse({ error: '兑换码无效' }, 400);
 
-  const { code } = await request.json();
-  if (!code) {
-    return jsonResponse({ error: '兑换码不能为空' }, 400);
-  }
+  const redeemCode = await db.getRedeemCode(code);
+  if (!redeemCode || Number(redeemCode.used) === 1) return jsonResponse({ error: '兑换码不存在或已使用' }, 400);
+  const days = Number(redeemCode.days);
+  if (!Number.isInteger(days) || days <= 0 || days > 3660) return jsonResponse({ error: '兑换码配置无效' }, 400);
 
-  const redeemCode = await db.getRedeemCode(code.toUpperCase());
-  if (!redeemCode) {
-    return jsonResponse({ error: '兑换码不存在或已使用' }, 400);
-  }
-
-  const user = await db.getUser(tokenData.username);
+  await ensureRedeemClaims(env);
   const now = new Date();
-  let newExpiryDate = new Date(now);
-  
-  if (user.membership_expires_at && new Date(user.membership_expires_at) > now) {
-    newExpiryDate = new Date(user.membership_expires_at);
+  const previousExpiry = auth.user.membership_expires_at && new Date(auth.user.membership_expires_at) > now
+    ? new Date(auth.user.membership_expires_at)
+    : null;
+  const start = previousExpiry || now;
+  const expiry = new Date(start.getTime());
+  expiry.setUTCDate(expiry.getUTCDate() + days);
+  const userId = Number(auth.user.id);
+  if (!Number.isFinite(userId)) return jsonResponse({ error: '用户身份无效' }, 400);
+
+  const statements = [
+    env.DB.prepare('INSERT INTO redeem_claims (code, user_id, username, claimed_at) VALUES (?, ?, ?, ?)')
+      .bind(code, userId, auth.user.username, now.toISOString()),
+    env.DB.prepare('UPDATE redeem_codes SET used = 1, used_by = ?, used_at = ? WHERE code = ? AND used = 0')
+      .bind(auth.user.username, now.toISOString(), code),
+    env.DB.prepare('UPDATE users SET membership_type = ?, membership_expires_at = ?, updated_at = ? WHERE id = ?')
+      .bind(redeemCode.type, expiry.toISOString(), now.toISOString(), userId),
+    env.DB.prepare(`
+      INSERT INTO redeem_history (
+        username, user_id, code, type, days, redeemed_at, valid_from, valid_to, previous_expiry_date
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      auth.user.username,
+      userId,
+      code,
+      redeemCode.type,
+      days,
+      now.toISOString(),
+      now.toISOString(),
+      expiry.toISOString(),
+      previousExpiry?.toISOString() || null
+    ),
+  ];
+
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    const existing = await env.DB.prepare('SELECT user_id FROM redeem_claims WHERE code = ?').bind(code).first();
+    if (existing) return jsonResponse({ error: '兑换码不存在或已使用' }, 409);
+    console.error('兑换码原子兑换失败:', error?.message || error);
+    return jsonResponse({ error: '兑换失败，请稍后重试' }, 500);
   }
-  
-  newExpiryDate.setDate(newExpiryDate.getDate() + redeemCode.days);
 
-  await db.updateUser(tokenData.username, {
-    membership_type: redeemCode.type,
-    membership_expires_at: newExpiryDate.toISOString()
-  });
-
-  await db.useRedeemCode(code.toUpperCase(), tokenData.username);
-
-  await db.addRedeemHistory({
-    username: tokenData.username,
-    code: code.toUpperCase(),
-    type: redeemCode.type,
-    name: redeemCode.name,
-    days: redeemCode.days,
-    redeemedAt: now.toISOString(),
-    validFrom: now.toISOString(),
-    validTo: newExpiryDate.toISOString()
-  });
+  const updated = await env.DB.prepare('SELECT used FROM redeem_codes WHERE code = ?').bind(code).first();
+  if (Number(updated?.used) !== 1) {
+    console.error('Redeem invariant failed for code claim');
+    return jsonResponse({ error: '兑换状态异常，请联系客服' }, 500);
+  }
 
   return jsonResponse({
     success: true,
     message: `兑换成功！获得${redeemCode.name}`,
-    expiresAt: newExpiryDate.toISOString(),
-    daysAdded: redeemCode.days
+    expiresAt: expiry.toISOString(),
+    daysAdded: days
   });
 }
 
-// 获取购买记录
 export async function handleGetPurchaseHistory(request, env, db) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return jsonResponse({ error: '未提供认证信息' }, 401);
-  }
-
-  const token = authHeader.substring(7);
-  const tokenData = await verifyToken(token, env);
-  if (!tokenData) {
-    return jsonResponse({ error: '认证失败' }, 401);
-  }
-
-  const purchases = await db.getPurchaseHistory(tokenData.username, tokenData.userId);
-  return jsonResponse({
-    success: true,
-    purchases,
-    total: purchases.length
-  });
+  const auth = await authenticatedUser(request, env, db);
+  if (!auth) return jsonResponse({ error: '认证失败' }, 401);
+  const purchases = await db.getPurchaseHistory(auth.user.username, auth.user.id);
+  return jsonResponse({ success: true, purchases, total: purchases.length });
 }
 
-// 获取兑换记录
 export async function handleGetRedeemHistory(request, env, db) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return jsonResponse({ error: '未提供认证信息' }, 401);
-  }
-
-  const token = authHeader.substring(7);
-  const tokenData = await verifyToken(token, env);
-  if (!tokenData) {
-    return jsonResponse({ error: '认证失败' }, 401);
-  }
-
-  const redeems = await db.getRedeemHistory(tokenData.username, tokenData.userId);
-  return jsonResponse({
-    success: true,
-    redeems,
-    total: redeems.length
-  });
+  const auth = await authenticatedUser(request, env, db);
+  if (!auth) return jsonResponse({ error: '认证失败' }, 401);
+  const redeems = await db.getRedeemHistory(auth.user.username, auth.user.id);
+  return jsonResponse({ success: true, redeems, total: redeems.length });
 }

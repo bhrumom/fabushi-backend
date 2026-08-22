@@ -9,6 +9,7 @@ import { registerAccountCommand } from '../use-cases/account-registration.js';
 import { getAuthenticatedUserInfo } from '../use-cases/authenticated-user.js';
 import { deleteAccountCommand } from '../use-cases/delete-account.js';
 import { isTestAccountRequest, testAccountUser } from '../utils/test-account.js';
+import { verifyAppleIdentityToken, verifyFirebaseIdentityToken } from '../utils/provider-token-verifier.js';
 
 export { handleLogin, handleUpdateProfile, handleUploadAvatar };
 
@@ -49,16 +50,22 @@ async function resolveAuthenticatedUser(db, tokenData) {
     const user = await db.getUserById(tokenData.userId);
     if (user) return user;
   }
-  if (tokenData?.username) {
-    return await db.getUser(tokenData.username);
-  }
+  if (tokenData?.username) return await db.getUser(tokenData.username);
   return null;
+}
+
+function normalizePhone(value) {
+  return String(value || '').trim();
+}
+
+function providerFailure(provider, error) {
+  console.warn(`${provider} identity rejected:`, error?.message || error);
+  return jsonResponse({ error: `${provider}身份验证失败` }, 401);
 }
 
 // 注册
 export async function handleRegister(request, env, db) {
   const repository = new AccountUserRepository(db);
-
   try {
     const payload = await registerAccountCommand(await request.json(), env, repository);
     return jsonResponse(payload, 201);
@@ -70,11 +77,8 @@ export async function handleRegister(request, env, db) {
 
 // 获取用户信息
 export async function handleGetUserInfo(request, env, db) {
-  if (await isTestAccountRequest(request, env)) {
-    return jsonResponse(testAccountUser());
-  }
+  if (await isTestAccountRequest(request, env)) return jsonResponse(testAccountUser());
   const repository = new AccountUserRepository(db);
-
   try {
     const payload = await getAuthenticatedUserInfo(request, env, repository);
     return jsonResponse(payload);
@@ -84,29 +88,45 @@ export async function handleGetUserInfo(request, env, db) {
   }
 }
 
-// Firebase手机号登录/注册
+// Firebase 手机号登录/注册。所有账号选择和绑定只使用服务端验证过的 claims。
 export async function handleFirebasePhoneLogin(request, env, db) {
   try {
     const { idToken, phoneNumber, firebaseUid, isNewUser } = await request.json();
+    if (!idToken) return jsonResponse({ error: '缺少 Firebase idToken' }, 400);
 
-    if (!idToken || !phoneNumber || !firebaseUid) {
-      return jsonResponse({ error: '缺少必要参数' }, 400);
+    let claims;
+    try {
+      claims = await verifyFirebaseIdentityToken(idToken, env);
+    } catch (error) {
+      return providerFailure('Firebase', error);
     }
 
-    let user = await db.getUserByPhone(phoneNumber);
-    if (!user) {
-      user = await db.getUserByFirebaseUid(firebaseUid);
+    const verifiedUid = String(claims.user_id || claims.sub || '').trim();
+    const verifiedPhone = normalizePhone(claims.phone_number);
+    if (!verifiedUid || !verifiedPhone) return jsonResponse({ error: 'Firebase 令牌缺少已验证手机号或用户标识' }, 401);
+    if (firebaseUid && String(firebaseUid) !== verifiedUid) return jsonResponse({ error: 'Firebase 用户标识不匹配' }, 401);
+    if (phoneNumber && normalizePhone(phoneNumber) !== verifiedPhone) return jsonResponse({ error: 'Firebase 手机号不匹配' }, 401);
+
+    const byUid = await db.getUserByFirebaseUid(verifiedUid);
+    const byPhone = await db.getUserByPhone(verifiedPhone);
+    if (byUid && byPhone && byUid.id !== byPhone.id) {
+      return jsonResponse({ error: 'Firebase 身份与手机号已绑定到不同账号，请联系客服处理' }, 409);
     }
 
+    let user = byUid || byPhone;
     if (user) {
-      if (user.firebase_uid !== firebaseUid || user.phone_number !== phoneNumber) {
+      if (user.firebase_uid && user.firebase_uid !== verifiedUid) {
+        return jsonResponse({ error: '该手机号已绑定其他 Firebase 身份' }, 409);
+      }
+      if (user.phone_number && normalizePhone(user.phone_number) !== verifiedPhone) {
+        return jsonResponse({ error: '该 Firebase 身份已绑定其他手机号' }, 409);
+      }
+      if (!user.firebase_uid || !user.phone_number) {
         if (db.updateUserById) {
-          await db.updateUserById(user.id, { firebase_uid: firebaseUid, phone_number: phoneNumber });
+          await db.updateUserById(user.id, { firebase_uid: verifiedUid, phone_number: verifiedPhone });
         } else {
-          await db.prepare(`
-            UPDATE users SET firebase_uid = ?, phone_number = ?, updated_at = ?
-            WHERE username = ?
-          `).bind(firebaseUid, phoneNumber, new Date().toISOString(), user.username).run();
+          await db.prepare(`UPDATE users SET firebase_uid = ?, phone_number = ?, updated_at = ? WHERE username = ?`)
+            .bind(verifiedUid, verifiedPhone, new Date().toISOString(), user.username).run();
         }
         user = db.getUserById ? await db.getUserById(user.id) : await db.getUser(user.username);
       }
@@ -122,105 +142,66 @@ export async function handleFirebasePhoneLogin(request, env, db) {
       });
     }
 
-    const username = `user_${Date.now().toString(36)}`;
-    const email = `${firebaseUid}@phone.user`;
+    const username = `user_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const email = `${verifiedUid.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64)}@phone.user`;
     const trialEndDate = calculateTrialEndDate();
-
     await db.createPhoneUser({
       username,
       email,
-      phoneNumber,
-      firebaseUid,
+      phoneNumber: verifiedPhone,
+      firebaseUid: verifiedUid,
       membershipType: 'trial',
       freeTrialEndDate: trialEndDate.toISOString(),
       createdAt: new Date().toISOString()
     });
 
-    const createdUser = db.getUserById
-      ? await db.getUserByEmail(email)
-      : await db.getUser(username);
-    const fallbackUser = createdUser || {
-      id: null,
-      user_no: null,
-      username,
-      email,
-      phone_number: phoneNumber,
-      membership_type: 'trial',
-      free_trial_end_date: trialEndDate.toISOString(),
-      created_at: new Date().toISOString(),
-      email_verified: 1
-    };
-
+    const createdUser = db.getUserByEmail ? await db.getUserByEmail(email) : await db.getUser(username);
+    if (!createdUser) throw new Error('Firebase user creation did not return a user');
     return jsonResponse({
       success: true,
-      token: await generateToken({ id: createdUser?.id, username }, env),
-      username,
-      userId: createdUser?.id,
-      userNo: createdUser?.user_no ?? createdUser?.id ?? null,
+      token: await generateToken({ id: createdUser.id, username: createdUser.username }, env),
+      username: createdUser.username,
+      userId: createdUser.id,
+      userNo: createdUser.user_no ?? createdUser.id ?? null,
       isNewUser: isNewUser ?? true,
-      user: serializeUser(fallbackUser)
+      user: serializeUser(createdUser)
     });
   } catch (error) {
-    console.error('Firebase手机登录失败:', error);
-    return jsonResponse({ error: 'Firebase手机登录失败: ' + error.message }, 500);
+    console.error('Firebase手机登录失败:', error?.message || error);
+    return jsonResponse({ error: 'Firebase手机登录失败' }, 500);
   }
 }
 
-// Apple登录/注册
+// Apple 登录/注册。禁止解析未验签 JWT；邮箱只信任 Apple 签名 claims。
 export async function handleAppleLogin(request, env, db) {
   try {
-    const { identityToken, authorizationCode, email, givenName, familyName } = await request.json();
-
+    const { identityToken, authorizationCode, givenName, familyName, nonce } = await request.json();
     if (!identityToken || !authorizationCode) {
       return jsonResponse({ error: '缺少必要参数 (identityToken, authorizationCode)' }, 400);
     }
 
-    const appleDisplayName = [givenName, familyName].filter(Boolean).join(' ').trim();
-
-    let appleUserId;
-    let appleEmail;
+    let claims;
     try {
-      const parts = identityToken.split('.');
-      if (parts.length !== 3) {
-        return jsonResponse({ error: 'identityToken 格式错误' }, 400);
-      }
-      const payloadB64 = parts[1];
-      const base64 = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
-      const pad = base64.length % 4 === 2 ? '==' : base64.length % 4 === 3 ? '=' : '';
-      const payloadStr = atob(base64 + pad);
-      const payload = JSON.parse(payloadStr);
-
-      appleUserId = payload.sub;
-      appleEmail = payload.email || email;
-
-      if (!appleUserId) {
-        return jsonResponse({ error: 'identityToken 中缺少 sub 字段' }, 400);
-      }
-
-      const now = Math.floor(Date.now() / 1000);
-      if (payload.exp && payload.exp < now) {
-        return jsonResponse({ error: 'identityToken 已过期' }, 401);
-      }
-    } catch (e) {
-      console.error('解析 Apple identityToken 失败:', e);
-      return jsonResponse({ error: '解析 identityToken 失败: ' + e.message }, 400);
+      claims = await verifyAppleIdentityToken(identityToken, env, nonce || '');
+    } catch (error) {
+      return providerFailure('Apple', error);
     }
 
-    let user = await db.getUserByAppleId(appleUserId);
+    const appleUserId = String(claims.sub || '').trim();
+    const appleEmail = claims.email ? String(claims.email).trim().toLowerCase() : '';
+    const appleDisplayName = [givenName, familyName].filter(Boolean).join(' ').trim().slice(0, 120);
+    if (!appleUserId) return jsonResponse({ error: 'Apple 身份缺少用户标识' }, 401);
 
+    let user = await db.getUserByAppleId(appleUserId);
     if (user) {
       const updates = {};
       if (appleEmail && !user.email) updates.email = appleEmail;
       if (appleDisplayName && !user.nickname) updates.nickname = appleDisplayName;
       if (Object.keys(updates).length > 0) {
-        if (db.updateUserById) {
-          await db.updateUserById(user.id, updates);
-        } else {
-          await db.updateUser(user.username, updates);
-        }
+        if (db.updateUserById) await db.updateUserById(user.id, updates);
+        else await db.updateUser(user.username, updates);
         user = db.getUserById ? await db.getUserById(user.id) : await db.getUser(user.username);
       }
-
       return jsonResponse({
         success: true,
         token: await generateToken({ id: user.id, username: user.username }, env),
@@ -232,35 +213,34 @@ export async function handleAppleLogin(request, env, db) {
       });
     }
 
-    const username = `apple_${Date.now().toString(36)}`;
-    const userEmail = appleEmail || `${appleUserId.substring(0, 16)}@apple.user`;
-    const trialEndDate = calculateTrialEndDate();
-
-    const existingEmailUser = await db.db.prepare('SELECT * FROM users WHERE email = ?').bind(userEmail).first();
-    if (existingEmailUser) {
-      const updates = { apple_user_id: appleUserId };
-      if (appleDisplayName && !existingEmailUser.nickname) {
-        updates.nickname = appleDisplayName;
-      } else if (!existingEmailUser.nickname) {
-        updates.nickname = existingEmailUser.username;
+    // Account linking by email is allowed only for an email contained in the
+    // cryptographically verified Apple token. Client-supplied email is ignored.
+    if (appleEmail) {
+      const existingEmailUser = await db.db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)').bind(appleEmail).first();
+      if (existingEmailUser) {
+        if (existingEmailUser.apple_user_id && existingEmailUser.apple_user_id !== appleUserId) {
+          return jsonResponse({ error: '该邮箱已绑定其他 Apple 身份' }, 409);
+        }
+        const updates = { apple_user_id: appleUserId };
+        if (appleDisplayName && !existingEmailUser.nickname) updates.nickname = appleDisplayName;
+        if (db.updateUserById) await db.updateUserById(existingEmailUser.id, updates);
+        else await db.updateUser(existingEmailUser.username, updates);
+        const updated = db.getUserById ? await db.getUserById(existingEmailUser.id) : await db.getUser(existingEmailUser.username);
+        return jsonResponse({
+          success: true,
+          token: await generateToken({ id: updated.id, username: updated.username }, env),
+          username: updated.username,
+          userId: updated.id,
+          userNo: updated.user_no ?? updated.id ?? null,
+          isNewUser: false,
+          user: serializeUser(updated)
+        });
       }
-      if (db.updateUserById) {
-        await db.updateUserById(existingEmailUser.id, updates);
-      } else {
-        await db.updateUser(existingEmailUser.username, updates);
-      }
-      const updated = db.getUserById ? await db.getUserById(existingEmailUser.id) : await db.getUser(existingEmailUser.username);
-      return jsonResponse({
-        success: true,
-        token: await generateToken({ id: updated.id, username: updated.username }, env),
-        username: updated.username,
-        userId: updated.id,
-        userNo: updated.user_no ?? updated.id ?? null,
-        isNewUser: false,
-        user: serializeUser(updated)
-      });
     }
 
+    const username = `apple_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const userEmail = appleEmail || `${appleUserId.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 48)}@apple.user`;
+    const trialEndDate = calculateTrialEndDate();
     await db.createAppleUser({
       username,
       email: userEmail,
@@ -272,25 +252,25 @@ export async function handleAppleLogin(request, env, db) {
     });
 
     const createdUser = await db.getUser(username);
+    if (!createdUser) throw new Error('Apple user creation did not return a user');
     return jsonResponse({
       success: true,
-      token: await generateToken({ id: createdUser?.id, username }, env),
-      username,
-      userId: createdUser?.id,
-      userNo: createdUser?.user_no ?? createdUser?.id ?? null,
+      token: await generateToken({ id: createdUser.id, username: createdUser.username }, env),
+      username: createdUser.username,
+      userId: createdUser.id,
+      userNo: createdUser.user_no ?? createdUser.id ?? null,
       isNewUser: true,
       user: serializeUser(createdUser)
     });
   } catch (error) {
-    console.error('Apple登录失败:', error);
-    return jsonResponse({ error: 'Apple登录失败: ' + error.message }, 500);
+    console.error('Apple登录失败:', error?.message || error);
+    return jsonResponse({ error: 'Apple登录失败' }, 500);
   }
 }
 
 // 注销账户
 export async function handleDeleteAccount(request, env, db) {
   const repository = new AccountUserRepository(db);
-
   try {
     const payload = await deleteAccountCommand(request, env, repository);
     return jsonResponse(payload, 200);

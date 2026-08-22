@@ -13,7 +13,7 @@ function createDbEnv() {
   let nextId = 100;
 
   const env = {
-    JWT_SECRET: 'test-secret',
+    JWT_SECRET: 'alipay-user-id-test-secret-that-is-at-least-32-bytes',
     DB: {
       prepare(sql) {
         return {

@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { generateToken, verifyToken } from '../auth-utils.js';
 import { handleUpdateProfile } from '../src/handlers/profile.js';
 
+const TEST_ENV = { JWT_SECRET: 'profile-test-secret-that-is-at-least-32-bytes-long' };
+
 function createDbMock() {
   const users = new Map();
   const usersById = new Map();
@@ -55,9 +57,7 @@ function createDbMock() {
             const match = assignment.match(/^([a-zA-Z0-9_]+)\s*=\s*\?$/);
             if (match) user[match[1]] = params[index];
           });
-          if (oldUsername !== user.username) {
-            users.delete(oldUsername);
-          }
+          if (oldUsername !== user.username) users.delete(oldUsername);
           users.set(user.username, user);
           usersById.set(user.id, user);
           return;
@@ -65,9 +65,7 @@ function createDbMock() {
         if (normalizedSql.startsWith('DELETE FROM email_username_mapping')) {
           const [arg1, arg2] = params;
           for (const [email, mapping] of [...emailMapping.entries()]) {
-            if (mapping.user_id === arg1 || email === arg1 || email === arg2) {
-              emailMapping.delete(email);
-            }
+            if (mapping.user_id === arg1 || email === arg1 || email === arg2) emailMapping.delete(email);
           }
           return;
         }
@@ -79,10 +77,7 @@ function createDbMock() {
       };
       return {
         bind(...params) {
-          return {
-            run: () => execute(params),
-            first: () => execute(params)
-          };
+          return { run: () => execute(params), first: () => execute(params) };
         },
         run: () => execute()
       };
@@ -121,8 +116,7 @@ function createDbMock() {
 }
 
 async function updateProfile(db, tokenIdentity, body) {
-  const env = { JWT_SECRET: 'test-secret' };
-  const token = await generateToken(tokenIdentity, env);
+  const token = await generateToken(tokenIdentity, TEST_ENV);
   const request = new Request('https://flutter.ombhrum.com/api/auth/update-profile', {
     method: 'POST',
     headers: {
@@ -131,7 +125,7 @@ async function updateProfile(db, tokenIdentity, body) {
     },
     body: JSON.stringify(body)
   });
-  return handleUpdateProfile(request, env, db);
+  return handleUpdateProfile(request, TEST_ENV, db);
 }
 
 test('handleUpdateProfile treats legacy username payload as display name and keeps identity username stable', async () => {
@@ -139,9 +133,7 @@ test('handleUpdateProfile treats legacy username payload as display name and kee
   const user = db.seedUser('stable_1', 'stable@example.com', '+8613800138000', { nickname: '旧昵称' });
 
   const response = await updateProfile(db, { id: user.id, username: user.username }, {
-    username: '新昵称',
-    email: 'stable@example.com',
-    phoneNumber: '+8613800138000'
+    username: '新昵称', email: 'stable@example.com', phoneNumber: '+8613800138000'
   });
 
   const payload = await response.json();
@@ -150,26 +142,16 @@ test('handleUpdateProfile treats legacy username payload as display name and kee
   assert.equal(payload.user.username, 'stable_1');
   assert.equal(payload.user.nickname, '新昵称');
   assert.equal(db.users.get('stable_1').nickname, '新昵称');
-  assert.equal(
-    db.statements.some(({ sql }) => sql.includes('WHERE username = ?') && sql.startsWith('UPDATE users SET')),
-    false
-  );
-  assert.equal(
-    db.statements.some(({ sql }) => sql.startsWith('INSERT INTO users') || sql.startsWith('DELETE FROM users')),
-    false
-  );
+  assert.equal(db.statements.some(({ sql }) => sql.includes('WHERE username = ?') && sql.startsWith('UPDATE users SET')), false);
+  assert.equal(db.statements.some(({ sql }) => sql.startsWith('INSERT INTO users') || sql.startsWith('DELETE FROM users')), false);
 });
 
 test('handleUpdateProfile accepts explicit displayName field and keeps username stable', async () => {
   const db = createDbMock();
   const user = db.seedUser('display_name_user', 'display@example.com', '+8613800138009', { nickname: '旧显示名' });
-
   const response = await updateProfile(db, { id: user.id, username: user.username }, {
-    displayName: '新显示名',
-    email: 'display@example.com',
-    phoneNumber: '+8613800138009'
+    displayName: '新显示名', email: 'display@example.com', phoneNumber: '+8613800138009'
   });
-
   const payload = await response.json();
   assert.equal(response.status, 200);
   assert.equal(payload.user.userId, user.id);
@@ -182,13 +164,9 @@ test('handleUpdateProfile uses token userId before mismatched username fallback'
   const db = createDbMock();
   const rightUser = db.seedUser('real_user', 'real@example.com', '+8613800138001', { nickname: '原昵称' });
   db.seedUser('wrong_user', 'wrong@example.com', '+8613800138002', { nickname: '错用户' });
-
   const response = await updateProfile(db, { id: rightUser.id, username: 'wrong_user' }, {
-    nickname: '只改正确账号',
-    email: 'real@example.com',
-    phoneNumber: '+8613800138001'
+    nickname: '只改正确账号', email: 'real@example.com', phoneNumber: '+8613800138001'
   });
-
   const payload = await response.json();
   assert.equal(response.status, 200);
   assert.equal(payload.user.userId, rightUser.id);
@@ -199,18 +177,12 @@ test('handleUpdateProfile uses token userId before mismatched username fallback'
 test('handleUpdateProfile persists avatar updates in the returned payload and stored user', async () => {
   const db = createDbMock();
   const user = db.seedUser('avatar_user', 'avatar@example.com', '+8613800138111', {
-    nickname: '旧头像昵称',
-    avatar: 'https://example.com/old-avatar.png'
+    nickname: '旧头像昵称', avatar: 'https://example.com/old-avatar.png'
   });
   const avatar = 'https://example.com/new-avatar.png';
-
   const response = await updateProfile(db, { id: user.id, username: user.username }, {
-    nickname: '新头像昵称',
-    email: 'avatar@example.com',
-    phoneNumber: '+8613800138111',
-    avatar
+    nickname: '新头像昵称', email: 'avatar@example.com', phoneNumber: '+8613800138111', avatar
   });
-
   const payload = await response.json();
   assert.equal(response.status, 200);
   assert.equal(payload.success, true);
@@ -224,13 +196,9 @@ test('handleUpdateProfile rejects duplicate email by id, not by username', async
   const db = createDbMock();
   const one = db.seedUser('one', 'one@example.com', '+8613800138222');
   db.seedUser('two', 'two@example.com', '+8613800138333');
-
   const response = await updateProfile(db, { id: one.id, username: one.username }, {
-    nickname: '用户一',
-    email: 'two@example.com',
-    phoneNumber: '+8613800138222'
+    nickname: '用户一', email: 'two@example.com', phoneNumber: '+8613800138222'
   });
-
   const payload = await response.json();
   assert.equal(response.status, 400);
   assert.equal(payload.error, '该邮箱已被其他账号使用');
@@ -239,20 +207,13 @@ test('handleUpdateProfile rejects duplicate email by id, not by username', async
 test('handleUpdateProfile blocks username rename within one year window', async () => {
   const db = createDbMock();
   const recentChangeAt = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const expectedNextDate = new Date(Date.parse(recentChangeAt) + 365 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10);
+  const expectedNextDate = new Date(Date.parse(recentChangeAt) + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const user = db.seedUser('rename_locked', 'locked@example.com', '+8613800138440', {
-    nickname: '改名受限',
-    username_changed_at: recentChangeAt,
+    nickname: '改名受限', username_changed_at: recentChangeAt,
   });
-
   const response = await updateProfile(db, { id: user.id, username: user.username }, {
-    username: 'rename_unlocked_later',
-    email: 'locked@example.com',
-    phoneNumber: '+8613800138440'
+    username: 'rename_unlocked_later', email: 'locked@example.com', phoneNumber: '+8613800138440'
   });
-
   const payload = await response.json();
   assert.equal(response.status, 400);
   assert.equal(payload.error, `用户名一年只能修改一次，请在${expectedNextDate}后再试`);
@@ -263,13 +224,9 @@ test('handleUpdateProfile blocks username rename within one year window', async 
 test('handleUpdateProfile renames username, rotates token, and refreshes email mapping', async () => {
   const db = createDbMock();
   const user = db.seedUser('stable_1', 'stable@example.com', '+8613800138444', { nickname: '旧昵称' });
-
   const response = await updateProfile(db, { id: user.id, username: user.username }, {
-    username: 'stable-renamed',
-    email: 'stable@example.com',
-    phoneNumber: '+8613800138444'
+    username: 'stable-renamed', email: 'stable@example.com', phoneNumber: '+8613800138444'
   });
-
   const payload = await response.json();
   assert.equal(response.status, 200);
   assert.equal(payload.user.userId, user.id);
@@ -283,7 +240,7 @@ test('handleUpdateProfile renames username, rotates token, and refreshes email m
   assert.ok(db.users.get('stable-renamed').username_changed_at);
   assert.equal(db.emailMapping.get('stable@example.com').username, 'stable-renamed');
 
-  const tokenPayload = await verifyToken(payload.token, { JWT_SECRET: 'test-secret' });
+  const tokenPayload = await verifyToken(payload.token, TEST_ENV);
   assert.equal(tokenPayload.userId, user.id);
   assert.equal(tokenPayload.username, 'stable-renamed');
 });
