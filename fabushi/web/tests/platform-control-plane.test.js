@@ -29,8 +29,10 @@ assert.ok(
 
 const gateway = read('src/routes/platform-gateway-routes.js');
 assert.match(gateway, /https:\/\/mahayana-platform\.bhrumom\.workers\.dev/, 'gateway needs an explicit canonical upstream');
+assert.match(gateway, /pathname\.startsWith\('\/api\/auth\/browser\/'\)/, 'browser-first auth must always route through the Mahayana control plane');
 assert.match(gateway, /pathname\.startsWith\('\/v1\/'\)/, 'all v1 platform APIs must go to the Rust control plane');
 assert.match(gateway, /redirect: 'manual'/, 'OAuth redirects must be returned to the browser, not followed by the gateway');
+assert.match(gateway, /X-Fabushi-Control-Plane/, 'proxied browser auth must identify the canonical control plane');
 
 const requestGate = read('src/security/request-gate.js');
 assert.doesNotMatch(requestGate, /TRANSFER_RECEIPT_SECRET|leaderboard/i, 'retired leaderboard gate must stay removed');
