@@ -33,6 +33,16 @@ assert.match(gateway, /pathname\.startsWith\('\/api\/auth\/browser\/'\)/, 'brows
 assert.match(gateway, /pathname\.startsWith\('\/v1\/'\)/, 'all v1 platform APIs must go to the Rust control plane');
 assert.match(gateway, /redirect: 'manual'/, 'OAuth redirects must be returned to the browser, not followed by the gateway');
 assert.match(gateway, /X-Fabushi-Control-Plane/, 'proxied browser auth must identify the canonical control plane');
+assert.match(gateway, /env\.MAHAYANA_PLATFORM\.fetch\(request\)/, 'same-account platform forwarding must prefer the Cloudflare service binding');
+
+const workerWrangler = read('wrangler.toml');
+for (const environment of ['production', 'development']) {
+  assert.match(
+    workerWrangler,
+    new RegExp(`\\[\\[env\\.${environment}\\.services\\]\\][\\s\\S]*?binding = "MAHAYANA_PLATFORM"[\\s\\S]*?service = "mahayana-platform"`),
+    `${environment} must bind the Mahayana platform Worker internally`,
+  );
+}
 
 const requestGate = read('src/security/request-gate.js');
 assert.doesNotMatch(requestGate, /TRANSFER_RECEIPT_SECRET|leaderboard/i, 'retired leaderboard gate must stay removed');

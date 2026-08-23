@@ -26,6 +26,17 @@ function platformOrigin(env) {
   return url.origin;
 }
 
+async function fetchPlatform(env, request) {
+  // Cloudflare can return a workers.dev placeholder when one Worker fetches
+  // another Worker in the same account through the public workers.dev hostname.
+  // The service binding keeps this hop on Cloudflare's internal Worker network
+  // and makes browser auth deterministic in staging and production.
+  if (env.MAHAYANA_PLATFORM && typeof env.MAHAYANA_PLATFORM.fetch === 'function') {
+    return env.MAHAYANA_PLATFORM.fetch(request);
+  }
+  return fetch(request, { redirect: 'manual' });
+}
+
 export async function routePlatformGateway({ pathname, request, env }) {
   if (!isCanonicalPlatformPath(pathname)) return null;
 
@@ -35,7 +46,7 @@ export async function routePlatformGateway({ pathname, request, env }) {
     // Manual redirect handling is essential for OAuth/browser-first auth: the
     // user's browser, not this gateway Worker, must follow provider redirects.
     const upstreamRequest = new Request(target.toString(), request);
-    const upstream = await fetch(upstreamRequest, { redirect: 'manual' });
+    const upstream = await fetchPlatform(env, upstreamRequest);
     const headers = new Headers(upstream.headers);
     headers.set('X-Fabushi-Control-Plane', 'mahayana-platform');
     return new Response(upstream.body, {
