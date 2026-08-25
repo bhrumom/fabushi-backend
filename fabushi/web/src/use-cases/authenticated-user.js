@@ -1,6 +1,7 @@
 import { verifyToken } from '../../auth-utils.js';
 import { ApiError } from '../contracts/api-error.js';
 import { serializeAccountUser } from '../contracts/account-user.js';
+import { hasUnlimitedUsage, isAdminUser } from '../utils/helpers.js';
 
 export async function authenticateRequest(request, env, repository) {
   const authHeader = request.headers.get('Authorization');
@@ -23,5 +24,16 @@ export async function authenticateRequest(request, env, repository) {
 
 export async function getAuthenticatedUserInfo(request, env, repository) {
   const { user } = await authenticateRequest(request, env, repository);
-  return serializeAccountUser(user);
+  const payload = serializeAccountUser(user);
+  const unlimitedUsage = hasUnlimitedUsage(user, env);
+  const admin = isAdminUser(user, env);
+  return {
+    ...payload,
+    isAdmin: admin,
+    role: unlimitedUsage ? 'super_admin' : admin ? 'admin' : 'user',
+    unlimitedUsage,
+    membership: unlimitedUsage
+      ? { type: 'lifetime', expiresAt: null, isActive: true, active: true }
+      : payload.membership,
+  };
 }

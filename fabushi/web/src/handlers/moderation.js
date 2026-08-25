@@ -3,7 +3,7 @@
 
 import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
-import { isAdmin } from '../utils/helpers.js';
+import { isAdminUser } from '../utils/helpers.js';
 
 async function authenticatedUser(request, env, db) {
   const auth = request.headers.get('Authorization') || '';
@@ -26,7 +26,7 @@ async function requireUser(request, env, db) {
 async function requireAdmin(request, env, db) {
   const user = await authenticatedUser(request, env, db);
   if (!user) return { response: jsonResponse({ error: '认证失败' }, 401) };
-  if (!isAdmin(user.email, env)) return { response: jsonResponse({ error: '权限不足' }, 403) };
+  if (!isAdminUser(user, env)) return { response: jsonResponse({ error: '权限不足' }, 403) };
   return { user };
 }
 

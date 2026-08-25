@@ -1,7 +1,7 @@
 import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
 import { ASSET_PRODUCTS, MEMBERSHIP_PLANS } from '../config/constants.js';
-import { isAdmin } from '../utils/helpers.js';
+import { isAdminUser } from '../utils/helpers.js';
 import { importPrivateKey, importPublicKey, generateSign, verifySign } from '../../alipay-utils.js';
 
 const PERMANENT_ENTITLEMENT_VALID_TO = '9999-12-31T23:59:59.999Z';
@@ -70,8 +70,8 @@ export async function handleCreateAlipayOrder(request, env, db) {
     if (!planDetails) return jsonResponse({ error: '无效的付费项目' }, 400);
 
     const { user } = auth;
-    const isAdminUser = isAdmin(user.email, env);
-    const finalAmount = isAdminUser ? planDetails.adminPrice : planDetails.price;
+    const adminActor = isAdminUser(user, env);
+    const finalAmount = adminActor ? planDetails.adminPrice : planDetails.price;
     const normalizedAmount = normalizeMoney(finalAmount);
     if (normalizedAmount === null || normalizedAmount === '0.00') return jsonResponse({ error: '订单金额无效' }, 500);
     const outTradeNo = `${platform === 'web' ? 'WEB' : 'MEMBER'}_${user.id}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
@@ -83,7 +83,7 @@ export async function handleCreateAlipayOrder(request, env, db) {
       plan,
       amount: normalizedAmount,
       originalAmount: normalizeMoney(planDetails.price),
-      isAdminOrder: isAdminUser,
+      isAdminOrder: adminActor,
       status: 'PENDING',
       platform,
       createdAt: new Date().toISOString()

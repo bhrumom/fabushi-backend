@@ -45,7 +45,7 @@ assert.match(payment, /env\.DB\.batch\(statements\)/);
 
 assert.match(worker, /enforceRequestSecurityGate/);
 assert.match(requestGate, /'\/migrate-builtin-complete'/);
-assert.match(moderation, /isAdmin\(user\.email, env\)/);
+assert.match(moderation, /isAdminUser\(user, env\)/);
 assert.match(moderation, /verifyToken/);
 
 assert.doesNotMatch(sms, /Math\.random\s*\(/);

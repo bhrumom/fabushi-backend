@@ -1,6 +1,6 @@
 import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
-import { isAdmin } from '../utils/helpers.js';
+import { hasUnlimitedUsage, isAdminUser } from '../utils/helpers.js';
 import { MEMBERSHIP_PLANS } from '../config/constants.js';
 
 async function resolveAdminActor(request, env, db, requireAdmin = true) {
@@ -15,7 +15,7 @@ async function resolveAdminActor(request, env, db, requireAdmin = true) {
   }
   if (!user && tokenData.username) user = await db.getUser(tokenData.username);
   if (!user) return { response: jsonResponse({ error: '用户不存在' }, 404) };
-  const admin = isAdmin(user.email, env);
+  const admin = isAdminUser(user, env);
   if (requireAdmin && !admin) return { response: jsonResponse({ error: '权限不足' }, 403) };
   return { user, tokenData, admin };
 }
@@ -28,8 +28,11 @@ export async function handleCheckAdminStatus(request, env, db) {
   const actor = await resolveAdminActor(request, env, db, false);
   if (actor.response) return actor.response;
   const { user, admin } = actor;
+  const unlimitedUsage = hasUnlimitedUsage(user, env);
   return jsonResponse({
     isAdmin: admin,
+    role: unlimitedUsage ? 'super_admin' : admin ? 'admin' : 'user',
+    unlimitedUsage,
     email: user.email,
     username: user.username,
     nickname: user.nickname || user.username,

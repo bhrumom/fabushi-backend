@@ -18,6 +18,7 @@ import helmet from 'helmet';
 import pino from 'pino';
 import { z } from 'zod';
 
+import { resolveAccountEntitlements } from './account_entitlements.js';
 import { registerPlatformApi } from './platform_api.js';
 import {
   codexResponsesMessages,
@@ -1068,6 +1069,9 @@ async function resolveUser(req, body = {}) {
       isAuthenticated: true,
       isMember: true,
       isTestAccount: true,
+      role: 'test_account',
+      isAdmin: false,
+      unlimitedUsage: true,
       membership: { type: 'lifetime', active: true },
     };
   }
@@ -1075,6 +1079,9 @@ async function resolveUser(req, body = {}) {
   const tokenHash = token ? sha256(token).slice(0, 24) : '';
   const anonymousHash = sha256(`${req.ip}|${req.get('User-Agent') || ''}`).slice(0, 24);
   const remoteAccount = await resolveRemoteAccount(token);
+  const entitlements = remoteAccount.authenticated
+    ? resolveAccountEntitlements(remoteAccount)
+    : { role: 'user', isAdmin: false, unlimitedUsage: false };
   const remoteIdentity = remoteAccount.id ||
     remoteAccount.username ||
     remoteAccount.email ||
@@ -1089,8 +1096,13 @@ async function resolveUser(req, body = {}) {
     username: remoteAccount.username || usernameHint,
     tokenHash,
     isAuthenticated: remoteAccount.authenticated,
-    isMember: remoteAccount.isMember,
-    membership: remoteAccount.membership,
+    isMember: remoteAccount.isMember || entitlements.unlimitedUsage,
+    role: entitlements.role,
+    isAdmin: entitlements.isAdmin,
+    unlimitedUsage: entitlements.unlimitedUsage,
+    membership: entitlements.unlimitedUsage
+      ? { type: 'lifetime', active: true, source: 'super_admin' }
+      : remoteAccount.membership,
   };
 }
 
@@ -1121,6 +1133,9 @@ function createCodexAdapterToken(user, options = {}) {
     isAuthenticated: Boolean(user.isAuthenticated),
     isMember: Boolean(user.isMember),
     isTestAccount: Boolean(user.isTestAccount),
+    role: safeUserText(user.role),
+    isAdmin: Boolean(user.isAdmin),
+    unlimitedUsage: Boolean(user.unlimitedUsage),
     membership: user.membership || {},
     aud: safeUserText(options.audience) || 'codex-responses',
     recordUsage: options.recordUsage !== false,
@@ -1168,6 +1183,9 @@ function resolveCodexAdapterToken(token) {
       isAuthenticated: Boolean(payload.isAuthenticated),
       isMember: Boolean(payload.isMember),
       isTestAccount: Boolean(payload.isTestAccount),
+      role: safeUserText(payload.role),
+      isAdmin: Boolean(payload.isAdmin),
+      unlimitedUsage: Boolean(payload.unlimitedUsage),
       membership:
         payload.membership && typeof payload.membership === 'object'
           ? payload.membership
@@ -1209,8 +1227,12 @@ function usageFor(userId) {
 }
 
 function enforceTokenBudget(user, estimatedTokensForRequest) {
-  if (user && user.isTestAccount) {
-    return { limit: 999999999, usage: { month: monthKey(), used: 0 } };
+  if (user && (user.isTestAccount || user.unlimitedUsage)) {
+    return {
+      limit: Number.MAX_SAFE_INTEGER,
+      usage: { month: monthKey(), used: 0 },
+      unlimited: true,
+    };
   }
   if (requireMemberForAi && !user.isMember) {
     const error = new Error('大乘 AI 需要开通会员后使用');
@@ -2971,17 +2993,20 @@ app.get(
     const windowEnd = Math.floor(Date.UTC(
       now.getUTCFullYear(), now.getUTCMonth() + 1, 1,
     ) / 1000);
-    const tokenLimit = user.isTestAccount
-      ? 999_999_999
+    const unlimited = Boolean(user.isTestAccount || user.unlimitedUsage);
+    const tokenLimit = unlimited
+      ? null
       : user.isMember ? memberMonthlyLimit : freeMonthlyLimit;
-    const usedTokens = user.isTestAccount ? 0 : usageFor(user.userId).used;
+    const usedTokens = unlimited ? 0 : usageFor(user.userId).used;
     jsonResponse(res, 200, {
       windowStart,
       windowEnd,
       tokenLimit,
       usedTokens,
       reservedTokens: 0,
-      remainingTokens: Math.max(0, tokenLimit - usedTokens),
+      remainingTokens: unlimited ? null : Math.max(0, tokenLimit - usedTokens),
+      unlimited,
+      role: user.role || 'user',
     });
   }),
 );

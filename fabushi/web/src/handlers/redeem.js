@@ -1,7 +1,7 @@
 import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
 import { REDEEM_CODE_TYPES } from '../config/constants.js';
-import { isAdmin, generateRedeemCode } from '../utils/helpers.js';
+import { isAdminUser, generateRedeemCode } from '../utils/helpers.js';
 
 async function authenticatedUser(request, env, db) {
   const authHeader = request.headers.get('Authorization') || '';
@@ -33,7 +33,7 @@ async function ensureRedeemClaims(env) {
 export async function handleCreateRedeemCode(request, env, db) {
   const auth = await authenticatedUser(request, env, db);
   if (!auth) return jsonResponse({ error: '认证失败' }, 401);
-  if (!isAdmin(auth.user.email, env)) return jsonResponse({ error: '权限不足' }, 403);
+  if (!isAdminUser(auth.user, env)) return jsonResponse({ error: '权限不足' }, 403);
 
   const { type, quantity = 1, description = '' } = await request.json();
   const codeType = REDEEM_CODE_TYPES[type];

@@ -1,6 +1,6 @@
 import { verifyToken } from '../../auth-utils.js';
 import { jsonResponse } from '../utils/response.js';
-import { isAdmin } from '../utils/helpers.js';
+import { isAdminUser } from '../utils/helpers.js';
 
 const ADMIN_ONLY_PATHS = new Set([
   '/migrate-builtin-complete',
@@ -33,6 +33,6 @@ export async function enforceRequestSecurityGate(request, env, db) {
   if (!ADMIN_ONLY_PATHS.has(pathname)) return null;
   const user = await resolveUser(request, env, db);
   if (!user) return jsonResponse({ error: '认证失败' }, 401);
-  if (!isAdmin(user.email, env)) return jsonResponse({ error: '权限不足' }, 403);
+  if (!isAdminUser(user, env)) return jsonResponse({ error: '权限不足' }, 403);
   return null;
 }
