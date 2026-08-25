@@ -33,4 +33,5 @@ if (adapterSecret && adapterSecret.length < 32) {
   throw new Error('CODEX_DEEPSEEK_ADAPTER_SECRET must be at least 32 characters');
 }
 
+await import('./miniapp_marketplace_bootstrap.js');
 await import('./server.js');
