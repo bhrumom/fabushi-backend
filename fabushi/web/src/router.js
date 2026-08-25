@@ -4,6 +4,7 @@ import { routePlatformGateway } from './routes/platform-gateway-routes.js';
 import { routeCoreRequest } from './routes/core-routes.js';
 import { routeAuthRequest } from './routes/auth-routes.js';
 import { routeMembershipRequest } from './routes/membership-routes.js';
+import { routeMonetizationRequest } from './routes/monetization-routes.js';
 import { routeCommerceRequest } from './routes/commerce-routes.js';
 import { routeCommunityRequest } from './routes/community-routes.js';
 import { routeContentRequest } from './routes/content-routes.js';
@@ -15,6 +16,7 @@ const ROUTERS = Object.freeze([
   routeCoreRequest,
   routeAuthRequest,
   routeMembershipRequest,
+  routeMonetizationRequest,
   routeCommerceRequest,
   routeCommunityRequest,
   routeContentRequest,
