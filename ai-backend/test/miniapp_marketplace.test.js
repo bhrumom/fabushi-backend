@@ -100,6 +100,25 @@ test('official catalog is searchable and uses immutable external artifacts', () 
   }
 });
 
+test('Douyin downloader is searchable in Chinese and installable from an immutable package', () => {
+  const scope = fixture();
+  try {
+    for (const query of ['抖音', '无水印', '视频下载']) {
+      const result = scope.marketplace.browse({ query, platform: 'desktop' });
+      assert.equal(result.plugins[0].pluginId, 'douyin-batch-downloader');
+    }
+    const manifest = scope.marketplace.get('douyin-batch-downloader');
+    assert.equal(manifest.distribution.installMode, 'package');
+    assert.equal(manifest.review.state, 'approved');
+    assert.equal(manifest.distribution.artifacts[0].sha256.length, 64);
+    const added = scope.marketplace.add('douyin-batch-downloader', 'douyin-test');
+    assert.equal(added.added, true);
+    assert.equal(scope.marketplace.added('douyin-test')[0].id, 'douyin-batch-downloader');
+  } finally {
+    scope.cleanup();
+  }
+});
+
 test('add state persists per scope and returns a default Mini App bot', () => {
   const scope = fixture();
   try {

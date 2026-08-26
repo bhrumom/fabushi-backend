@@ -92,7 +92,7 @@ test('official plugin packages declare exact per-system availability and one ser
       return Array.isArray(manifest.runtimeVariants);
     })
     .map((plugin) => plugin.name);
-  const localOnlyPluginIds = ['wechat-article-downloader'];
+  const localOnlyPluginIds = ['wechat-article-downloader', 'douyin-batch-downloader'];
   assert.deepEqual(hostedAppIds, [
     ...officialMcpApps.map((app) => app.id),
     ...localOnlyPluginIds,

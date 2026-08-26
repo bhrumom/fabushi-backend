@@ -1,7 +1,7 @@
 import { MiniAppMarketplace, MiniAppMarketplaceError, officialMiniAppManifests } from './miniapp_marketplace.js';
 import { requireManifest } from './miniapp_marketplace_server_common.js';
 
-export const MINIAPP_PACKAGE_COMMIT = 'a76587178c6b63be7963f14deb550e00bb0a425e';
+export const MINIAPP_PACKAGE_COMMIT = '7b02d8d00e0646e9bf4e90a129cbf203fcff015d';
 export const MINIAPP_BOT_PROTOCOL = 'fabushi.miniapp.bot.v2';
 
 const RAW_PACKAGE_ROOT = `https://raw.githubusercontent.com/bhrumom/fabushi/${MINIAPP_PACKAGE_COMMIT}/marketplace/packages`;
@@ -34,6 +34,8 @@ function discoveryDocument(plugin) {
     plugin.source?.bot?.id,
     plugin.source?.bot?.username,
     plugin.source?.bot?.displayName,
+    ...(plugin.categories ?? []),
+    ...(plugin.tags ?? []),
     ...(plugin.platforms ?? []),
     ...(plugin.source?.surfaces ?? []).flatMap((surface) => [
       surface.id,
@@ -79,7 +81,14 @@ if (!MiniAppMarketplace.prototype[SEARCH_GUARD]) {
     const payload = originalBrowse.call(this, { ...options, limit: 200 });
     return {
       ...payload,
-      plugins: payload.plugins.filter((plugin) => matchesDiscovery(plugin, query)).slice(0, requestedLimit),
+      plugins: payload.plugins.filter((plugin) => {
+        const manifest = this.get(plugin.pluginId);
+        return matchesDiscovery({
+          ...plugin,
+          categories: manifest?.categories ?? [],
+          tags: manifest?.tags ?? [],
+        }, query);
+      }).slice(0, requestedLimit),
     };
   };
 }
@@ -104,6 +113,11 @@ const packageCatalog = {
     version: '1.0.0',
     sha256: '43de877dc87b5dff306164eb143baad545ef40bea2247f28cbe21616829478be',
     sizeBytes: 1827,
+  },
+  'douyin-batch-downloader': {
+    version: '1.0.0',
+    sha256: '6784eb6ade91ef75ff61717a232dd154c7a3fb28c093ce330bc7ca4857ace473',
+    sizeBytes: 3069,
   },
   'hermes-installer': {
     version: '1.0.0',
@@ -218,6 +232,8 @@ export function browseMarketplace(store, options = {}, baseUrl = '') {
       const release = marketplaceReleaseResponse(manifest, options.platform || 'desktop');
       return {
         ...plugin,
+        categories: manifest.categories,
+        tags: manifest.tags,
         releaseManifest: release.releaseManifest,
         source: { ...plugin.source, ...release.source },
         bot: manifest.bot,

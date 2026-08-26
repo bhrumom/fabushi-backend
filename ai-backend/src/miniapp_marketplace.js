@@ -495,6 +495,31 @@ const officialSeeds = [
     permissions: ['local-execution', 'accessibility', 'browser-control'],
     stats: { monthlyActiveUsers: 500 },
   }),
+  officialManifest({
+    id: 'douyin-batch-downloader',
+    version: '1.0.0',
+    title: '抖音批量无水印下载',
+    description: '把用户有权访问的抖音分享批量解析并保存为本地无水印 MP4，附带去重、重试、摘要和失败清单。',
+    categories: ['official', 'productivity', 'media'],
+    tags: ['抖音', '无水印', '批量下载', '视频下载', '本地保存', 'douyin'],
+    homepage: 'https://fabushi.ombhrum.com/miniapps/douyin-batch-downloader/',
+    bot: {
+      id: 'douyin-batch-downloader-bot',
+      username: 'douyin_batch_downloader_bot',
+      displayName: '抖音批量无水印下载',
+      description: '粘贴有权访问的抖音分享链接，限速解析并保存到本地；不绕过登录、验证码或私密内容。',
+    },
+    surfaces: [
+      { id: 'local-cli', kind: 'cli', title: '本地下载运行时', command: 'mahayana miniapp run douyin-batch-downloader', platforms: ['desktop', 'cli'], local: true, priority: 100 },
+      { id: 'web-ui', kind: 'web', title: '使用说明', url: 'https://fabushi.ombhrum.com/miniapps/douyin-batch-downloader/', platforms: ['desktop'], priority: 50 },
+    ],
+    commands: [
+      { name: 'resolve', description: '批量校验链接并解析无水印播放地址，不写视频文件', usage: '/douyin-batch-downloader:resolve {"urls":["https://v.douyin.com/..."]}', surfaceId: 'local-cli', tool: 'resolve', aliases: ['解析'], naturalLanguageHints: ['解析这些抖音链接', '检查无水印地址'] },
+      { name: 'download', description: '批量下载到本地并生成 manifest.json', usage: '/douyin-batch-downloader:download {"urls":["https://v.douyin.com/..."],"outputDir":"douyin-videos"}', surfaceId: 'local-cli', tool: 'download', approval: 'required', aliases: ['下载'], naturalLanguageHints: ['下载这些抖音视频到本地', '批量无水印下载'] },
+    ],
+    permissions: ['network', 'local-files', 'local-execution'],
+    stats: { monthlyActiveUsers: 0 },
+  }),
 ];
 
 export function officialMiniAppManifests() {
