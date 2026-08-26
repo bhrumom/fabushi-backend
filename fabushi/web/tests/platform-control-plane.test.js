@@ -34,6 +34,9 @@ assert.match(gateway, /pathname\.startsWith\('\/v1\/'\)/, 'all v1 platform APIs 
 assert.match(gateway, /redirect: 'manual'/, 'OAuth redirects must be returned to the browser, not followed by the gateway');
 assert.match(gateway, /X-Fabushi-Control-Plane/, 'proxied browser auth must identify the canonical control plane');
 assert.match(gateway, /env\.MAHAYANA_PLATFORM\.fetch\(request\)/, 'same-account platform forwarding must prefer the Cloudflare service binding');
+assert.match(gateway, /request\.clone\(\)/, 'service-binding fallback must preserve the original request body');
+assert.match(gateway, /retrying canonical HTTPS origin/, 'service-binding failure must retry the canonical public origin instead of immediately returning 502');
+assert.match(gateway, /fetch\(directRequest, \{ redirect: 'manual' \}\)/, 'fallback must preserve browser-managed OAuth redirects');
 
 const workerWrangler = read('wrangler.toml');
 for (const environment of ['production', 'development']) {

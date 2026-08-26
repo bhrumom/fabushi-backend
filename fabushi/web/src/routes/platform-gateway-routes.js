@@ -27,12 +27,20 @@ function platformOrigin(env) {
 }
 
 async function fetchPlatform(env, request) {
-  // Cloudflare can return a workers.dev placeholder when one Worker fetches
-  // another Worker in the same account through the public workers.dev hostname.
-  // The service binding keeps this hop on Cloudflare's internal Worker network
-  // and makes browser auth deterministic in staging and production.
+  // Prefer Cloudflare's internal service binding. If that binding is temporarily
+  // unavailable, retry the same request against the canonical HTTPS origin so
+  // browser login does not fail closed with a gateway-generated 502.
   if (env.MAHAYANA_PLATFORM && typeof env.MAHAYANA_PLATFORM.fetch === 'function') {
-    return env.MAHAYANA_PLATFORM.fetch(request);
+    const directRequest = request.clone();
+    try {
+      return await env.MAHAYANA_PLATFORM.fetch(request);
+    } catch (error) {
+      console.warn(
+        'Mahayana platform service binding failed; retrying canonical HTTPS origin:',
+        error?.message || error,
+      );
+    }
+    return fetch(directRequest, { redirect: 'manual' });
   }
   return fetch(request, { redirect: 'manual' });
 }
