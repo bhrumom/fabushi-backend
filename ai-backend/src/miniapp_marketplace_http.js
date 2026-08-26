@@ -3,6 +3,11 @@ import process from 'node:process';
 
 import express from 'express';
 
+import { AccountSyncStore } from './account_sync_store.js';
+import {
+  legacySessionScope,
+  resolveMarketplaceAccountIdentity,
+} from './marketplace_account_identity.js';
 import {
   MINIAPP_MARKETPLACE_PROTOCOL,
   MiniAppMarketplace,
@@ -17,8 +22,6 @@ import {
 import {
   commandDispatch,
   publicBaseUrl,
-  publisherForRequest,
-  requestIdentity,
   requireManifest,
   reviewAuthorized,
   route,
@@ -33,20 +36,119 @@ import {
 const MAX_JSON_BYTES = '1mb';
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
-export function createMiniAppMarketplaceRouter({ dataDir, storagePath, store } = {}) {
+function hasBearer(req) {
+  return /^Bearer\s+/i.test(String(req.get?.('authorization') ?? req.headers?.authorization ?? '').trim());
+}
+
+function publisherFromIdentity(identity, body = {}) {
+  const supplied = body.publisher && typeof body.publisher === 'object' ? body.publisher : {};
+  return {
+    id: identity.publisherId,
+    displayName: String(supplied.displayName ?? supplied.name ?? body.publisherName ?? 'Fabushi Publisher').trim().slice(0, 120),
+    website: supplied.website,
+    verified: false,
+  };
+}
+
+export function createMiniAppMarketplaceRouter({
+  dataDir,
+  storagePath,
+  store,
+  accountSyncStore,
+  resolveUser = null,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const resolvedDataDir = dataDir ?? process.env.DATA_DIR ?? process.cwd();
   const marketplace = store ?? new MiniAppMarketplace({
-    storagePath: storagePath ?? path.join(dataDir ?? process.cwd(), 'miniapps', 'marketplace-v2.json'),
+    storagePath: storagePath ?? path.join(resolvedDataDir, 'miniapps', 'marketplace-v2.json'),
     seed: officialMiniAppPackageSeeds(),
   });
+  const syncStore = accountSyncStore ?? new AccountSyncStore({ dataDir: resolvedDataDir });
   const router = express.Router();
   router.use(express.json({ limit: MAX_JSON_BYTES }));
 
+  async function identityFor(req, { accountRequired = false, publicRead = false } = {}) {
+    return resolveMarketplaceAccountIdentity(req, {
+      requireAuthenticated: accountRequired || (!publicRead && hasBearer(req)),
+      resolveUser,
+      fetchImpl,
+    });
+  }
+
+  function syncInstalledApps(identity) {
+    if (!identity.accountId) return marketplace.added(identity.scopeId);
+    return syncStore.listMiniAppInstalls(identity.accountId)
+      .map((install) => marketplace.get(install.miniAppId))
+      .filter(Boolean);
+  }
+
+  function migrateLegacySession(req, identity) {
+    if (!identity.accountId) return;
+    const legacyScope = legacySessionScope(req);
+    const scopes = [...new Set([legacyScope, identity.scopeId].filter(Boolean))];
+    for (const scopeId of scopes) {
+      for (const manifest of marketplace.added(scopeId)) {
+        syncStore.installMiniApp(identity.accountId, manifest);
+      }
+    }
+  }
+
+  function addToAccount(identity, manifest) {
+    if (!identity.accountId) return marketplace.add(manifest.id, identity.scopeId);
+    const synced = syncStore.installMiniApp(identity.accountId, manifest);
+    // Stable-scope mirror keeps older Marketplace/MCP readers compatible while
+    // account_sync_store is the cross-device source of truth.
+    marketplace.add(manifest.id, identity.scopeId);
+    return {
+      added: true,
+      changed: synced.changed,
+      miniApp: manifest,
+      bot: manifest.bot,
+      release: marketplaceReleaseResponse(manifest),
+    };
+  }
+
+  function removeFromAccount(identity, miniAppId) {
+    if (!identity.accountId) return marketplace.remove(miniAppId, identity.scopeId);
+    const removed = syncStore.removeMiniApp(identity.accountId, miniAppId);
+    marketplace.remove(miniAppId, identity.scopeId);
+    return removed;
+  }
+
+  function browseForIdentity(identity, options, baseUrl) {
+    const payload = browseMarketplace(marketplace, { ...options, scopeId: identity.scopeId }, baseUrl);
+    if (!identity.accountId) return payload;
+    const installed = new Set(syncStore.listMiniAppInstalls(identity.accountId).map((entry) => entry.miniAppId));
+    return {
+      ...payload,
+      plugins: payload.plugins.map((plugin) => ({ ...plugin, added: installed.has(plugin.pluginId) })),
+    };
+  }
+
+  function mcpAccountState(identity) {
+    if (!identity.accountId) return null;
+    return {
+      browse(options, baseUrl) {
+        return browseForIdentity(identity, options, baseUrl);
+      },
+      add(miniAppId) {
+        return addToAccount(identity, requireManifest(marketplace, miniAppId));
+      },
+      remove(miniAppId) {
+        return removeFromAccount(identity, miniAppId);
+      },
+      added() {
+        return syncInstalledApps(identity);
+      },
+    };
+  }
+
   router.get('/v1/marketplace/plugins', route(async (req, res) => {
-    const identity = requestIdentity(req);
-    const payload = browseMarketplace(marketplace, {
+    const identity = await identityFor(req, { publicRead: true });
+    if (identity.accountId) migrateLegacySession(req, identity);
+    const payload = browseForIdentity(identity, {
       query: safeQuery(req.query.q ?? req.query.query),
       platform: safeQuery(req.query.platform, 32) || undefined,
-      scopeId: identity.scopeId,
       limit: Number(req.query.limit ?? 50),
     }, publicBaseUrl(req));
     res.json(payload);
@@ -70,23 +172,96 @@ export function createMiniAppMarketplaceRouter({ dataDir, storagePath, store } =
   }));
 
   router.post('/v1/marketplace/plugins/:pluginId/add', route(async (req, res) => {
-    const identity = requestIdentity(req);
-    const added = marketplace.add(req.params.pluginId, identity.scopeId);
+    const identity = await identityFor(req);
+    if (identity.accountId) migrateLegacySession(req, identity);
+    const manifest = requireManifest(marketplace, req.params.pluginId);
+    const added = addToAccount(identity, manifest);
     res.status(201).json({
       ...added,
-      release: marketplaceReleaseResponse(added.miniApp, safeQuery(req.body?.platform, 32) || 'desktop'),
-      botEndpoint: `${publicBaseUrl(req)}/api/mcp/miniapp-bot/${encodeURIComponent(added.miniApp.id)}`,
+      release: marketplaceReleaseResponse(manifest, safeQuery(req.body?.platform, 32) || 'desktop'),
+      botEndpoint: `${publicBaseUrl(req)}/api/mcp/miniapp-bot/${encodeURIComponent(manifest.id)}`,
+      accountSynchronized: Boolean(identity.accountId),
     });
   }));
 
   router.delete('/v1/marketplace/plugins/:pluginId/add', route(async (req, res) => {
-    const identity = requestIdentity(req);
-    res.json(marketplace.remove(req.params.pluginId, identity.scopeId));
+    const identity = await identityFor(req);
+    if (identity.accountId) migrateLegacySession(req, identity);
+    res.json(removeFromAccount(identity, req.params.pluginId));
   }));
 
   router.get('/v1/marketplace/added', route(async (req, res) => {
-    const identity = requestIdentity(req);
-    res.json({ protocol: MINIAPP_MARKETPLACE_PROTOCOL, apps: marketplace.added(identity.scopeId) });
+    const identity = await identityFor(req);
+    if (identity.accountId) migrateLegacySession(req, identity);
+    res.json({
+      protocol: MINIAPP_MARKETPLACE_PROTOCOL,
+      apps: syncInstalledApps(identity),
+      accountSynchronized: Boolean(identity.accountId),
+      cursor: identity.accountId ? syncStore.currentCursor(identity.accountId) : null,
+    });
+  }));
+
+  router.get('/v1/account/sync', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    migrateLegacySession(req, identity);
+    const payload = syncStore.sync(identity.accountId, safeQuery(req.query.cursor, 120) || null, Number(req.query.limit ?? 200));
+    if (payload.snapshot) {
+      payload.snapshot.miniApps = payload.snapshot.miniApps.map((entry) => ({
+        ...entry,
+        miniApp: marketplace.get(entry.miniAppId),
+      }));
+    }
+    res.json(payload);
+  }));
+
+  router.get('/v1/account/bots', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    migrateLegacySession(req, identity);
+    res.json({ bots: syncStore.listBots(identity.accountId), cursor: syncStore.currentCursor(identity.accountId) });
+  }));
+
+  router.post('/v1/account/bots/:botId/add', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const profile = {
+      ...(req.body?.bot && typeof req.body.bot === 'object' ? req.body.bot : req.body ?? {}),
+      id: req.params.botId,
+    };
+    res.status(201).json(syncStore.addBot(identity.accountId, profile, { source: 'manual', sourceId: 'manual' }));
+  }));
+
+  router.delete('/v1/account/bots/:botId/add', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    res.json(syncStore.removeBot(identity.accountId, req.params.botId, { source: 'manual', sourceId: 'manual' }));
+  }));
+
+  router.get('/v1/miniapps/:pluginId/cloud-storage', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    requireManifest(marketplace, req.params.pluginId);
+    const key = safeQuery(req.query.key, 128);
+    if (key) {
+      res.json({ miniAppId: req.params.pluginId, item: syncStore.getCloudValue(identity.accountId, req.params.pluginId, key) });
+      return;
+    }
+    res.json({ miniAppId: req.params.pluginId, items: syncStore.listCloudValues(identity.accountId, req.params.pluginId) });
+  }));
+
+  router.put('/v1/miniapps/:pluginId/cloud-storage', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    requireManifest(marketplace, req.params.pluginId);
+    const values = req.body?.values && typeof req.body.values === 'object' && !Array.isArray(req.body.values)
+      ? Object.entries(req.body.values)
+      : [[req.body?.key, req.body?.value]];
+    if (values.length < 1 || values.length > 100) throw new MiniAppMarketplaceError('INVALID_CLOUD_STORAGE', '1-100 CloudStorage values are required');
+    const items = values.map(([key, value]) => syncStore.setCloudValue(identity.accountId, req.params.pluginId, key, value));
+    res.json({ miniAppId: req.params.pluginId, items, cursor: syncStore.currentCursor(identity.accountId) });
+  }));
+
+  router.delete('/v1/miniapps/:pluginId/cloud-storage', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    requireManifest(marketplace, req.params.pluginId);
+    const key = safeQuery(req.query.key ?? req.body?.key, 128);
+    if (!key) throw new MiniAppMarketplaceError('INVALID_CLOUD_STORAGE', 'CloudStorage key is required');
+    res.json(syncStore.deleteCloudValue(identity.accountId, req.params.pluginId, key));
   }));
 
   router.post('/v1/marketplace/plugins/:pluginId/route', route(async (req, res) => {
@@ -101,7 +276,8 @@ export function createMiniAppMarketplaceRouter({ dataDir, storagePath, store } =
   }));
 
   router.post('/v1/marketplace/botfather/generate', route(async (req, res) => {
-    const publisher = publisherForRequest(req, req.body ?? {});
+    const identity = await identityFor(req);
+    const publisher = publisherFromIdentity(identity, req.body ?? {});
     const workflow = marketplace.generationWorkflow({
       prompt: req.body?.prompt,
       publisher,
@@ -124,21 +300,20 @@ export function createMiniAppMarketplaceRouter({ dataDir, storagePath, store } =
           repository: workflow.spec.repository,
         },
       });
-      if (req.body?.submitForReview === true) {
-        draft = marketplace.submit(draft.id, publisher.id);
-      }
+      if (req.body?.submitForReview === true) draft = marketplace.submit(draft.id, publisher.id);
     }
     res.status(201).json({ workflow, draft });
   }));
 
   router.post('/v1/marketplace/publisher/drafts', route(async (req, res) => {
-    const publisher = publisherForRequest(req, req.body ?? {});
+    const identity = await identityFor(req);
+    const publisher = publisherFromIdentity(identity, req.body ?? {});
     const draft = marketplace.createDraft({ ...req.body, publisher });
     res.status(201).json({ miniApp: draft });
   }));
 
   router.post('/v1/marketplace/publisher/:pluginId/submit', route(async (req, res) => {
-    const identity = requestIdentity(req);
+    const identity = await identityFor(req);
     res.json({ miniApp: marketplace.submit(req.params.pluginId, identity.publisherId) });
   }));
 
@@ -156,7 +331,7 @@ export function createMiniAppMarketplaceRouter({ dataDir, storagePath, store } =
   }));
 
   router.post('/v1/marketplace/publisher/:pluginId/yank', route(async (req, res) => {
-    const identity = requestIdentity(req);
+    const identity = await identityFor(req);
     res.json({ miniApp: marketplace.yank(req.params.pluginId, identity.publisherId, req.body?.notes) });
   }));
 
@@ -166,19 +341,20 @@ export function createMiniAppMarketplaceRouter({ dataDir, storagePath, store } =
   }));
 
   router.all('/api/mcp/miniapp-marketplace', route(async (req, res) => {
-    const identity = requestIdentity(req);
+    const identity = await identityFor(req);
+    if (identity.accountId) migrateLegacySession(req, identity);
     const baseUrl = publicBaseUrl(req);
     await handleMcpRequest({
       endpoint: 'miniapp-marketplace',
       req,
       res,
       scopeId: identity.scopeId,
-      createServer: () => createMarketplaceMcpServer(marketplace, identity.scopeId, baseUrl),
+      createServer: () => createMarketplaceMcpServer(marketplace, identity.scopeId, baseUrl, mcpAccountState(identity)),
     });
   }));
 
   router.all('/api/mcp/miniapp-bot/:pluginId', route(async (req, res) => {
-    const identity = requestIdentity(req);
+    const identity = await identityFor(req);
     const id = req.params.pluginId;
     const baseUrl = publicBaseUrl(req);
     requireManifest(marketplace, id);
@@ -191,7 +367,7 @@ export function createMiniAppMarketplaceRouter({ dataDir, storagePath, store } =
     });
   }));
 
-  return { router, marketplace };
+  return { router, marketplace, accountSyncStore: syncStore };
 }
 
 export function registerMiniAppMarketplaceRoutes(app, options = {}) {

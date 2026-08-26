@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 
+import { AccountSyncStore } from './account_sync_store.js';
 import { publicManifestSummary, validateAgentManifest } from './agent_manifest.js';
 
 function ok(res, status, requestId, data, extra = {}) {
@@ -553,6 +554,7 @@ function redactRepairText(value) {
 export function registerPlatformApi({ app, db, resolveUser, asyncHandler }) {
   ensurePlatformSchema(db);
   const s = createStatements(db);
+  const accountSync = new AccountSyncStore({ db });
 
   app.get('/api/miniapps/:pluginInstanceId/messages', asyncHandler(async (req, res) => {
     const reqId = requestId(req);
@@ -599,8 +601,14 @@ export function registerPlatformApi({ app, db, resolveUser, asyncHandler }) {
         updatedAt,
       });
       stored += 1;
+      accountSync.recordEvent(
+        user.userId,
+        'miniapp.bot.message',
+        `${pluginInstanceId}:${messageId}`,
+        { miniAppId: pluginInstanceId, messageId, role, createdAt, updatedAt },
+      );
     }
-    return ok(res, 200, reqId, { pluginInstanceId, stored, mergedAt: now });
+    return ok(res, 200, reqId, { pluginInstanceId, stored });
   }));
 
   app.get('/api/miniapps/:pluginInstanceId/content-state', asyncHandler(async (req, res) => {
@@ -625,6 +633,12 @@ export function registerPlatformApi({ app, db, resolveUser, asyncHandler }) {
     const state = mergeContentState(readJson(current?.stateJson, {}), req.body?.state || req.body || {});
     const updatedAt = new Date().toISOString();
     s.upsertMiniAppContentState.run({ userId: user.userId, pluginInstanceId, stateJson: asJson(state), updatedAt });
+    accountSync.recordEvent(
+      user.userId,
+      'miniapp.content.updated',
+      pluginInstanceId,
+      { miniAppId: pluginInstanceId, updatedAt },
+    );
     return ok(res, 200, reqId, { pluginInstanceId, state, updatedAt });
   }));
 

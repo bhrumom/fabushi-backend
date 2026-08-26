@@ -23,7 +23,7 @@ import {
 const SESSION_TTL_MS = 30 * 60_000;
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
-export function createMarketplaceMcpServer(store, scopeId, baseUrl) {
+export function createMarketplaceMcpServer(store, scopeId, baseUrl, accountState = null) {
   const server = new McpServer(
     { name: 'fabushi-miniapp-marketplace', version: '2.0.0' },
     { capabilities: { tools: { listChanged: true }, resources: { listChanged: true } } },
@@ -39,7 +39,9 @@ export function createMarketplaceMcpServer(store, scopeId, baseUrl) {
     },
     annotations: annotations({ readOnly: true, openWorld: true }),
   }, async ({ query, platform, limit }) => {
-    const payload = browseMarketplace(store, { query, platform, limit, scopeId }, baseUrl);
+    const payload = accountState?.browse
+      ? accountState.browse({ query, platform, limit }, baseUrl)
+      : browseMarketplace(store, { query, platform, limit, scopeId }, baseUrl);
     return result(`Found ${payload.plugins.length} Mini Apps.`, payload);
   });
 
@@ -49,7 +51,7 @@ export function createMarketplaceMcpServer(store, scopeId, baseUrl) {
     inputSchema: { miniAppId: z.string().min(2).max(64) },
     annotations: annotations({ openWorld: true }),
   }, async ({ miniAppId }) => {
-    const added = store.add(miniAppId, scopeId);
+    const added = accountState?.add ? accountState.add(miniAppId) : store.add(miniAppId, scopeId);
     return result(`Added ${added.miniApp.title}.`, {
       ...added,
       release: marketplaceReleaseResponse(added.miniApp),
@@ -62,7 +64,10 @@ export function createMarketplaceMcpServer(store, scopeId, baseUrl) {
     description: 'Remove a Mini App from this Fabushi account without deleting publisher source artifacts.',
     inputSchema: { miniAppId: z.string().min(2).max(64) },
     annotations: annotations({ destructive: true }),
-  }, async ({ miniAppId }) => result('Mini App removed.', store.remove(miniAppId, scopeId)));
+  }, async ({ miniAppId }) => result(
+    'Mini App removed.',
+    accountState?.remove ? accountState.remove(miniAppId) : store.remove(miniAppId, scopeId),
+  ));
 
   server.registerTool('added_apps', {
     title: 'List Added Mini Apps',
@@ -70,7 +75,7 @@ export function createMarketplaceMcpServer(store, scopeId, baseUrl) {
     annotations: annotations({ readOnly: true }),
   }, async () => result('Loaded added Mini Apps.', {
     protocol: MINIAPP_MARKETPLACE_PROTOCOL,
-    apps: store.added(scopeId),
+    apps: accountState?.added ? accountState.added() : store.added(scopeId),
   }));
 
   server.registerTool('app_commands', {
@@ -119,7 +124,10 @@ export function createMarketplaceMcpServer(store, scopeId, baseUrl) {
     },
     annotations: annotations({ openWorld: true }),
   }, async (input) => {
-    const publisher = { id: scopeId.replace(/^scope-/, 'publisher-').slice(0, 34), displayName: input.publisherName };
+    const publisher = {
+      id: String(accountState?.publisherId ?? scopeId.replace(/^scope-/, 'publisher-')).slice(0, 64),
+      displayName: input.publisherName,
+    };
     const workflow = store.generationWorkflow({
       prompt: input.prompt,
       publisher,
