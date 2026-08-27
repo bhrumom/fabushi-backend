@@ -4,10 +4,14 @@ import { fileURLToPath } from 'node:url';
 
 import express from 'express';
 
+import { MiniAppMarketplace } from './miniapp_marketplace.js';
 import { registerMiniAppMarketplaceRoutes } from './miniapp_marketplace_http.js';
+import { installWebMcpMarketplacePolicy } from './miniapp_webmcp_policy.js';
 
 const patchFlag = Symbol.for('fabushi.miniapp.marketplace.bootstrap.v2');
 const registrationFlag = Symbol.for('fabushi.miniapp.marketplace.routes.v2');
+
+installWebMcpMarketplacePolicy(MiniAppMarketplace);
 
 if (!express.application[patchFlag]) {
   const originalListen = express.application.listen;
