@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { normalizeMiniAppBotCalls } from './miniapp_call_program.js';
+
 export const MINIAPP_MARKETPLACE_PROTOCOL = 'fabushi.miniapp.marketplace.v2';
 export const MINIAPP_MANIFEST_PROTOCOL = 'fabushi.miniapp.manifest.v2';
 export const MINIAPP_RELEASE_PROTOCOL = 'mahayana.external-release.v1';
@@ -70,13 +72,19 @@ function normalizedPublisher(value) {
   };
 }
 
-function normalizedBot(value, manifest) {
+function normalizedBot(value, manifest, surfaces, commands) {
   const bot = value && typeof value === 'object' ? value : {};
   const id = String(bot.id ?? `${manifest.id}-bot`).trim().toLocaleLowerCase();
   if (!ID_PATTERN.test(id)) throw new MiniAppMarketplaceError('INVALID_MANIFEST', 'bot.id is invalid');
   const username = String(bot.username ?? `${manifest.id.replaceAll('-', '_')}_bot`).trim().toLocaleLowerCase();
   if (!/^[a-z0-9_]{3,64}$/.test(username)) {
     throw new MiniAppMarketplaceError('INVALID_MANIFEST', 'bot.username is invalid');
+  }
+  let calls;
+  try {
+    calls = normalizeMiniAppBotCalls(bot.calls, surfaces, commands);
+  } catch (error) {
+    throw new MiniAppMarketplaceError('INVALID_MANIFEST', error instanceof Error ? error.message : String(error));
   }
   return {
     id,
@@ -92,6 +100,7 @@ function normalizedBot(value, manifest) {
       action: 'open-miniapp',
       miniAppId: manifest.id,
     },
+    calls,
   };
 }
 
@@ -253,7 +262,7 @@ export function normalizeMiniAppManifest(value, options = {}) {
   const commands = commandInput.map((command, index) => normalizedCommand(command, index, surfaces));
   const manifest = {
     ...base,
-    bot: normalizedBot(value.bot, base),
+    bot: normalizedBot(value.bot, base, surfaces, commands),
     surfaces,
     commands,
     distribution: normalizedDistribution(value.distribution, surfaces),
@@ -494,6 +503,36 @@ const officialSeeds = [
     ],
     permissions: ['local-execution', 'accessibility', 'browser-control'],
     stats: { monthlyActiveUsers: 500 },
+  }),
+  officialManifest({
+    id: 'teleprompter-recorder',
+    version: '1.0.0',
+    title: '口播提词器',
+    description: '从所属 Bot 发起视频通话，在自拍视频上显示提词器并录制；结束后自动把视频保存回同一会话。',
+    categories: ['official', 'productivity', 'media'],
+    tags: ['口播', '提词器', '视频录制', 'teleprompter', 'camera'],
+    bot: {
+      id: 'teleprompter-recorder-bot',
+      username: 'teleprompter_recorder_bot',
+      displayName: '口播提词器',
+      description: '点击视频通话进入自拍提词和录制；录完的视频会回到本会话。',
+      calls: {
+        video: {
+          type: 'miniapp-surface',
+          title: '口播录制',
+          surfaceId: 'web-ui',
+          aiMode: 'disabled',
+        },
+      },
+    },
+    surfaces: [
+      { id: 'web-ui', kind: 'web', title: '口播提词与录制控制', entry: 'index.html', platforms: ['desktop'], priority: 100 },
+    ],
+    commands: [
+      { name: 'open_recorder', description: '打开口播提词与录制界面', surfaceId: 'web-ui', tool: 'open_recorder', aliases: ['打开提词器'], naturalLanguageHints: ['打开口播提词器', '开始口播录制'] },
+    ],
+    permissions: ['camera', 'microphone', 'conversation-media-write'],
+    stats: { monthlyActiveUsers: 0 },
   }),
   officialManifest({
     id: 'douyin-batch-downloader',
@@ -833,7 +872,7 @@ export class MiniAppMarketplace {
       prompt: requiredText(prompt, 'prompt', 10000),
       publisher: normalizedPublisherValue,
       requestedSurfaces: normalizedStringArray(surfaces ?? ['web', 'mcp-http'], 'surfaces', 6),
-      repository: normalizedUrl(repository ?? 'https://github.com/bhrumom/fabushi', 'repository'),
+      repository: normalizedUrl(repository ?? 'https://github.com/bhrum/fabushi', 'repository'),
     };
     const workflowId = `miniapp-generation-${proposedId}-${crypto.randomUUID()}`;
     return {
@@ -867,7 +906,7 @@ export class MiniAppMarketplace {
     const manifest = this.get(id, { includeUnapproved: true });
     if (!manifest) throw new MiniAppMarketplaceError('NOT_FOUND', `mini app ${id} was not found`);
     if (manifest.publisher.id !== String(publisherId ?? '').trim().toLocaleLowerCase()) {
-      throw new MiniAppMarketplaceError('FORBIDDEN', `publisher does not own mini app ${id}`);
+      throw new MiniAppMarketplaceError('FORBIDDEN', 'publisher does not own this mini app');
     }
     return manifest;
   }
@@ -881,14 +920,19 @@ export class MiniAppMarketplace {
   }
 }
 
-function parseCommandArguments(source) {
-  const text = String(source ?? '').trim();
-  if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { input: text };
+function parseCommandArguments(raw) {
+  if (!raw) return {};
+  const trimmed = String(raw).trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {
+      // Keep raw text below.
+    }
   }
+  return { text: trimmed };
 }
 
 export class MiniAppMarketplaceError extends Error {
@@ -897,8 +941,4 @@ export class MiniAppMarketplaceError extends Error {
     this.name = 'MiniAppMarketplaceError';
     this.code = code;
   }
-}
-
-export function createDefaultMiniAppMarketplace(options = {}) {
-  return new MiniAppMarketplace(options);
 }
