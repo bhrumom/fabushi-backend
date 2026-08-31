@@ -171,11 +171,11 @@ async function listStoredPolicies(db) {
     SELECT *
     FROM app_version_policies
     WHERE enabled = 1
-      AND platform IN ('android', 'ios')
+      AND platform IN ('android', 'ios', 'macos', 'windows', 'linux')
       AND channel IN ('beta', 'stable')
     ORDER BY
       CASE channel WHEN 'beta' THEN 0 ELSE 1 END,
-      CASE platform WHEN 'android' THEN 0 ELSE 1 END,
+      CASE platform WHEN 'android' THEN 0 WHEN 'ios' THEN 1 WHEN 'macos' THEN 2 WHEN 'windows' THEN 3 WHEN 'linux' THEN 4 ELSE 5 END,
       updated_at DESC
   `).all();
   return Array.isArray(result?.results) ? result.results : [];
@@ -208,9 +208,18 @@ function uniqueLines(items, limit = 4) {
   return lines;
 }
 
+function platformLabel(platform) {
+  return ({ android: 'Android', ios: 'iOS', macos: 'macOS', windows: 'Windows', linux: 'Linux' })[platform] || platform;
+}
+
+function isDesktopPlatform(platform) {
+  return ['macos', 'windows', 'linux'].includes(platform);
+}
+
 function getChannelTitle(platform, channel) {
-  const platformLabel = platform === 'ios' ? 'iOS' : 'Android';
-  return `${platformLabel} ${channel === 'beta' ? 'Beta' : '正式版'}`;
+  const label = platformLabel(platform);
+  if (isDesktopPlatform(platform) && channel === 'stable') return `${label} 桌面版`;
+  return `${label} ${channel === 'beta' ? 'Beta' : '正式版'}`;
 }
 
 function getChannelStatus(policy) {
@@ -219,6 +228,9 @@ function getChannelStatus(policy) {
   }
   if (policy.platform === 'ios' && policy.downloadUrl.includes('testflight.apple.com')) {
     return policy.channel === 'beta' ? 'TestFlight 已开放' : 'App Store 已开放';
+  }
+  if (isDesktopPlatform(policy.platform) && policy.channel === 'stable') {
+    return 'GitHub Release 可下载';
   }
   return policy.channel === 'beta' ? 'Beta 自动同步' : '正式版已同步';
 }
@@ -235,6 +247,9 @@ function getChannelDescription(policy) {
       ? 'iOS 测试版通过 Apple TestFlight 分发。'
       : 'iOS 正式版入口已经同步到官网，可直接前往更新。';
   }
+  if (isDesktopPlatform(policy.platform)) {
+    return `${platformLabel(policy.platform)} 桌面正式版已经同步到官网，可直接下载经过发布门禁验证的安装包。`;
+  }
 
   return policy.channel === 'beta'
     ? '官网按钮会直接打开当前 Android 测试版下载入口。'
@@ -245,8 +260,11 @@ function getChannelPrimaryLabel(policy) {
   if (!policy.downloadUrl) {
     return policy.channel === 'beta' ? '等待测试入口开放' : '等待正式版上线';
   }
-  const platformLabel = policy.platform === 'ios' ? 'iOS' : 'Android';
-  return `下载 ${platformLabel} ${policy.channel === 'beta' ? '测试版' : '正式版'}`;
+  if (policy.platform === 'macos') return '下载 macOS DMG';
+  if (policy.platform === 'windows') return '下载 Windows 安装器';
+  if (policy.platform === 'linux') return '下载 Linux DEB';
+  const label = platformLabel(policy.platform);
+  return `下载 ${label} ${policy.channel === 'beta' ? '测试版' : '正式版'}`;
 }
 
 function getChannelNote(policy) {
@@ -258,14 +276,22 @@ function getChannelNote(policy) {
   if (policy.platform === 'ios' && policy.downloadUrl.includes('testflight.apple.com')) {
     return '点击后会打开 Apple TestFlight 页面。';
   }
+  if (isDesktopPlatform(policy.platform)) {
+    return '桌面版文件由经过 exact-SHA 发布门禁验证的 GitHub Release 提供。';
+  }
   return policy.channel === 'beta'
     ? '官网展示的测试版信息会随 Cloudflare 中的版本策略同步更新。'
     : '官网展示的正式版信息会随 Cloudflare 中的版本策略同步更新。';
 }
 
+function releasePageHrefForPolicy(policy) {
+  const match = String(policy.downloadUrl || '').match(/^(https:\/\/github\.com\/[^/]+\/[^/]+\/releases)\/download\/([^/]+)\//);
+  return match ? `${match[1]}/tag/${match[2]}` : '/download#release-changelog';
+}
+
 function buildOfficialSiteChannel(policy) {
   return {
-    platform: policy.platform === 'ios' ? 'iOS' : 'Android',
+    platform: platformLabel(policy.platform),
     audience: policy.channel === 'beta' ? 'beta' : 'stable',
     status: getChannelStatus(policy),
     title: getChannelTitle(policy.platform, policy.channel),
@@ -277,7 +303,7 @@ function buildOfficialSiteChannel(policy) {
     updateSummary: uniqueLines(policy.releaseNotes),
     mirrorLinks: [],
     note: getChannelNote(policy),
-    releasePageHref: '/download#release-changelog'
+    releasePageHref: releasePageHrefForPolicy(policy)
   };
 }
 
@@ -387,7 +413,7 @@ function buildCollection(policies, auditRows) {
     releases: buildReleaseEntries(auditRows, policies),
     notes: [
       '官网版本说明现在直接读取 Cloudflare 中的版本策略。',
-      '移动端与官网共用同一份版本元数据，不再依赖仓库内的 releases.json。'
+      '移动端、桌面端与官网共用同一份版本元数据，不再依赖仓库内的 releases.json。'
     ]
   };
 }
