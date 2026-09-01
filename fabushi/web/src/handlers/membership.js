@@ -1,7 +1,7 @@
 import { jsonResponse } from '../utils/response.js';
 import { verifyToken } from '../../auth-utils.js';
 import { isTestAccountRequest, testAccountUser } from '../utils/test-account.js';
-import { hasUnlimitedUsage } from '../utils/helpers.js';
+import { hasUnlimitedUsage, isAdminUser } from '../utils/helpers.js';
 
 async function resolveTokenUser(db, tokenData) {
   if (tokenData?.userId !== undefined && tokenData?.userId !== null && db.getUserById) {
@@ -35,13 +35,15 @@ async function requireMembershipUser(request, env, db) {
 }
 
 function buildMembershipPayload(user, env) {
-  if (hasUnlimitedUsage(user, env)) {
+  const unlimitedUsage = hasUnlimitedUsage(user, env);
+  if (unlimitedUsage) {
+    const admin = isAdminUser(user, env);
     return {
       username: user.username,
       userId: user.id,
       userNo: user.user_no ?? user.id ?? null,
       email: user.email,
-      role: 'super_admin',
+      role: admin ? 'super_admin' : 'user',
       unlimitedUsage: true,
       membership: {
         isActive: true,
@@ -87,6 +89,8 @@ async function testAccountMembershipResponse(request, env) {
     userNo: user.userNo,
     email: user.email,
     isTestAccount: true,
+    unlimitedUsage: true,
+    role: 'user',
     membership: {
       isActive: true,
       active: true,
