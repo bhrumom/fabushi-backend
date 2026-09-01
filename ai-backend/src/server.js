@@ -999,6 +999,10 @@ function extractRemoteAccount(payload) {
     username,
     email,
     isMember: normalizeMembershipPayload(payload),
+    isTestAccount: Boolean(data.isTestAccount ?? nestedUser.isTestAccount),
+    isAdmin: Boolean(data.isAdmin ?? nestedUser.isAdmin),
+    role: readFirstText([data.role, nestedUser.role]),
+    unlimitedUsage: Boolean(data.unlimitedUsage ?? nestedUser.unlimitedUsage),
     membership,
   };
 }
@@ -1010,6 +1014,10 @@ async function resolveRemoteAccount(token) {
     username: '',
     email: '',
     isMember: false,
+    isTestAccount: false,
+    isAdmin: false,
+    role: 'user',
+    unlimitedUsage: false,
     membership: null,
   };
   if (!token || !fabushiApiBaseUrl) return fallback;
@@ -1097,6 +1105,7 @@ async function resolveUser(req, body = {}) {
     tokenHash,
     isAuthenticated: remoteAccount.authenticated,
     isMember: remoteAccount.isMember || entitlements.unlimitedUsage,
+    isTestAccount: Boolean(remoteAccount.isTestAccount),
     role: entitlements.role,
     isAdmin: entitlements.isAdmin,
     unlimitedUsage: entitlements.unlimitedUsage,

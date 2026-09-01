@@ -15,6 +15,12 @@ test('bhrum108 is recognized by stable account id when profile names are absent'
   assert.equal(hasUnlimitedUsage(user, {}), true);
 });
 
+test('dedicated Fabushi MCP CI account has unlimited usage without admin access', () => {
+  const user = { username: 'fabushi_mcp_ci_test', email: '' };
+  assert.equal(isAdminUser(user, {}), false);
+  assert.equal(hasUnlimitedUsage(user, {}), true);
+});
+
 test('configured email admins keep admin access but do not gain unlimited quota', () => {
   const env = { ADMIN_EMAILS: 'ops@example.com' };
   const user = { username: 'ops', email: 'ops@example.com' };

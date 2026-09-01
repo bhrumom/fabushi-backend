@@ -29,6 +29,15 @@ test('ordinary accounts are not implicitly privileged', () => {
   });
 });
 
+test('dedicated Fabushi MCP CI account has unlimited usage without admin access', () => {
+  assert.deepEqual(resolveAccountEntitlements({ username: 'fabushi_mcp_ci_test' }, {}), {
+    role: 'user',
+    isAdmin: false,
+    unlimitedUsage: true,
+  });
+  assert.equal(hasUnlimitedUsage({ id: 197915874789377 }, {}), true);
+});
+
 test('additional super admins may be configured without removing bhrum108', () => {
   const env = { SUPER_ADMIN_USERNAMES: 'ops-admin', SUPER_ADMIN_ACCOUNT_IDS: '73' };
   assert.equal(hasUnlimitedUsage({ username: 'ops-admin' }, env), true);

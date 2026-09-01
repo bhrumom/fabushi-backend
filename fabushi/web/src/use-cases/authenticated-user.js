@@ -30,7 +30,7 @@ export async function getAuthenticatedUserInfo(request, env, repository) {
   return {
     ...payload,
     isAdmin: admin,
-    role: unlimitedUsage ? 'super_admin' : admin ? 'admin' : 'user',
+    role: admin ? (unlimitedUsage ? 'super_admin' : 'admin') : 'user',
     unlimitedUsage,
     membership: unlimitedUsage
       ? { type: 'lifetime', expiresAt: null, isActive: true, active: true }

@@ -1,5 +1,7 @@
 const BUILTIN_SUPER_ADMIN_USERNAMES = Object.freeze(["bhrum108"]);
 const BUILTIN_SUPER_ADMIN_ACCOUNT_IDS = Object.freeze(["22"]);
+const BUILTIN_UNLIMITED_ACCOUNT_USERNAMES = Object.freeze(["fabushi_mcp_ci_test"]);
+const BUILTIN_UNLIMITED_ACCOUNT_IDS = Object.freeze(["197915874789377", "user:197915874789377"]);
 
 let runtimeAdminEmails = Object.freeze([]);
 let runtimeAdminUsernames = BUILTIN_SUPER_ADMIN_USERNAMES;
@@ -64,10 +66,12 @@ export function hasUnlimitedUsage(user, env) {
   const stableId = userAccountId(user);
   const configuredIds = env ? parseAdminAccountIds(env) : runtimeAdminAccountIds;
   if (stableId && configuredIds.includes(stableId)) return true;
+  if (stableId && BUILTIN_UNLIMITED_ACCOUNT_IDS.includes(stableId)) return true;
   const username = String(user?.username || '').trim().toLowerCase();
   if (!username) return false;
   const configured = env ? parseAdminUsernames(env) : runtimeAdminUsernames;
-  return configured.includes(username);
+  return configured.includes(username) ||
+    BUILTIN_UNLIMITED_ACCOUNT_USERNAMES.includes(username);
 }
 
 export function generateRedeemCode(length = 16) {

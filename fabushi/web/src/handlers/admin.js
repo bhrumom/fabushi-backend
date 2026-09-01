@@ -31,7 +31,7 @@ export async function handleCheckAdminStatus(request, env, db) {
   const unlimitedUsage = hasUnlimitedUsage(user, env);
   return jsonResponse({
     isAdmin: admin,
-    role: unlimitedUsage ? 'super_admin' : admin ? 'admin' : 'user',
+    role: admin ? (unlimitedUsage ? 'super_admin' : 'admin') : 'user',
     unlimitedUsage,
     email: user.email,
     username: user.username,

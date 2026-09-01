@@ -1,5 +1,7 @@
 const BUILTIN_SUPER_ADMIN_USERNAMES = Object.freeze(['bhrum108']);
 const BUILTIN_SUPER_ADMIN_ACCOUNT_IDS = Object.freeze(['22']);
+const BUILTIN_UNLIMITED_ACCOUNT_USERNAMES = Object.freeze(['fabushi_mcp_ci_test']);
+const BUILTIN_UNLIMITED_ACCOUNT_IDS = Object.freeze(['197915874789377', 'user:197915874789377']);
 
 function normalizedUsernames(env = process.env) {
   const configured = String(env?.SUPER_ADMIN_USERNAMES || env?.ADMIN_USERNAMES || '')
@@ -17,6 +19,14 @@ function normalizedAccountIds(env = process.env) {
   return new Set([...BUILTIN_SUPER_ADMIN_ACCOUNT_IDS, ...configured]);
 }
 
+function unlimitedAccountUsername(username) {
+  return BUILTIN_UNLIMITED_ACCOUNT_USERNAMES.includes(username);
+}
+
+function unlimitedAccountId(id) {
+  return BUILTIN_UNLIMITED_ACCOUNT_IDS.includes(id);
+}
+
 function accountId(account) {
   return String(account?.id ?? account?.userId ?? account?.user_id ?? '').trim();
 }
@@ -31,7 +41,7 @@ export function resolveAccountEntitlements(account, env = process.env) {
   return {
     role: superAdmin ? 'super_admin' : 'user',
     isAdmin: superAdmin,
-    unlimitedUsage: superAdmin,
+    unlimitedUsage: superAdmin || unlimitedAccountUsername(username) || unlimitedAccountId(stableId),
   };
 }
 
