@@ -97,3 +97,36 @@ test('auth handler prefers token userId over mismatched username', async () => {
   assert.equal(payload.userId, 9);
   assert.equal(payload.username, 'right_user');
 });
+
+test('legacy handlers accept canonical Mahayana access tokens through the service binding', async () => {
+  const platformToken = [
+    Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url'),
+    Buffer.from(JSON.stringify({ sub: 'platform-user' })).toString('base64url'),
+    'signature',
+  ].join('.');
+  let forwarded;
+  const env = {
+    JWT_SECRET: TEST_ENV.JWT_SECRET,
+    MAHAYANA_PLATFORM: {
+      async fetch(request) {
+        forwarded = request;
+        return new Response(JSON.stringify({
+          id: 42,
+          userId: 42,
+          username: 'platform_user',
+          membership: { type: 'trial' },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    },
+  };
+
+  const payload = await verifyToken(platformToken, env);
+  assert.equal(payload.userId, 42);
+  assert.equal(payload.username, 'platform_user');
+  assert.equal(payload.platformAccessToken, true);
+  assert.equal(new URL(forwarded.url).pathname, '/api/auth/user-info');
+  assert.equal(forwarded.headers.get('Authorization'), `Bearer ${platformToken}`);
+});

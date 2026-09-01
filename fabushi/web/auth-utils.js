@@ -151,7 +151,7 @@ async function generateToken(identity, env) {
   return `${data}.${base64UrlEncode(signature)}`;
 }
 
-async function verifyToken(token, env) {
+async function verifyLegacyToken(token, env) {
   try {
     const parts = String(token || '').split('.');
     if (parts.length !== 3) return null;
@@ -182,6 +182,64 @@ async function verifyToken(token, env) {
   } catch {
     return null;
   }
+}
+
+async function verifyMahayanaAccessToken(token, env) {
+  // The canonical account service issues RS256 access tokens. Legacy Fabushi
+  // handlers still use this module, so ask the already-bound Mahayana service
+  // to validate the token instead of teaching every legacy handler a second
+  // JWT implementation. The service response is the authenticated identity;
+  // no client-supplied claims are trusted here.
+  if (!env?.MAHAYANA_PLATFORM || typeof env.MAHAYANA_PLATFORM.fetch !== 'function') {
+    return null;
+  }
+
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length !== 3) return null;
+    const header = JSON.parse(new TextDecoder().decode(base64UrlDecodeToArray(parts[0])));
+    if (header?.alg !== 'RS256' || (header.typ && header.typ !== 'JWT')) return null;
+
+    const response = await env.MAHAYANA_PLATFORM.fetch(
+      new Request('https://mahayana-platform.internal/api/auth/user-info', {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      }),
+    );
+    if (!response.ok) return null;
+
+    const payload = await response.json();
+    const user = payload?.user && typeof payload.user === 'object' ? payload.user : {};
+    const rawUserId = payload?.userId ?? payload?.id ?? user.userId ?? user.id;
+    const rawUsername = payload?.username ?? user.username;
+    const username = rawUsername ? String(rawUsername) : '';
+    const numericUserId = rawUserId === undefined || rawUserId === null
+      ? undefined
+      : Number(rawUserId);
+    const userId = Number.isSafeInteger(numericUserId) ? numericUserId : undefined;
+    if (!username && userId === undefined) return null;
+
+    return {
+      iss: 'mahayana-platform',
+      aud: 'mahayana-platform',
+      ver: 3,
+      userId,
+      username: username || undefined,
+      membership: payload?.membership ?? user.membership,
+      isAdmin: Boolean(payload?.isAdmin ?? user.isAdmin),
+      role: payload?.role ?? user.role,
+      unlimitedUsage: Boolean(payload?.unlimitedUsage ?? user.unlimitedUsage),
+      platformAccessToken: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function verifyToken(token, env) {
+  return await verifyLegacyToken(token, env) || await verifyMahayanaAccessToken(token, env);
 }
 
 function jsonResponse(data, status = 200) {
