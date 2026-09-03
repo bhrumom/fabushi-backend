@@ -1420,6 +1420,9 @@ async function callDeepSeekStream(messages, callbacks = {}) {
       ),
       stream: true,
       stream_options: { include_usage: true },
+      ...(Array.isArray(callbacks.tools) && callbacks.tools.length > 0
+        ? { tools: callbacks.tools, tool_choice: callbacks.toolChoice || 'auto' }
+        : {}),
     }),
     signal: callbacks.signal || AbortSignal.timeout(90_000),
   });
@@ -1452,50 +1455,77 @@ async function callDeepSeekStream(messages, callbacks = {}) {
     completionTokens: 0,
     totalTokens: 0,
   };
+  const toolCalls = [];
   const decoder = new TextDecoder();
+
+  const processLine = (rawLine) => {
+    const line = rawLine.trim();
+    if (!line.startsWith('data:')) return;
+    const data = line.slice('data:'.length).trim();
+    if (!data || data === '[DONE]') return;
+
+    let payload;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+
+    const delta = payload?.choices?.[0]?.delta?.content || '';
+    if (delta) {
+      message += delta;
+      callbacks.onToken?.(delta);
+    }
+
+    // DeepSeek streams function arguments in the same delta channel as
+    // text. Keep the calls losslessly so the Responses adapter can hand
+    // them back to the native Agent loop after the text has already been
+    // forwarded to the UI.
+    for (const streamedCall of payload?.choices?.[0]?.delta?.tool_calls || []) {
+      const index = Number.isInteger(streamedCall?.index)
+        ? streamedCall.index
+        : toolCalls.length;
+      const call = toolCalls[index] || {
+        id: streamedCall?.id || `call_${index}`,
+        type: 'function',
+        function: { name: '', arguments: '' },
+      };
+      if (streamedCall?.id) call.id = streamedCall.id;
+      if (streamedCall?.type) call.type = streamedCall.type;
+      if (streamedCall?.function?.name) call.function.name += streamedCall.function.name;
+      if (streamedCall?.function?.arguments) {
+        call.function.arguments += streamedCall.function.arguments;
+      }
+      toolCalls[index] = call;
+    }
+
+    if (payload?.usage) {
+      usage = {
+        promptTokens: Number(payload.usage.prompt_tokens || usage.promptTokens || 0),
+        completionTokens: Number(payload.usage.completion_tokens || usage.completionTokens || 0),
+        totalTokens: Number(payload.usage.total_tokens || usage.totalTokens || 0),
+      };
+    }
+  };
 
   for await (const chunk of response.body) {
     buffer += decoder.decode(chunk, { stream: true });
     const lines = buffer.split(/\r?\n/);
     buffer = lines.pop() || '';
-
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice('data:'.length).trim();
-      if (!data || data === '[DONE]') continue;
-
-      let payload;
-      try {
-        payload = JSON.parse(data);
-      } catch {
-        continue;
-      }
-
-      const delta = payload?.choices?.[0]?.delta?.content || '';
-      if (delta) {
-        message += delta;
-        callbacks.onToken?.(delta);
-      }
-
-      if (payload?.usage) {
-        usage = {
-          promptTokens: Number(payload.usage.prompt_tokens || usage.promptTokens || 0),
-          completionTokens: Number(payload.usage.completion_tokens || usage.completionTokens || 0),
-          totalTokens: Number(payload.usage.total_tokens || usage.totalTokens || 0),
-        };
-      }
-    }
+    for (const rawLine of lines) processLine(rawLine);
   }
+  buffer += decoder.decode();
+  if (buffer.trim()) processLine(buffer);
 
   message = message.trim();
-  if (!message) {
+  const normalizedToolCalls = toolCalls.filter(Boolean);
+  if (!message && normalizedToolCalls.length === 0) {
     const error = new Error('DeepSeek returned an empty response');
     error.statusCode = 502;
     throw error;
   }
 
-  return { message, model, usage };
+  return { message, toolCalls: normalizedToolCalls, model, usage };
 }
 
 function createCodexDeepSeekRuntime(user = null, runtimeOptions = {}) {
@@ -2661,36 +2691,96 @@ app.post(
         type: 'response.created',
         response: responsesPayload({ responseId, itemId, status: 'in_progress', model }),
       });
+      const abortController = new AbortController();
+      res.on('close', () => {
+        if (!res.writableEnded) abortController.abort();
+      });
+      let text = '';
+      let textItemStarted = false;
       try {
-        const result = await callDeepSeek(messages, {
+        const result = await callDeepSeekStream(messages, {
           model,
           maxCompletionTokens,
           maximumCompletionTokens: responseCompletionLimit,
           tools: responseTools,
+          signal: abortController.signal,
+          onToken: (delta) => {
+            text += delta;
+            if (!textItemStarted) {
+              textItemStarted = true;
+              writeResponsesEvent(res, 'response.output_item.added', {
+                type: 'response.output_item.added',
+                output_index: 0,
+                item: {
+                  id: itemId,
+                  type: 'message',
+                  role: 'assistant',
+                  status: 'in_progress',
+                  content: [],
+                },
+              });
+              writeResponsesEvent(res, 'response.content_part.added', {
+                type: 'response.content_part.added',
+                item_id: itemId,
+                output_index: 0,
+                content_index: 0,
+                part: { type: 'output_text', text: '' },
+              });
+            }
+            writeResponsesEvent(res, 'response.output_text.delta', {
+              type: 'response.output_text.delta',
+              item_id: itemId,
+              output_index: 0,
+              content_index: 0,
+              delta,
+            });
+          },
         });
         const outputItems = deepSeekResultToResponseItems(
           result,
           responseToolKinds,
           (prefix) => `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`,
-        );
+        ).map((item, outputIndex) => (
+          textItemStarted && outputIndex === 0 && item.type === 'message'
+            ? { ...item, id: itemId }
+            : item
+        ));
         outputItems.forEach((item, outputIndex) => {
           const addedItem = item.type === 'message'
             ? { ...item, status: 'in_progress', content: [] }
             : { ...item, status: 'in_progress' };
-          writeResponsesEvent(res, 'response.output_item.added', {
-            type: 'response.output_item.added',
-            output_index: outputIndex,
-            item: addedItem,
-          });
+          if (!(item.type === 'message' && textItemStarted)) {
+            writeResponsesEvent(res, 'response.output_item.added', {
+              type: 'response.output_item.added',
+              output_index: outputIndex,
+              item: addedItem,
+            });
+          }
           if (item.type === 'message') {
             const text = item.content?.find((part) => part.type === 'output_text')?.text || '';
-            if (text) {
+            if (text && !textItemStarted) {
               writeResponsesEvent(res, 'response.output_text.delta', {
                 type: 'response.output_text.delta',
                 item_id: item.id,
                 output_index: outputIndex,
                 content_index: 0,
                 delta: text,
+              });
+            }
+            if (textItemStarted && text) {
+              writeResponsesEvent(res, 'response.output_text.done', {
+                type: 'response.output_text.done',
+                item_id: itemId,
+                output_index: outputIndex,
+                content_index: 0,
+                text,
+              });
+              writeResponsesEvent(res, 'response.content_part.done', {
+                type: 'response.content_part.done',
+                item_id: itemId,
+                output_index: outputIndex,
+                content_index: 0,
+                part: { type: 'output_text', text },
               });
             }
           }
