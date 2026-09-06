@@ -7,7 +7,7 @@
   "main": "src/secure-entry.js",
   "scripts": {
     "start": "node src/secure-entry.js",
-    "check": "node --check src/server.js && node --check src/secure-entry.js && node --check src/account_sync_store.js && node --check src/marketplace_account_identity.js && node --check src/miniapp_marketplace.js && node --check src/miniapp_marketplace_catalog.js && node --check src/miniapp_marketplace_server_common.js && node --check src/miniapp_marketplace_mcp.js && node --check src/miniapp_marketplace_http.js && node --check src/miniapp_marketplace_bootstrap.js",
+    "check": "node --check src/server.js && node --check src/secure-entry.js && node --check src/account_sync_store.js && node --check src/marketplace_account_identity.js && node --check src/miniapp_marketplace.js && node --check src/miniapp_marketplace_catalog.js && node --check src/miniapp_marketplace_server_common.js && node --check src/miniapp_marketplace_mcp.js && node --check src/miniapp_marketplace_http.js && node --check src/miniapp_marketplace_bootstrap.js && node --check src/global_dharma_tool_contract.js && node --check src/global_dharma_runtime_store.js && node --check src/global_dharma_entitlement.js && node --check src/official_mcp_apps.js",
     "test": "node --test test/*.test.js",
     "test:platform-api": "node --test test/collaboration_api.test.js test/profile_feedback_api.test.js test/egress_api.test.js"
   },

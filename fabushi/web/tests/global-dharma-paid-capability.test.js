@@ -60,3 +60,41 @@ test('canonical entitlement route evaluates subscription lifecycle and active pr
   assert.match(commerce, /"purchaseOptions"/);
   assert.match(commerce, /"allowed": allowed/);
 });
+
+test('canonical Fabushi Pay enforces order and PaymentIntent idempotency instead of trusting a Mini App purchase flag', () => {
+  const commerce = text(join(root, 'src/worker_api/commerce.rs'));
+  const payment = text(join(root, 'src/payment_api.rs'));
+  assert.match(commerce, /order_by_idempotency/);
+  assert.match(commerce, /buyer_user_id = \?1 AND idempotency_key = \?2/);
+  assert.match(payment, /payment_by_idempotency/);
+  assert.match(payment, /idempotency key was reused with different payment semantics/);
+  assert.match(payment, /INSERT INTO payment_intents/);
+  assert.match(payment, /ON CONFLICT\(buyer_user_id, idempotency_key\) DO NOTHING/);
+});
+
+test('canonical provider callback inbox deduplicates events and only grants entitlement after succeeded capture', () => {
+  const payment = text(join(root, 'src/payment_api.rs'));
+  assert.match(payment, /claim_webhook_event/);
+  assert.match(payment, /INSERT OR IGNORE INTO payment_webhook_events/);
+  assert.match(payment, /provider, event_id, payload_sha256/);
+  assert.match(payment, /mark_webhook_processed/);
+  assert.match(payment, /INSERT OR IGNORE INTO entitlements/);
+  assert.match(payment, /FROM payment_intents WHERE payment_id = \?5 AND status = 'succeeded'/);
+});
+
+test('full provider refund revokes the active prayer-wheel entitlement and refunded order', () => {
+  const payment = text(join(root, 'src/payment_api.rs'));
+  assert.match(payment, /refundSucceeded/);
+  assert.match(payment, /apply_refund/);
+  assert.match(payment, /next_status == "refunded"/);
+  assert.match(payment, /UPDATE entitlements SET status = 'revoked', revoked_at = \?1 WHERE order_id = \?2 AND status = 'active'/);
+  assert.match(payment, /UPDATE orders SET status = 'refunded'/);
+});
+
+test('purchase restore is an authenticated server-side reread of canonical orders', () => {
+  const commerce = text(join(root, 'src/worker_api/commerce.rs'));
+  assert.match(commerce, /pub\(super\) async fn purchases_restore/);
+  assert.match(commerce, /let user_id = authenticated_user\(&request, &context\.env\)\?/);
+  assert.match(commerce, /purchases_response\(&context\.env, &user_id\)\.await/);
+  assert.match(commerce, /FROM orders WHERE buyer_user_id = \?1 ORDER BY created_at DESC/);
+});

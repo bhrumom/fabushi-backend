@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { normalizeMiniAppBotCalls } from './miniapp_call_program.js';
+import { globalDharmaMarketplaceCommands } from './global_dharma_tool_contract.js';
 
 export const MINIAPP_MARKETPLACE_PROTOCOL = 'fabushi.miniapp.marketplace.v2';
 export const MINIAPP_MANIFEST_PROTOCOL = 'fabushi.miniapp.manifest.v2';
@@ -364,14 +365,7 @@ const officialSeeds = [
       { id: 'local-cli', kind: 'cli', title: '本地 CLI', command: 'mahayana miniapp run global-dharma', platforms: ['desktop', 'cli'], local: true, priority: 90 },
       { id: 'web-ui', kind: 'web', title: '图形界面', url: 'https://fabushi.ombhrum.com/miniapps/global-dharma/', platforms: ['desktop', 'mobile', 'web'], priority: 80 },
     ],
-    commands: [
-      { name: 'status', description: '查看当前运行状态', surfaceId: 'remote-mcp', tool: 'status', aliases: ['状态'], naturalLanguageHints: ['现在运行到哪里', '查看状态'] },
-      { name: 'start', description: '启动本地模式', surfaceId: 'remote-mcp', tool: 'start', approval: 'required', naturalLanguageHints: ['开始运行', '启动转经轮'] },
-      { name: 'stop', description: '停止本地模式', surfaceId: 'remote-mcp', tool: 'stop', approval: 'required', naturalLanguageHints: ['停止运行'] },
-      { name: 'send', description: '确认后执行全球发送', surfaceId: 'remote-mcp', tool: 'send', approval: 'required', usage: '/global-dharma:send {"content":"..."}', naturalLanguageHints: ['发送法布施内容'] },
-      { name: 'logs', description: '查看最近运行日志', surfaceId: 'remote-mcp', tool: 'logs', aliases: ['日志'] },
-      { name: 'deploy_latest', description: '部署最新版本', surfaceId: 'remote-mcp', tool: 'deploy_latest', approval: 'destructive' },
-    ],
+    commands: globalDharmaMarketplaceCommands(),
     permissions: ['network', 'local-execution'],
     stats: { monthlyActiveUsers: 1000 },
   }),

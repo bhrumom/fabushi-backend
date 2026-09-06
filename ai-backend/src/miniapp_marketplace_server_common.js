@@ -82,6 +82,10 @@ export function commandDispatch(manifest, command, args = {}) {
 }
 
 function errorStatus(error) {
+  const explicitStatus = Number(error?.statusCode);
+  if (Number.isInteger(explicitStatus) && explicitStatus >= 400 && explicitStatus <= 599) {
+    return explicitStatus;
+  }
   const mapping = {
     NOT_FOUND: 404,
     FORBIDDEN: 403,

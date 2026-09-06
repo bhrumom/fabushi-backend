@@ -1,11 +1,15 @@
 import crypto from 'node:crypto';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 import { MINIAPP_MARKETPLACE_PROTOCOL } from './miniapp_marketplace.js';
+import { globalDharmaTool } from './global_dharma_tool_contract.js';
+import { createOfficialMcpServer } from './official_mcp_apps.js';
 import {
   ALL_PLATFORMS,
   MINIAPP_BOT_PROTOCOL,
@@ -22,6 +26,48 @@ import {
 
 const SESSION_TTL_MS = 30 * 60_000;
 const clone = (value) => JSON.parse(JSON.stringify(value));
+
+function globalDharmaInvocationArgs(toolName, args = {}) {
+  const definition = globalDharmaTool(toolName);
+  const next = { ...(args ?? {}) };
+  if (definition && !definition.annotations.readOnlyHint && !next.operationId && !next.operation_id) {
+    next.operationId = crypto.randomUUID();
+  }
+  return next;
+}
+
+async function invokeOfficialGlobalDharma({
+  runtimeStore,
+  runtimeAccountId,
+  entitlementResolver,
+  toolName,
+  args = {},
+}) {
+  const server = createOfficialMcpServer('global-dharma', runtimeAccountId, {
+    globalDharmaRuntimeStore: runtimeStore,
+    entitlementResolver,
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client(
+    { name: 'fabushi-global-dharma-bot', version: '1.0.0' },
+    { capabilities: {} },
+  );
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    return await client.callTool({ name: toolName, arguments: globalDharmaInvocationArgs(toolName, args) });
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
+function naturalLanguageArgs(toolName, message) {
+  if (toolName === 'chat') return { message };
+  if (toolName === 'send') return { content: message };
+  if (toolName === 'validate_config') return { config: {} };
+  return {};
+}
 
 export function createMarketplaceMcpServer(store, scopeId, baseUrl, accountState = null) {
   const server = new McpServer(
@@ -173,7 +219,11 @@ export function createMarketplaceMcpServer(store, scopeId, baseUrl, accountState
   return server;
 }
 
-export function createMiniAppBotMcpServer(store, scopeId, miniAppId, baseUrl) {
+export function createMiniAppBotMcpServer(store, scopeId, miniAppId, baseUrl, {
+  globalDharmaRuntimeStore = null,
+  runtimeAccountId = scopeId,
+  entitlementResolver = null,
+} = {}) {
   const manifest = requireManifest(store, miniAppId);
   const server = new McpServer(
     { name: `fabushi-miniapp-bot-${manifest.id}`, version: manifest.version },
@@ -207,11 +257,27 @@ export function createMiniAppBotMcpServer(store, scopeId, miniAppId, baseUrl) {
 
   server.registerTool('chat', {
     title: 'Natural Language Mini App Control',
-    description: 'Route natural language to this Mini App MCP or CLI command surface.',
+    description: 'Resolve natural language against the current Mini App Tool Contract and execute the selected tool.',
     inputSchema: { message: z.string().min(1).max(10_000) },
     annotations: annotations({ openWorld: true }),
   }, async ({ message }) => {
     const routed = store.routeInput(manifest.id, message);
+    if (manifest.id === 'global-dharma' && globalDharmaRuntimeStore) {
+      const selected = routed.kind === 'command'
+        ? routed.command
+        : routed.suggestedCommand;
+      const toolName = selected?.tool ?? selected?.name ?? 'chat';
+      const args = routed.kind === 'command'
+        ? routed.arguments
+        : naturalLanguageArgs(toolName, message);
+      return invokeOfficialGlobalDharma({
+        runtimeStore: globalDharmaRuntimeStore,
+        runtimeAccountId,
+        entitlementResolver,
+        toolName,
+        args,
+      });
+    }
     const payload = routed.kind === 'command'
       ? commandDispatch(manifest, routed.command, routed.arguments)
       : routed.suggestedCommand
@@ -234,18 +300,30 @@ export function createMiniAppBotMcpServer(store, scopeId, miniAppId, baseUrl) {
   }));
 
   for (const command of manifest.commands) {
+    const globalDefinition = manifest.id === 'global-dharma' ? globalDharmaTool(command.tool ?? command.name) : null;
     server.registerTool(command.name, {
       title: command.name,
       description: command.description,
       inputSchema: { arguments: z.record(z.unknown()).default({}) },
-      annotations: annotations({
+      annotations: globalDefinition?.annotations ?? annotations({
         destructive: command.approval === 'destructive',
         openWorld: true,
       }),
-    }, async ({ arguments: args }) => result(
-      `Prepared /${manifest.id}:${command.name}.`,
-      commandDispatch(manifest, command, args),
-    ));
+    }, async ({ arguments: args }) => {
+      if (manifest.id === 'global-dharma' && globalDharmaRuntimeStore) {
+        return invokeOfficialGlobalDharma({
+          runtimeStore: globalDharmaRuntimeStore,
+          runtimeAccountId,
+          entitlementResolver,
+          toolName: command.tool ?? command.name,
+          args,
+        });
+      }
+      return result(
+        `Prepared /${manifest.id}:${command.name}.`,
+        commandDispatch(manifest, command, args),
+      );
+    });
   }
 
   return server;

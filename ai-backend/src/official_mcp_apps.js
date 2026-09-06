@@ -5,6 +5,13 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
+import {
+  GLOBAL_DHARMA_TOOL_CONTRACT,
+  globalDharmaTool,
+  globalDharmaToolAnnotations,
+} from './global_dharma_tool_contract.js';
+import { GLOBAL_DHARMA_RUNTIME_PROTOCOL } from './global_dharma_runtime_store.js';
+
 const APP_MIME = 'text/html;profile=mcp-app';
 const VERSION = '1.0.0';
 
@@ -253,67 +260,170 @@ function escapeHtml(value) {
     .replaceAll('"', '&quot;');
 }
 
-function registerGlobalDharma(server, appInfo, state) {
-  const tools = ['home', 'chat', 'start', 'stop', 'loop', 'status', 'send', 'logs', 'validate_config', 'deploy_latest'];
+function fallbackGlobalRuntime(state, operationId = null) {
+  return {
+    protocol: GLOBAL_DHARMA_RUNTIME_PROTOCOL,
+    miniAppId: 'global-dharma',
+    revision: 0,
+    cursor: null,
+    state: JSON.parse(JSON.stringify(state.globalDharma)),
+    updatedAtMs: 0,
+    replayed: false,
+    ...(operationId ? { operationId } : {}),
+  };
+}
+
+function globalRuntimeSnapshot(state, runtimeStore, scopeId) {
+  return runtimeStore?.snapshot(scopeId) ?? fallbackGlobalRuntime(state);
+}
+
+function attachGlobalRuntime(toolResult, runtime) {
+  return {
+    ...toolResult,
+    structuredContent: {
+      ...(toolResult.structuredContent ?? {}),
+      runtime,
+    },
+  };
+}
+
+function runGlobalMutation(state, runtimeStore, scopeId, toolName, args, mutate) {
+  const operationId = String(args?.operationId ?? args?.operation_id ?? '').trim() || crypto.randomUUID();
+  if (runtimeStore) {
+    return runtimeStore.runMutation(scopeId, { operationId, toolName, args, mutate });
+  }
+  const toolResult = mutate(state.globalDharma);
+  return {
+    ...attachGlobalRuntime(toolResult, fallbackGlobalRuntime(state, operationId)),
+    structuredContent: {
+      ...(toolResult.structuredContent ?? {}),
+      runtime: fallbackGlobalRuntime(state, operationId),
+      operationId,
+    },
+  };
+}
+
+function registerGlobalDharma(server, appInfo, state, {
+  runtimeStore = null,
+  scopeId = 'contract-test',
+  entitlementResolver = null,
+} = {}) {
+  const tools = GLOBAL_DHARMA_TOOL_CONTRACT.map((entry) => entry.name);
   registerHome(server, appInfo, tools);
+  const operationId = z.string().min(1).max(160).optional();
+
   server.registerTool('chat', {
-    description: '处理全球法布施对话与快捷回复。',
+    description: globalDharmaTool('chat').description,
     inputSchema: {
       message: z.string().min(1).max(20_000),
       surface: z.string().optional(),
       locale: z.string().optional(),
       actionId: z.string().nullable().optional(),
+      operationId,
     },
-    annotations: writeLocal,
-  }, async ({ message }) => globalDharmaChat(state.globalDharma, message.trim()));
-  server.registerTool('start', { description: '启动全球法布施服务。', annotations: writeExternal }, async () => {
-    state.globalDharma.running = true;
-    state.globalDharma.logs.push('服务已启动');
-    return result('全球法布施已启动。', { ...state.globalDharma });
+    annotations: globalDharmaToolAnnotations('chat'),
+  }, async (input) => {
+    const message = input.message.trim();
+    let prayerWheelAccess = null;
+    const current = globalRuntimeSnapshot(state, runtimeStore, scopeId);
+    if (message === '开始' && current.state.mode === 'local-prayer-wheel') {
+      prayerWheelAccess = typeof entitlementResolver === 'function'
+        ? await entitlementResolver({ capability: 'local.prayer-wheel.start', miniAppId: 'global-dharma' })
+        : { allowed: false, protected: true, reason: 'entitlement_check_unavailable' };
+    }
+    return runGlobalMutation(state, runtimeStore, scopeId, 'chat', input, (runtimeState) =>
+      globalDharmaChat(runtimeState, message, { prayerWheelAccess }));
   });
-  server.registerTool('stop', { description: '停止全球法布施服务。', annotations: destructive }, async () => {
-    state.globalDharma.running = false;
-    state.globalDharma.logs.push('服务已停止');
-    return result('全球法布施已停止。', { ...state.globalDharma });
-  });
-  server.registerTool('loop', { description: '执行一次法布施调度循环。', annotations: writeExternal }, async (extra) => {
+
+  server.registerTool('start', {
+    description: globalDharmaTool('start').description,
+    inputSchema: { operationId },
+    annotations: globalDharmaToolAnnotations('start'),
+  }, async (input) => runGlobalMutation(state, runtimeStore, scopeId, 'start', input, (runtimeState) => {
+    runtimeState.running = true;
+    runtimeState.logs.push('服务已启动');
+    return result('全球法布施已启动。', { ...runtimeState });
+  }));
+
+  server.registerTool('stop', {
+    description: globalDharmaTool('stop').description,
+    inputSchema: { operationId },
+    annotations: globalDharmaToolAnnotations('stop'),
+  }, async (input) => runGlobalMutation(state, runtimeStore, scopeId, 'stop', input, (runtimeState) => {
+    runtimeState.running = false;
+    runtimeState.logs.push('服务已停止');
+    return result('全球法布施已停止。', { ...runtimeState });
+  }));
+
+  server.registerTool('loop', {
+    description: globalDharmaTool('loop').description,
+    inputSchema: { operationId },
+    annotations: globalDharmaToolAnnotations('loop'),
+  }, async (input, extra) => {
     await progress(extra, 0, 1, '开始调度');
-    state.globalDharma.loops += 1;
-    state.globalDharma.logs.push(`完成第 ${state.globalDharma.loops} 次循环`);
+    const completed = runGlobalMutation(state, runtimeStore, scopeId, 'loop', input, (runtimeState) => {
+      runtimeState.loops += 1;
+      runtimeState.logs.push(`完成第 ${runtimeState.loops} 次循环`);
+      return result('调度循环已完成。', { loops: runtimeState.loops });
+    });
     await progress(extra, 1, 1, '调度完成');
-    return result('调度循环已完成。', { loops: state.globalDharma.loops });
+    return completed;
   });
-  server.registerTool('status', { description: '读取服务状态。', annotations: readOnly }, async () => result('已读取全球法布施状态。', { ...state.globalDharma, logs: undefined }));
+
+  server.registerTool('status', {
+    description: globalDharmaTool('status').description,
+    annotations: globalDharmaToolAnnotations('status'),
+  }, async () => {
+    const runtime = globalRuntimeSnapshot(state, runtimeStore, scopeId);
+    return attachGlobalRuntime(result('已读取全球法布施状态。', { ...runtime.state, logs: undefined }), runtime);
+  });
+
   server.registerTool('send', {
-    description: '发送一条法布施内容。',
-    inputSchema: { content: z.string().min(1).max(20_000) },
-    annotations: writeExternal,
-  }, async ({ content }, extra) => {
+    description: globalDharmaTool('send').description,
+    inputSchema: { content: z.string().min(1).max(20_000), operationId },
+    annotations: globalDharmaToolAnnotations('send'),
+  }, async (input, extra) => {
     await progress(extra, 0, 1, '准备发送');
-    state.globalDharma.sent += 1;
-    state.globalDharma.logs.push(`已发送内容 #${state.globalDharma.sent}（${content.length} 字）`);
+    const completed = runGlobalMutation(state, runtimeStore, scopeId, 'send', input, (runtimeState) => {
+      runtimeState.sent += 1;
+      runtimeState.logs.push(`已发送内容 #${runtimeState.sent}（${input.content.length} 字）`);
+      return result('内容已发送。', { sent: runtimeState.sent });
+    });
     await progress(extra, 1, 1, '发送完成');
-    return result('内容已发送。', { sent: state.globalDharma.sent });
+    return completed;
   });
+
   server.registerTool('logs', {
-    description: '读取最近日志。',
+    description: globalDharmaTool('logs').description,
     inputSchema: { limit: z.number().int().min(1).max(200).default(50) },
-    annotations: readOnly,
-  }, async ({ limit }) => result('已读取日志。', { entries: state.globalDharma.logs.slice(-limit) }));
+    annotations: globalDharmaToolAnnotations('logs'),
+  }, async ({ limit }) => {
+    const runtime = globalRuntimeSnapshot(state, runtimeStore, scopeId);
+    return attachGlobalRuntime(result('已读取日志。', { entries: runtime.state.logs.slice(-limit) }), runtime);
+  });
+
   server.registerTool('validate_config', {
-    description: '验证法布施配置，不执行写入。',
+    description: globalDharmaTool('validate_config').description,
     inputSchema: { config: z.record(z.unknown()) },
-    annotations: readOnly,
-  }, async ({ config }) => result('配置有效。', { valid: true, keys: Object.keys(config) }));
-  server.registerTool('deploy_latest', { description: '部署最新已验证版本。', annotations: writeExternal }, async (extra) => {
+    annotations: globalDharmaToolAnnotations('validate_config'),
+  }, async ({ config }) => {
+    const runtime = globalRuntimeSnapshot(state, runtimeStore, scopeId);
+    return attachGlobalRuntime(result('配置有效。', { valid: true, keys: Object.keys(config) }), runtime);
+  });
+
+  server.registerTool('deploy_latest', {
+    description: globalDharmaTool('deploy_latest').description,
+    inputSchema: { operationId },
+    annotations: globalDharmaToolAnnotations('deploy_latest'),
+  }, async (input, extra) => {
     await progress(extra, 0, 1, '提交部署');
-    const deployment = result('已提交最新版本部署。', { deploymentId: crypto.randomUUID(), status: 'queued' });
+    const completed = runGlobalMutation(state, runtimeStore, scopeId, 'deploy_latest', input, () =>
+      result('已提交最新版本部署。', { deploymentId: crypto.randomUUID(), status: 'queued' }));
     await progress(extra, 1, 1, '部署已入队');
-    return deployment;
+    return completed;
   });
 }
-
-function globalDharmaChat(state, message) {
+function globalDharmaChat(state, message, { prayerWheelAccess = null } = {}) {
   if (message === '1' || message === '进入全球发送') {
     state.mode = 'global-send';
     state.pendingContent = null;
@@ -346,8 +456,17 @@ function globalDharmaChat(state, message) {
     });
   }
   if (message === '开始' && state.mode === 'local-prayer-wheel') {
-    return result('本地转经轮运行请求已准备好，宿主确认后才会执行。', {
-      handled: true, mode: state.mode,
+    if (!prayerWheelAccess?.allowed) {
+      return result('本地转经轮尚未获得服务端授权。请购买或恢复永久权限后重试。', {
+        handled: true,
+        mode: state.mode,
+        entitlementAccess: prayerWheelAccess ?? { allowed: false, protected: true, reason: 'entitlement_check_unavailable' },
+      });
+    }
+    return result('本地转经轮运行请求已准备好，宿主仍需在执行前复核权限并确认。', {
+      handled: true,
+      mode: state.mode,
+      entitlementAccess: prayerWheelAccess,
       hostRequest: { transport: 'mcp-host-bridge', capability: 'local.prayer-wheel.start', params: {} },
     });
   }
@@ -898,12 +1017,16 @@ function registerChatGptAutoConfirm(server, appInfo) {
   ));
 }
 
-export function createOfficialMcpServer(id, scopeId = 'contract-test') {
+export function createOfficialMcpServer(id, scopeId = 'contract-test', options = {}) {
   const appInfo = appById.get(id);
   if (!appInfo) return null;
   const state = stateFor(scopeId);
   const server = new McpServer({ name: `fabushi-${id}`, version: VERSION }, { capabilities: { tools: { listChanged: true }, resources: { listChanged: true } } });
-  if (id === 'global-dharma') registerGlobalDharma(server, appInfo, state);
+  if (id === 'global-dharma') registerGlobalDharma(server, appInfo, state, {
+    runtimeStore: options.globalDharmaRuntimeStore ?? null,
+    scopeId,
+    entitlementResolver: options.entitlementResolver ?? null,
+  });
   else if (id === 'faliu-flashcards') registerFlashcards(server, appInfo, state);
   else if (id === 'platform-publish') registerPlatformPublish(server, appInfo, state);
   else if (id === 'hermes-installer') registerHermes(server, appInfo, state);
@@ -913,7 +1036,7 @@ export function createOfficialMcpServer(id, scopeId = 'contract-test') {
   return server;
 }
 
-export async function handleOfficialMcpRequest(id, req, res, scopeId = 'anonymous') {
+export async function handleOfficialMcpRequest(id, req, res, scopeId = 'anonymous', options = {}) {
   if (!appById.has(id)) {
     res.status(404).json({ error: 'MCP plugin not found' });
     return;
@@ -933,7 +1056,7 @@ export async function handleOfficialMcpRequest(id, req, res, scopeId = 'anonymou
   }
 
   if (!session && req.method === 'POST' && !suppliedSessionId && isInitializeRequest(req.body)) {
-    const server = createOfficialMcpServer(id, scopeId);
+    const server = createOfficialMcpServer(id, scopeId, options);
     let transport;
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),

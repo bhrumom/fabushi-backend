@@ -4,6 +4,8 @@ import process from 'node:process';
 import express from 'express';
 
 import { AccountSyncStore } from './account_sync_store.js';
+import { readGlobalDharmaEntitlement } from './global_dharma_entitlement.js';
+import { GlobalDharmaRuntimeStore } from './global_dharma_runtime_store.js';
 import {
   legacySessionScope,
   resolveMarketplaceAccountIdentity,
@@ -36,8 +38,13 @@ import {
 const MAX_JSON_BYTES = '1mb';
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
+function bearerToken(req) {
+  const header = String(req.get?.('authorization') ?? req.headers?.authorization ?? '').trim();
+  return /^Bearer\s+/i.test(header) ? header.replace(/^Bearer\s+/i, '').trim() : '';
+}
+
 function hasBearer(req) {
-  return /^Bearer\s+/i.test(String(req.get?.('authorization') ?? req.headers?.authorization ?? '').trim());
+  return Boolean(bearerToken(req));
 }
 
 function publisherFromIdentity(identity, body = {}) {
@@ -64,6 +71,7 @@ export function createMiniAppMarketplaceRouter({
     seed: officialMiniAppPackageSeeds(),
   });
   const syncStore = accountSyncStore ?? new AccountSyncStore({ dataDir: resolvedDataDir });
+  const globalDharmaRuntimeStore = new GlobalDharmaRuntimeStore({ accountSyncStore: syncStore });
   const router = express.Router();
   router.use(express.json({ limit: MAX_JSON_BYTES }));
 
@@ -73,6 +81,11 @@ export function createMiniAppMarketplaceRouter({
       resolveUser,
       fetchImpl,
     });
+  }
+
+  function entitlementResolverFor(req) {
+    const token = bearerToken(req);
+    return ({ capability }) => readGlobalDharmaEntitlement({ token, capability, fetchImpl });
   }
 
   function syncInstalledApps(identity) {
@@ -264,6 +277,38 @@ export function createMiniAppMarketplaceRouter({
     res.json(syncStore.deleteCloudValue(identity.accountId, req.params.pluginId, key));
   }));
 
+  router.get('/v1/miniapps/:pluginId/runtime', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const manifest = requireManifest(marketplace, req.params.pluginId);
+    if (manifest.id !== 'global-dharma') {
+      throw new MiniAppMarketplaceError('RUNTIME_UNAVAILABLE', `shared runtime is not configured for ${manifest.id}`);
+    }
+    res.json(globalDharmaRuntimeStore.snapshot(identity.accountId));
+  }));
+
+  router.get('/v1/miniapps/:pluginId/runtime/difference', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const manifest = requireManifest(marketplace, req.params.pluginId);
+    if (manifest.id !== 'global-dharma') {
+      throw new MiniAppMarketplaceError('RUNTIME_UNAVAILABLE', `shared runtime is not configured for ${manifest.id}`);
+    }
+    res.json(globalDharmaRuntimeStore.difference(
+      identity.accountId,
+      safeQuery(req.query.cursor, 120) || null,
+      Number(req.query.limit ?? 200),
+    ));
+  }));
+
+  router.get('/v1/miniapps/:pluginId/entitlement/:capability', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const manifest = requireManifest(marketplace, req.params.pluginId);
+    if (manifest.id !== 'global-dharma') {
+      throw new MiniAppMarketplaceError('ENTITLEMENT_UNAVAILABLE', `entitlement projection is not configured for ${manifest.id}`);
+    }
+    const access = await entitlementResolverFor(req)({ capability: req.params.capability });
+    res.json({ miniAppId: manifest.id, account: { authenticated: true }, access });
+  }));
+
   router.post('/v1/marketplace/plugins/:pluginId/route', route(async (req, res) => {
     const manifest = requireManifest(marketplace, req.params.pluginId);
     const routed = marketplace.routeInput(req.params.pluginId, req.body?.input);
@@ -354,8 +399,8 @@ export function createMiniAppMarketplaceRouter({
   }));
 
   router.all('/api/mcp/miniapp-bot/:pluginId', route(async (req, res) => {
-    const identity = await identityFor(req);
     const id = req.params.pluginId;
+    const identity = await identityFor(req, { accountRequired: id === 'global-dharma' });
     const baseUrl = publicBaseUrl(req);
     requireManifest(marketplace, id);
     await handleMcpRequest({
@@ -363,11 +408,15 @@ export function createMiniAppMarketplaceRouter({
       req,
       res,
       scopeId: identity.scopeId,
-      createServer: () => createMiniAppBotMcpServer(marketplace, identity.scopeId, id, baseUrl),
+      createServer: () => createMiniAppBotMcpServer(marketplace, identity.scopeId, id, baseUrl, {
+        globalDharmaRuntimeStore,
+        runtimeAccountId: identity.accountId ?? identity.scopeId,
+        entitlementResolver: entitlementResolverFor(req),
+      }),
     });
   }));
 
-  return { router, marketplace, accountSyncStore: syncStore };
+  return { router, marketplace, accountSyncStore: syncStore, globalDharmaRuntimeStore };
 }
 
 export function registerMiniAppMarketplaceRoutes(app, options = {}) {
