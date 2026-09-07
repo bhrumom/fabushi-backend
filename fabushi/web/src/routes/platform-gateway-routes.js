@@ -57,6 +57,9 @@ export async function routePlatformGateway({ pathname, request, env }) {
     const upstream = await fetchPlatform(env, upstreamRequest);
     const headers = new Headers(upstream.headers);
     headers.set('X-Fabushi-Control-Plane', 'mahayana-platform');
+    // A versioned marker lets production smoke distinguish the canonical /v1
+    // gateway from the legacy Worker fallback that returns "API backend only".
+    headers.set('X-Fabushi-Platform-Gateway', 'v1');
     return new Response(upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,

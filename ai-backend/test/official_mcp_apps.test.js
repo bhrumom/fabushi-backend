@@ -68,6 +68,12 @@ for (const app of officialMcpApps) {
       assert.match(resource.contents[0].text, /Content-Security-Policy/);
       assert.match(resource.contents[0].text, /connect-src 'none'/);
       assert.doesNotMatch(resource.contents[0].text, /FabushiMiniApp|bot\.chat|localhost|127\.0\.0\.1/);
+      if (app.id === 'global-dharma') {
+        assert.match(resource.contents[0].text, /data-testid="global-dharma-file-picker"/);
+        assert.match(resource.contents[0].text, /file\.text\(\)/);
+        assert.match(resource.contents[0].text, /发送到全球法布施/);
+        assert.match(resource.contents[0].text, /name:tool,arguments:args/);
+      }
     } finally {
       await client.close();
       await server.close();

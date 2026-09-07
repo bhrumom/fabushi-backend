@@ -6,6 +6,7 @@ const tool = (name, description, {
   openWorld = false,
   aliases = [],
   naturalLanguageHints = [],
+  naturalLanguageArgument,
   usage,
 } = {}) => Object.freeze({
   name,
@@ -18,6 +19,7 @@ const tool = (name, description, {
   approval: readOnly ? 'none' : destructive ? 'destructive' : 'required',
   aliases: Object.freeze([...aliases]),
   naturalLanguageHints: Object.freeze([...naturalLanguageHints]),
+  ...(naturalLanguageArgument ? { naturalLanguageArgument } : {}),
   ...(usage ? { usage } : {}),
 });
 
@@ -54,6 +56,7 @@ export const GLOBAL_DHARMA_TOOL_CONTRACT = Object.freeze([
     openWorld: true,
     aliases: ['发送'],
     naturalLanguageHints: ['发送法布施内容', '全球发送'],
+    naturalLanguageArgument: 'content',
     usage: '/global-dharma:send {"content":"..."}',
   }),
   tool('logs', '读取最近运行日志。', {
@@ -87,13 +90,14 @@ export function globalDharmaMarketplaceCommands() {
   return GLOBAL_DHARMA_TOOL_CONTRACT
     .filter((entry) => entry.name !== 'home' && entry.name !== 'chat')
     .map((entry) => ({
-    name: entry.name,
-    description: entry.description,
-    surfaceId: 'remote-mcp',
-    tool: entry.name,
-    approval: entry.approval,
-    aliases: [...entry.aliases],
-    naturalLanguageHints: [...entry.naturalLanguageHints],
+      name: entry.name,
+      description: entry.description,
+      surfaceId: 'remote-mcp',
+      tool: entry.name,
+      approval: entry.approval,
+      aliases: [...entry.aliases],
+      naturalLanguageHints: [...entry.naturalLanguageHints],
+      ...(entry.naturalLanguageArgument ? { naturalLanguageArgument: entry.naturalLanguageArgument } : {}),
       ...(entry.usage ? { usage: entry.usage } : {}),
     }));
 }
