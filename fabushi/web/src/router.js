@@ -5,6 +5,7 @@ import { routeCoreRequest } from './routes/core-routes.js';
 import { routeAuthRequest } from './routes/auth-routes.js';
 import { routeMembershipRequest } from './routes/membership-routes.js';
 import { routeMonetizationRequest } from './routes/monetization-routes.js';
+import { routePaymentRequest } from './routes/payment-routes.js';
 import { routeCommerceRequest } from './routes/commerce-routes.js';
 import { routeCommunityRequest } from './routes/community-routes.js';
 import { routeContentRequest } from './routes/content-routes.js';
@@ -17,6 +18,7 @@ const ROUTERS = Object.freeze([
   routeAuthRequest,
   routeMembershipRequest,
   routeMonetizationRequest,
+  routePaymentRequest,
   routeCommerceRequest,
   routeCommunityRequest,
   routeContentRequest,
