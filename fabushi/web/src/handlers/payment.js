@@ -128,6 +128,8 @@ export async function handleCreateAlipayOrder(request, env, db) {
       });
     }
 
+    // Native Android/iOS clients consume this signed order string through the
+    // Alipay SDK. This is APP payment, not face-to-face precreate payment.
     const params = {
       ...common,
       method: 'alipay.trade.app.pay',

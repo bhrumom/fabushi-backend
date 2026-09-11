@@ -1,4 +1,4 @@
-// 支付宝当面付配置
+// 支付宝 APP 支付配置
 export const ALIPAY_CONFIG = {
   // 支付宝网关地址
   GATEWAY_URL: 'https://openapi.alipay.com/gateway.do',
@@ -12,19 +12,20 @@ export const ALIPAY_CONFIG = {
   
   // 回调地址配置
   CALLBACK_CONFIG: {
-    // 应用网关地址 - 用于接收支付宝异步通知
+    // 应用网关地址 - 用于接收支付宝 APP 支付异步通知
     // 注意：这个地址必须是外网可访问的，本地开发时可以使用 ngrok 等工具进行内网穿透
     NOTIFY_URL: '/api/alipay/notify',
     
-    // 授权回调地址 - 用户支付完成后跳转回应用的地址
+    // 网页支付返回地址；APP 支付由支付宝 SDK 回调，不使用该字段
     RETURN_URL: '/payment-success.html',
     
     // 支付宝登录回调地址
     LOGIN_RETURN_URL: '/login.html',
   },
   
-  // 当面付产品码
-  PRODUCT_CODE: 'FACE_TO_FACE_PAYMENT',
+  // APP 支付产品码；原生客户端通过 alipay.trade.app.pay 调起支付宝 APP
+  PRODUCT_CODE: 'QUICK_MSECURITY_PAY',
+  PAYMENT_METHOD: 'alipay.trade.app.pay',
   
   // 会员价格配置已移至Worker配置统一管理
   // MEMBERSHIP_PRICES: { ... }

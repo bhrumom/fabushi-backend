@@ -29,6 +29,24 @@ test('Global Dharma sells exactly the server-authoritative monthly and lifetime 
   assert.match(seed, /'google_play'.*'pending_configuration'/s);
 });
 
+test('official catalog rows are adopted by the developer API without creating a second product set', () => {
+  const adoption = text(join(migrations, '0021_developer_commerce_catalog_api.sql'));
+  assert.match(adoption, /ADD COLUMN catalog_source/);
+  assert.match(adoption, /'developer_api'/);
+  assert.match(adoption, /product\.adopted_to_developer_api/);
+  assert.match(adoption, /product\s*\n-- IDs, prices, orders and entitlements remain addressable/i);
+  assert.doesNotMatch(adoption, /INSERT INTO\s+(products|prices|payment_product_catalog)/i);
+});
+
+test('all catalog writes use the developer surface and the legacy admin product route is gone', () => {
+  const control = text(join(root, '../mahayana-commerce-control-worker/src/worker_v2.rs'));
+  const payWorker = text(join(root, '../mahayana-pay-worker/src/lib.rs'));
+  assert.match(control, /products\/batch/);
+  assert.match(control, /provisioning.*developer_api/s);
+  assert.doesNotMatch(payWorker, /v1\/pay\/admin\/products/);
+  assert.doesNotMatch(payWorker, /admin_upsert_product/);
+});
+
 test('forward migration normalizes the real host capability and preserves 30-day subscription semantics', () => {
   const repair = text(join(migrations, '0013_global_dharma_paid_capability_gate.sql'));
   for (const table of [

@@ -159,7 +159,9 @@ test('create Alipay order resolves stale token username through userId', async (
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ plan: 'monthly', platform: 'app' }),
+      // The historical native client sends only the plan; the backend default
+      // must keep this path on Alipay APP payment.
+      body: JSON.stringify({ plan: 'monthly' }),
     }),
     {
       ...env,
@@ -175,6 +177,10 @@ test('create Alipay order resolves stale token username through userId', async (
   assert.equal(response.status, 200);
   assert.equal(body.success, true);
   assert.equal(createdOrders.length, 1);
+  assert.equal(createdOrders[0].platform, 'app');
+  assert.match(body.orderString, /method=alipay\.trade\.app\.pay/);
+  assert.match(body.orderString, /QUICK_MSECURITY_PAY/);
+  assert.doesNotMatch(body.orderString, /alipay\.trade\.precreate/);
   assert.equal(createdOrders[0].username, 'real_paid_user');
   assert.equal(createdOrders[0].accountUserId, 55);
   assert.match(createdOrders[0].orderId, /^MEMBER_55_/);
