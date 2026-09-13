@@ -45,6 +45,9 @@ test('REST catalog supports search, release install metadata, add and command ro
     const release = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/releases/1.0.0?platform=desktop`, { headers }));
     assert.equal(release.releaseManifest.protocol, 'mahayana.external-release.v1');
     assert.equal(release.releaseManifest.artifacts.length, 1);
+    assert.equal(release.install.protocol, 'fabushi.marketplace.install.v1');
+    assert.equal(release.install.source.marketplaceHostsPackage, false);
+    assert.equal(release.install.update.comparison, 'version-then-artifact-sha256');
     assert.equal(release.bot.username, 'global_dharma_bot');
 
     const added = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/add`, {

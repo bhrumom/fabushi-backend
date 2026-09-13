@@ -9,6 +9,7 @@ import { globalDharmaMarketplaceCommands } from './global_dharma_tool_contract.j
 export const MINIAPP_MARKETPLACE_PROTOCOL = 'fabushi.miniapp.marketplace.v2';
 export const MINIAPP_MANIFEST_PROTOCOL = 'fabushi.miniapp.manifest.v2';
 export const MINIAPP_RELEASE_PROTOCOL = 'mahayana.external-release.v1';
+export const MINIAPP_INSTALL_PROTOCOL = 'fabushi.marketplace.install.v1';
 export const MINIAPP_GENERATION_PROTOCOL = 'mahayana.miniapp.generation.v1';
 
 const REVIEW_STATES = new Set(['draft', 'validating', 'pending_review', 'approved', 'rejected', 'yanked']);
@@ -19,6 +20,7 @@ const DEFAULT_STORAGE_PATH = path.join(os.homedir(), '.fabushi', 'miniapp-market
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
+const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}$/i;
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -204,6 +206,55 @@ function normalizedDistribution(value, surfaces) {
   if (installMode === 'package' && artifacts.length === 0) {
     throw new MiniAppMarketplaceError('INVALID_MANIFEST', 'package installs require at least one external artifact');
   }
+  const sourceRef = optionalText(distribution.sourceRef, 160);
+  if (installMode === 'package' && !sourceRef) {
+    throw new MiniAppMarketplaceError(
+      'INVALID_MANIFEST',
+      'package installs require an immutable GitHub sourceRef',
+    );
+  }
+  if (installMode === 'package') {
+    let repositoryUrl;
+    try {
+      repositoryUrl = new URL(repository);
+    } catch {
+      repositoryUrl = null;
+    }
+    const repositoryPath = repositoryUrl?.pathname.split('/').filter(Boolean) ?? [];
+    if (repositoryUrl?.hostname.toLocaleLowerCase() !== 'github.com'
+      || repositoryPath.length !== 2
+      || repositoryUrl.username
+      || repositoryUrl.password
+      || repositoryUrl.port
+      || repositoryUrl.search
+      || repositoryUrl.hash
+      || !GIT_COMMIT_PATTERN.test(sourceRef)) {
+      throw new MiniAppMarketplaceError(
+        'INVALID_MANIFEST',
+        'package installs require a public GitHub owner/repository and a 40-character commit sourceRef',
+      );
+    }
+    if (artifacts.some((artifact) => {
+      let artifactUrl;
+      try {
+        artifactUrl = new URL(artifact.url);
+      } catch {
+        artifactUrl = null;
+      }
+      return !artifact.sizeBytes || !artifactUrl
+        || !['github.com', 'raw.githubusercontent.com'].includes(artifactUrl.hostname.toLocaleLowerCase())
+        || artifactUrl.username
+        || artifactUrl.password
+        || artifactUrl.port
+        || artifactUrl.search
+        || artifactUrl.hash;
+    })) {
+      throw new MiniAppMarketplaceError(
+        'INVALID_MANIFEST',
+        'package artifacts require a positive size and a GitHub-hosted HTTPS URL',
+      );
+    }
+  }
   if (installMode === 'metadata' && !surfaces.some((surface) => ['web', 'mcp-http'].includes(surface.kind))) {
     throw new MiniAppMarketplaceError(
       'INVALID_MANIFEST',
@@ -214,7 +265,7 @@ function normalizedDistribution(value, surfaces) {
     installMode,
     repository,
     manifestUrl,
-    sourceRef: optionalText(distribution.sourceRef, 160),
+    sourceRef,
     license: optionalText(distribution.license, 80),
     artifacts,
     marketplaceHostsPackage: false,
@@ -560,6 +611,7 @@ export function officialMiniAppManifests() {
 }
 
 export function marketplaceSummary(manifest) {
+  const release = createReleaseMetadata(manifest);
   return {
     pluginId: manifest.id,
     displayName: manifest.title,
@@ -567,11 +619,13 @@ export function marketplaceSummary(manifest) {
     latestVersion: manifest.version,
     platforms: [...new Set(manifest.surfaces.flatMap((surface) => surface.platforms))],
     releaseStatus: manifest.review.state,
-    releaseManifest: createReleaseMetadata(manifest).releaseManifest,
+    releaseManifest: release.releaseManifest,
+    install: release.install,
     source: {
       protocol: manifest.protocol,
       publisher: manifest.publisher,
       repository: manifest.distribution.repository,
+      sourceRef: manifest.distribution.sourceRef,
       manifestUrl: manifest.distribution.manifestUrl,
       bot: manifest.bot,
       surfaces: manifest.surfaces,
@@ -582,12 +636,33 @@ export function marketplaceSummary(manifest) {
   };
 }
 
+const RELEASE_ALL_PLATFORMS = ['desktop', 'mobile', 'web', 'cli', 'ios', 'android', 'chrome-extension'];
+
+function releaseArtifact(artifact) {
+  const format = artifact.archiveFormat;
+  const runtime = ['user-js', 'userscript'].includes(String(format).toLocaleLowerCase())
+    ? 'userscript'
+    : 'local-web';
+  return {
+    id: artifact.id,
+    runtime,
+    platforms: artifact.platform === 'all' ? [...RELEASE_ALL_PLATFORMS] : [artifact.platform],
+    source: { type: 'https', url: artifact.url },
+    sha256: artifact.sha256,
+    size: artifact.sizeBytes,
+    format,
+    entry: runtime === 'userscript' ? 'script.user.js' : 'index.html',
+  };
+}
+
 export function createReleaseMetadata(manifestInput, platform = 'desktop') {
   const manifest = normalizeMiniAppManifest(manifestInput, { allowDraft: true });
   if (manifest.review.state !== 'approved') {
     throw new MiniAppMarketplaceError('RELEASE_NOT_APPROVED', `${manifest.id}@${manifest.version} is not approved`);
   }
-  const matchingArtifacts = manifest.distribution.artifacts.filter((artifact) => artifact.platform === platform || artifact.platform === 'all');
+  const matchingArtifacts = manifest.distribution.artifacts
+    .filter((artifact) => artifact.platform === platform || artifact.platform === 'all')
+    .map(releaseArtifact);
   const selectedSurface = [...manifest.surfaces]
     .filter((surface) => surface.platforms.includes(platform) || surface.platforms.includes('all'))
     .sort((left, right) => right.priority - left.priority)[0] ?? manifest.surfaces[0];
@@ -614,10 +689,32 @@ export function createReleaseMetadata(manifestInput, platform = 'desktop') {
     },
     artifacts: matchingArtifacts,
   };
+  const install = {
+    protocol: 'fabushi.marketplace.install.v1',
+    strategy: 'github-immutable',
+    pluginId: manifest.id,
+    version: manifest.version,
+    source: {
+      repository: manifest.distribution.repository,
+      sourceRef: manifest.distribution.sourceRef,
+      manifestUrl: manifest.distribution.manifestUrl,
+      marketplaceHostsPackage: false,
+    },
+    artifacts: matchingArtifacts,
+    update: {
+      check: 'marketplace-release',
+      comparison: 'version-then-artifact-sha256',
+      allowDowngrade: false,
+      rollback: 'previous-active',
+    },
+    permissions: manifest.permissions,
+  };
+  releaseManifest.install = install;
   return {
     pluginId: manifest.id,
     version: manifest.version,
     releaseStatus: manifest.review.state,
+    install,
     releaseManifest,
   };
 }

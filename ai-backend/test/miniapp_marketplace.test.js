@@ -94,10 +94,61 @@ test('official catalog is searchable and uses immutable external artifacts', () 
     assert.equal(release.releaseManifest.protocol, 'mahayana.external-release.v1');
     assert.equal(release.releaseManifest.artifacts[0].runtime, 'local-web');
     assert.equal(release.releaseManifest.artifacts[0].format, 'tar-gz');
+    assert.equal(release.install.protocol, 'fabushi.marketplace.install.v1');
+    assert.equal(release.install.strategy, 'github-immutable');
+    assert.equal(release.install.source.sourceRef, MINIAPP_PACKAGE_COMMIT);
+    assert.equal(release.install.artifacts[0].sha256, manifest.distribution.artifacts[0].sha256);
+    assert.equal(release.install.artifacts[0].runtime, 'local-web');
+    assert.ok(release.install.artifacts[0].platforms.includes('desktop'));
+    assert.ok(release.install.artifacts[0].platforms.includes('chrome-extension'));
+    assert.equal(release.install.update.allowDowngrade, false);
+    assert.equal(release.releaseManifest.install.protocol, 'fabushi.marketplace.install.v1');
     assert.equal(release.source.marketplaceHostsPackage, false);
   } finally {
     scope.cleanup();
   }
+});
+
+test('package manifests must pin their executable bytes to an immutable sourceRef', () => {
+  const manifest = thirdPartyManifest();
+  manifest.distribution = {
+    ...manifest.distribution,
+    installMode: 'package',
+    sourceRef: undefined,
+    artifacts: [{
+      id: 'example-package',
+      platform: 'all',
+      archiveFormat: 'tar-gz',
+      url: 'https://github.com/example/example-tool/releases/download/v1.2.3/app.tar.gz',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 128,
+    }],
+  };
+  assert.throws(
+    () => normalizeMiniAppManifest(manifest),
+    /immutable GitHub sourceRef/,
+  );
+});
+
+test('package manifests must keep code and artifacts on GitHub', () => {
+  const manifest = thirdPartyManifest();
+  manifest.distribution = {
+    ...manifest.distribution,
+    installMode: 'package',
+    sourceRef: 'a'.repeat(40),
+    artifacts: [{
+      id: 'example-package',
+      platform: 'all',
+      archiveFormat: 'tar-gz',
+      url: 'https://example.com/releases/download/v1.2.3/app.tar.gz',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 128,
+    }],
+  };
+  assert.throws(
+    () => normalizeMiniAppManifest(manifest),
+    /GitHub-hosted HTTPS URL/,
+  );
 });
 
 test('Douyin downloader is searchable in Chinese and installable from an immutable package', () => {

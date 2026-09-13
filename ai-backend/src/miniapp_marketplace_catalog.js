@@ -1,4 +1,4 @@
-import { MiniAppMarketplace, MiniAppMarketplaceError, officialMiniAppManifests } from './miniapp_marketplace.js';
+import { MiniAppMarketplace, MiniAppMarketplaceError, MINIAPP_INSTALL_PROTOCOL, officialMiniAppManifests } from './miniapp_marketplace.js';
 import { requireManifest } from './miniapp_marketplace_server_common.js';
 
 export const MINIAPP_PACKAGE_COMMIT = '7b02d8d00e0646e9bf4e90a129cbf203fcff015d';
@@ -207,6 +207,32 @@ function runtimeArtifact(artifact, runtimeForm) {
   };
 }
 
+function installContract(manifest, artifacts, runtimeForm) {
+  const resolvedArtifacts = artifacts.map((artifact) => artifact.source
+    ? artifact
+    : runtimeArtifact(artifact, runtimeForm));
+  return {
+    protocol: MINIAPP_INSTALL_PROTOCOL,
+    strategy: 'github-immutable',
+    pluginId: manifest.id,
+    version: manifest.version,
+    source: {
+      repository: manifest.distribution.repository,
+      sourceRef: manifest.distribution.sourceRef,
+      manifestUrl: manifest.distribution.manifestUrl,
+      marketplaceHostsPackage: false,
+    },
+    artifacts: resolvedArtifacts,
+    update: {
+      check: 'marketplace-release',
+      comparison: 'version-then-artifact-sha256',
+      allowDowngrade: false,
+      rollback: 'previous-active',
+    },
+    permissions: manifest.permissions,
+  };
+}
+
 export function marketplaceReleaseResponse(manifest, platform = 'desktop') {
   if (!manifest || manifest.review?.state !== 'approved') {
     throw new MiniAppMarketplaceError('RELEASE_NOT_APPROVED', 'mini app release is not approved');
@@ -224,11 +250,13 @@ export function marketplaceReleaseResponse(manifest, platform = 'desktop') {
   if (manifest.distribution.installMode === 'package' && artifacts.length === 0) {
     throw new MiniAppMarketplaceError('NO_COMPATIBLE_ARTIFACT', `no ${platform} artifact is available`);
   }
+  const install = installContract(manifest, artifacts, runtimeForm);
   return {
     pluginId: manifest.id,
     version: manifest.version,
     runtimeForm,
     releaseStatus: manifest.review.state,
+    install,
     releaseManifest: {
       schemaVersion: 1,
       protocol: 'mahayana.external-release.v1',
@@ -237,6 +265,7 @@ export function marketplaceReleaseResponse(manifest, platform = 'desktop') {
       runtimeForm,
       permissions: manifest.permissions,
       artifacts,
+      install,
     },
     source: {
       protocol: manifest.protocol,
@@ -273,6 +302,7 @@ export function browseMarketplace(store, options = {}, baseUrl = '') {
         categories: manifest.categories,
         tags: manifest.tags,
         releaseManifest: release.releaseManifest,
+        install: release.install,
         source: { ...plugin.source, ...release.source },
         bot: manifest.bot,
         surfaces: manifest.surfaces,
