@@ -1,12 +1,14 @@
 import { MiniAppMarketplace, MiniAppMarketplaceError, MINIAPP_INSTALL_PROTOCOL, officialMiniAppManifests } from './miniapp_marketplace.js';
 import { requireManifest } from './miniapp_marketplace_server_common.js';
 
-export const MINIAPP_PACKAGE_COMMIT = '7b02d8d00e0646e9bf4e90a129cbf203fcff015d';
+export const MINIAPP_PACKAGE_COMMIT = 'cc23420c56c98f7857b731832281c212203ce60c';
 export const MINIAPP_BOT_PROTOCOL = 'fabushi.miniapp.bot.v2';
 export const CHROME_EXTENSION_PLATFORM = 'chrome-extension';
 export const USER_SCRIPT_RUNTIME_FORM = 'userscript';
 
 const RAW_PACKAGE_ROOT = `https://raw.githubusercontent.com/bhrumom/fabushi/${MINIAPP_PACKAGE_COMMIT}/marketplace/packages`;
+const MARKETPLACE_PACKAGE_RELEASE_TAG = 'marketplace-v1.0.1-cc23420c56c9';
+const MARKETPLACE_PACKAGE_RELEASE_ASSET_ROOT = `https://github.com/bhrumom/fabushi/releases/download/${MARKETPLACE_PACKAGE_RELEASE_TAG}`;
 export const ALL_PLATFORMS = ['desktop', 'mobile', 'web', 'cli', 'ios', 'android', CHROME_EXTENSION_PLATFORM];
 const USER_SCRIPT_ARCHIVE_FORMATS = new Set(['user-js', 'userscript']);
 
@@ -105,14 +107,16 @@ const packageCatalog = {
     sizeBytes: 1805,
   },
   'chatgpt-auto-confirm': {
-    version: '1.0.0+codex.20260810093000',
-    sha256: 'c668cb932b534499e31fb6ffeee72687a03e8348c4fb0865ca1887602db68c2f',
-    sizeBytes: 1822,
+    version: '1.0.1',
+    sha256: 'ce5beae5f3b8a29dccb65cb91744f2a82bb19186c3f7031ca75f405ab4effb76',
+    sizeBytes: 983,
+    artifactUrl: `${MARKETPLACE_PACKAGE_RELEASE_ASSET_ROOT}/chatgpt-auto-confirm-1.0.1.tar.gz`,
   },
   'faliu-flashcards': {
-    version: '1.0.0',
-    sha256: '7383d21f888b07045810a6dca515098e4dcdaae8d96b79be5401f2b96fdc40f5',
-    sizeBytes: 1738,
+    version: '1.0.1',
+    sha256: 'fb2a8fa187fde312069c9facb49657c366cfa4176f27a90abff5aa407e260356',
+    sizeBytes: 1729,
+    artifactUrl: `${MARKETPLACE_PACKAGE_RELEASE_ASSET_ROOT}/faliu-flashcards-1.0.1.tar.gz`,
   },
   'global-dharma': {
     version: '1.0.0',
@@ -125,9 +129,10 @@ const packageCatalog = {
     sizeBytes: 3069,
   },
   'hermes-installer': {
-    version: '1.0.0',
-    sha256: '95adcdb83440ed143874c402c222856de89dc5bfd7ec910dbeece089d88aeec4',
-    sizeBytes: 1741,
+    version: '1.0.1',
+    sha256: 'e693cb2378d580cb86d88fb391a04b8c96dcf6614b445c32339bfb7358e0c4cd',
+    sizeBytes: 1731,
+    artifactUrl: `${MARKETPLACE_PACKAGE_RELEASE_ASSET_ROOT}/hermes-installer-1.0.1.tar.gz`,
   },
   'mahayana-assistant': {
     version: '1.0.0',
@@ -157,7 +162,8 @@ export function officialMiniAppPackageSeeds() {
             platform: 'all',
             architecture: 'any',
             archiveFormat: 'tar-gz',
-            url: `${RAW_PACKAGE_ROOT}/${encodeURIComponent(manifest.id)}/${encodeURIComponent(manifest.version)}/app.tar.gz`,
+            url: artifact.artifactUrl
+              ?? `${RAW_PACKAGE_ROOT}/${encodeURIComponent(manifest.id)}/${encodeURIComponent(manifest.version)}/app.tar.gz`,
             sha256: artifact.sha256,
             sizeBytes: artifact.sizeBytes,
           },

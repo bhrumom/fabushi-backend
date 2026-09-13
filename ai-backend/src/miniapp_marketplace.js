@@ -422,7 +422,7 @@ const officialSeeds = [
   }),
   officialManifest({
     id: 'faliu-flashcards',
-    version: '1.0.0',
+    version: '1.0.1',
     title: '法流记忆卡',
     description: '通过自然语言、MCP 命令和图形界面创建、打开与复习法流记忆卡。',
     categories: ['official', 'education', 'buddhism'],
@@ -464,7 +464,7 @@ const officialSeeds = [
   }),
   officialManifest({
     id: 'hermes-installer',
-    version: '1.0.0',
+    version: '1.0.1',
     title: 'Hermes 安装器',
     description: '安全检查、安装和运行 Hermes，密钥只进入 Secret Store。',
     categories: ['official', 'developer-tools'],
@@ -529,7 +529,7 @@ const officialSeeds = [
   }),
   officialManifest({
     id: 'chatgpt-auto-confirm',
-    version: '1.0.0+codex.20260810093000',
+    version: '1.0.1',
     title: 'ChatGPT 自动确认',
     description: '在桌面端运行可恢复任务队列并只自动确认非敏感授权卡。',
     categories: ['official', 'automation'],
