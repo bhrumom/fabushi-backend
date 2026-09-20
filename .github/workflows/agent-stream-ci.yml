@@ -1,0 +1,32 @@
+name: Agent Stream CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ai-backend/src/server.js"
+      - "ai-backend/src/deepseek_stream_policy.js"
+      - "ai-backend/test/deepseek_stream_policy.test.js"
+      - "ai-backend/test/codex_deepseek_adapter.test.js"
+      - ".github/workflows/agent-stream-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stream-policy:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ai-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ai-backend/package-lock.json
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - run: npm run check
+      - run: node --test test/deepseek_stream_policy.test.js test/codex_deepseek_adapter.test.js
