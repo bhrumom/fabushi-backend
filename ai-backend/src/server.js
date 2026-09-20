@@ -30,6 +30,13 @@ import {
   deepSeekResultToResponseItems,
 } from './codex_deepseek_adapter.js';
 import {
+  compactDeepSeekMessagesForFirstTokenRetry,
+  deepSeekFirstTokenTimeoutMs,
+  deepSeekStreamTimeoutMs,
+  firstTokenTimeoutError,
+  isFirstTokenTimeout,
+} from './deepseek_stream_policy.js';
+import {
   createPluginCodexPolicy,
   pluginConversationNamespace,
   pluginMcpTokenEnv,
@@ -1432,29 +1439,62 @@ async function callDeepSeekStream(messages, callbacks = {}) {
   }
 
   const model = normalizeDeepSeekModelName(callbacks.model);
-  const response = await fetch(`${deepseekBaseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Accept: 'text/event-stream',
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${deepseekApiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.4,
-      max_tokens: normalizeMaxCompletionTokens(
-        callbacks.maxCompletionTokens,
-        callbacks.maximumCompletionTokens || deepseekMaxCompletionTokens,
-      ),
-      stream: true,
-      stream_options: { include_usage: true },
-      ...(Array.isArray(callbacks.tools) && callbacks.tools.length > 0
-        ? { tools: callbacks.tools, tool_choice: callbacks.toolChoice || 'auto' }
-        : {}),
-    }),
-    signal: callbacks.signal || AbortSignal.timeout(90_000),
-  });
+  const firstTokenTimeoutMs = deepSeekFirstTokenTimeoutMs();
+  const streamTimeoutMs = deepSeekStreamTimeoutMs();
+  const firstTokenController = new AbortController();
+  let firstOutputSeen = false;
+  let firstTokenTimedOut = false;
+  let firstTokenTimer;
+  const markFirstOutput = () => {
+    if (firstOutputSeen) return;
+    firstOutputSeen = true;
+    if (firstTokenTimer) clearTimeout(firstTokenTimer);
+    callbacks.onFirstOutput?.();
+  };
+  firstTokenTimer = setTimeout(() => {
+    if (firstOutputSeen) return;
+    firstTokenTimedOut = true;
+    firstTokenController.abort();
+  }, firstTokenTimeoutMs);
+  firstTokenTimer.unref?.();
+
+  const signals = [
+    firstTokenController.signal,
+    AbortSignal.timeout(streamTimeoutMs),
+    callbacks.signal,
+  ].filter(Boolean);
+  const signal = AbortSignal.any(signals);
+
+  let response;
+  try {
+    response = await fetch(`${deepseekBaseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${deepseekApiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.4,
+        max_tokens: normalizeMaxCompletionTokens(
+          callbacks.maxCompletionTokens,
+          callbacks.maximumCompletionTokens || deepseekMaxCompletionTokens,
+        ),
+        stream: true,
+        stream_options: { include_usage: true },
+        ...(Array.isArray(callbacks.tools) && callbacks.tools.length > 0
+          ? { tools: callbacks.tools, tool_choice: callbacks.toolChoice || 'auto' }
+          : {}),
+      }),
+      signal,
+    });
+  } catch (error) {
+    clearTimeout(firstTokenTimer);
+    if (firstTokenTimedOut) throw firstTokenTimeoutError(firstTokenTimeoutMs);
+    throw error;
+  }
 
   if (!response.ok) {
     const bodyText = await response.text();
@@ -1474,6 +1514,7 @@ async function callDeepSeekStream(messages, callbacks = {}) {
     if (response.status === 402 || /insufficient\s+balance/i.test(upstreamMessage)) {
       error.code = 'DEEPSEEK_PROVIDER_QUOTA';
     }
+    clearTimeout(firstTokenTimer);
     throw error;
   }
 
@@ -1502,6 +1543,7 @@ async function callDeepSeekStream(messages, callbacks = {}) {
 
     const delta = payload?.choices?.[0]?.delta?.content || '';
     if (delta) {
+      markFirstOutput();
       message += delta;
       callbacks.onToken?.(delta);
     }
@@ -1510,7 +1552,9 @@ async function callDeepSeekStream(messages, callbacks = {}) {
     // text. Keep the calls losslessly so the Responses adapter can hand
     // them back to the native Agent loop after the text has already been
     // forwarded to the UI.
-    for (const streamedCall of payload?.choices?.[0]?.delta?.tool_calls || []) {
+    const streamedCalls = payload?.choices?.[0]?.delta?.tool_calls || [];
+    if (streamedCalls.length > 0) markFirstOutput();
+    for (const streamedCall of streamedCalls) {
       const index = Number.isInteger(streamedCall?.index)
         ? streamedCall.index
         : toolCalls.length;
@@ -1537,14 +1581,21 @@ async function callDeepSeekStream(messages, callbacks = {}) {
     }
   };
 
-  for await (const chunk of response.body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-    for (const rawLine of lines) processLine(rawLine);
+  try {
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (const rawLine of lines) processLine(rawLine);
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) processLine(buffer);
+  } catch (error) {
+    if (firstTokenTimedOut) throw firstTokenTimeoutError(firstTokenTimeoutMs);
+    throw error;
+  } finally {
+    clearTimeout(firstTokenTimer);
   }
-  buffer += decoder.decode();
-  if (buffer.trim()) processLine(buffer);
 
   message = message.trim();
   const normalizedToolCalls = toolCalls.filter(Boolean);
@@ -1555,6 +1606,26 @@ async function callDeepSeekStream(messages, callbacks = {}) {
   }
 
   return { message, toolCalls: normalizedToolCalls, model, usage };
+}
+
+async function callDeepSeekStreamWithFirstTokenRetry(messages, callbacks = {}) {
+  try {
+    return await callDeepSeekStream(messages, callbacks);
+  } catch (error) {
+    if (!isFirstTokenTimeout(error) || callbacks.signal?.aborted) throw error;
+    const compactedMessages = compactDeepSeekMessagesForFirstTokenRetry(messages);
+    logger.warn({
+      originalMessages: messages.length,
+      retryMessages: compactedMessages.length,
+      timeoutMs: deepSeekFirstTokenTimeoutMs(),
+    }, 'DeepSeek first-token stall; retrying once with compacted Agent context');
+    callbacks.onRetry?.({
+      reason: 'first-token-stall',
+      originalMessages: messages.length,
+      retryMessages: compactedMessages.length,
+    });
+    return callDeepSeekStream(compactedMessages, callbacks);
+  }
 }
 
 function createCodexDeepSeekRuntime(user = null, runtimeOptions = {}) {
@@ -2727,7 +2798,7 @@ app.post(
       let text = '';
       let textItemStarted = false;
       try {
-        const result = await callDeepSeekStream(messages, {
+        const result = await callDeepSeekStreamWithFirstTokenRetry(messages, {
           model,
           maxCompletionTokens,
           maximumCompletionTokens: responseCompletionLimit,
@@ -2892,7 +2963,7 @@ app.post(
 
     let text = '';
     try {
-      const result = await callDeepSeekStream(messages, {
+      const result = await callDeepSeekStreamWithFirstTokenRetry(messages, {
         model,
         maxCompletionTokens,
         maximumCompletionTokens: responseCompletionLimit,
