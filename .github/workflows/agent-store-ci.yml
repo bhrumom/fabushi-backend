@@ -1,0 +1,31 @@
+name: Agent Store CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ai-backend/src/account_sync_store.js"
+      - "ai-backend/src/miniapp_marketplace_http.js"
+      - "ai-backend/test/account_sync_store.test.js"
+      - ".github/workflows/agent-store-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  account-agent-store:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ai-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ai-backend/package-lock.json
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - run: npm run check
+      - run: node --test test/account_sync_store.test.js
