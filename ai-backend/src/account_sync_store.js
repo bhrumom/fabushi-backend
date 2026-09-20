@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -9,6 +10,11 @@ const DEFAULT_EVENT_RETENTION = 10_000;
 const CLOUD_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_CLOUD_KEYS_PER_APP = 1024;
 const MAX_CLOUD_VALUE_BYTES = 4096;
+const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
+const MAX_AGENT_OBJECT_BYTES = 8 * 1024 * 1024;
+const MAX_AGENT_OBJECTS = 20_000;
+const AGENT_METADATA_MODES = new Set(['default', 'plan', 'debug', 'search']);
+const AGENT_APPROVAL_MODES = new Set(['allowlist', 'unrestricted', 'auto-review']);
 
 function json(value) {
   return JSON.stringify(value ?? null);
@@ -36,15 +42,90 @@ function normalizeMiniAppId(value) {
   return id;
 }
 
+function normalizeAgentId(value) {
+  const id = String(value ?? '').trim();
+  if (!AGENT_ID_PATTERN.test(id)) throw new Error('invalid Agent id');
+  return id;
+}
+
+function normalizeAgentPath(value) {
+  const text = String(value ?? '').replaceAll('\\', '/').trim();
+  if (!text || text.startsWith('/') || /^[A-Za-z]:\//.test(text) || text.includes('\0')) {
+    throw new Error('invalid Agent store path');
+  }
+  const segments = text.split('/').filter((segment) => segment && segment !== '.');
+  if (!segments.length || segments.some((segment) => segment === '..' || segment.length > 255)) {
+    throw new Error('invalid Agent store path');
+  }
+  return segments.join('/');
+}
+
+function normalizeAgentMetadata(value, agentIdInput) {
+  const source = value && typeof value === 'object' ? value : {};
+  const agentId = normalizeAgentId(source.agentId ?? agentIdInput);
+  const mode = AGENT_METADATA_MODES.has(String(source.mode ?? '')) ? String(source.mode) : 'default';
+  const approvalMode = AGENT_APPROVAL_MODES.has(String(source.approvalMode ?? ''))
+    ? String(source.approvalMode)
+    : undefined;
+  const createdAt = Number.isFinite(Number(source.createdAt)) ? Number(source.createdAt) : Date.now();
+  const metadata = {
+    agentId,
+    latestRootBlobId: String(source.latestRootBlobId ?? '').trim().slice(0, 128),
+    name: String(source.name ?? 'New Agent').trim().slice(0, 160) || 'New Agent',
+    mode,
+    isRunEverything: source.isRunEverything === true,
+    createdAt,
+    lastUsedModel: String(source.lastUsedModel ?? '').trim().slice(0, 160) || undefined,
+    lastDebugServerPort: Number.isInteger(Number(source.lastDebugServerPort)) && Number(source.lastDebugServerPort) > 0
+      ? Number(source.lastDebugServerPort)
+      : undefined,
+    currentPlanUri: String(source.currentPlanUri ?? '').trim().slice(0, 1000) || undefined,
+    subagentInfo: source.subagentInfo && typeof source.subagentInfo === 'object'
+      ? {
+          parentAgentId: String(source.subagentInfo.parentAgentId ?? '').trim().slice(0, 160),
+          rootParentAgentId: String(source.subagentInfo.rootParentAgentId ?? '').trim().slice(0, 160),
+          toolCallId: String(source.subagentInfo.toolCallId ?? '').trim().slice(0, 240),
+          typeName: String(source.subagentInfo.typeName ?? '').trim().slice(0, 160),
+        }
+      : undefined,
+    approvalMode,
+    // Grok's blobEncryptionKey is device-local key material. Persist only a
+    // non-secret key id/cloud marker; raw encryption keys never enter account DB.
+    blobEncryptionKeyId: String(source.blobEncryptionKeyId ?? '').trim().slice(0, 160) || undefined,
+  };
+  return metadata;
+}
+
+function normalizeAgentProfile(value, agentIdInput) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    agentId: normalizeAgentId(source.agentId ?? agentIdInput),
+    name: String(source.name ?? 'New Agent').trim().slice(0, 160) || 'New Agent',
+    description: String(source.description ?? '').trim().slice(0, 4000),
+    title: String(source.title ?? '').trim().slice(0, 240),
+    avatarShape: String(source.avatarShape ?? '').trim().slice(0, 80),
+    avatarColor: String(source.avatarColor ?? '').trim().slice(0, 80),
+  };
+}
+
 function normalizeBotProfile(value, fallbackId = '') {
   const source = value && typeof value === 'object' ? value : {};
   const id = String(source.id ?? fallbackId ?? '').trim().toLocaleLowerCase();
   if (!id || id.length > 160) throw new Error('invalid Bot id');
   return {
     id,
+    agentId: normalizeAgentId(source.agentId ?? id),
     username: String(source.username ?? '').trim().slice(0, 80),
     displayName: String(source.displayName ?? source.name ?? id).trim().slice(0, 160),
-    description: String(source.description ?? '').trim().slice(0, 1000),
+    description: String(source.description ?? '').trim().slice(0, 4000),
+    title: String(source.title ?? '').trim().slice(0, 240),
+    hidden: source.hidden === true,
+    avatar: typeof source.avatar === 'string' ? source.avatar.slice(0, 8 * 1024 * 1024) : undefined,
+    avatarShape: String(source.avatarShape ?? '').trim().slice(0, 80) || undefined,
+    avatarColor: String(source.avatarColor ?? '').trim().slice(0, 80) || undefined,
+    notificationsEnabled: source.notificationsEnabled !== false,
+    notifyOnUpdates: source.notifyOnUpdates !== false,
+    unread: source.unread === true,
     conversationId: String(source.conversationId ?? '').trim().slice(0, 240),
     managedBy: String(source.managedBy ?? '').trim().slice(0, 120),
     mainApp: source.mainApp !== false,
@@ -145,6 +226,44 @@ export class AccountSyncStore {
       );
       CREATE INDEX IF NOT EXISTS idx_miniapp_cloud_storage_account_app
         ON miniapp_cloud_storage (account_id, mini_app_id, updated_at_ms ASC);
+
+      CREATE TABLE IF NOT EXISTS account_agents (
+        account_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        profile_json TEXT NOT NULL DEFAULT '{}',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (account_id, agent_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_account_agents_account_updated
+        ON account_agents (account_id, updated_at_ms DESC);
+
+      CREATE TABLE IF NOT EXISTS account_agent_blobs (
+        account_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        blob_id TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        data BLOB NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (account_id, agent_id, blob_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS account_agent_refs (
+        account_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        rel_path TEXT NOT NULL,
+        blob_id TEXT NOT NULL,
+        etag TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (account_id, agent_id, rel_path),
+        FOREIGN KEY (account_id, agent_id)
+          REFERENCES account_agents (account_id, agent_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_account_agent_refs_agent_path
+        ON account_agent_refs (account_id, agent_id, rel_path ASC);
     `);
   }
 
@@ -210,6 +329,58 @@ export class AccountSyncStore {
           added_at_ms AS addedAtMs, updated_at_ms AS updatedAtMs
         FROM account_bot_memberships WHERE account_id = ?
         ORDER BY updated_at_ms DESC, bot_id ASC
+      `),
+      getAgent: this.db.prepare(`
+        SELECT agent_id AS agentId, profile_json AS profileJson, metadata_json AS metadataJson,
+          created_at_ms AS createdAtMs, updated_at_ms AS updatedAtMs
+        FROM account_agents WHERE account_id = ? AND agent_id = ? LIMIT 1
+      `),
+      listAgents: this.db.prepare(`
+        SELECT agent_id AS agentId, profile_json AS profileJson, metadata_json AS metadataJson,
+          created_at_ms AS createdAtMs, updated_at_ms AS updatedAtMs
+        FROM account_agents WHERE account_id = ? ORDER BY updated_at_ms DESC, agent_id ASC
+      `),
+      upsertAgent: this.db.prepare(`
+        INSERT INTO account_agents (account_id, agent_id, profile_json, metadata_json, created_at_ms, updated_at_ms)
+        VALUES (@accountId, @agentId, @profileJson, @metadataJson, @createdAtMs, @updatedAtMs)
+        ON CONFLICT(account_id, agent_id) DO UPDATE SET
+          profile_json = excluded.profile_json,
+          metadata_json = excluded.metadata_json,
+          updated_at_ms = excluded.updated_at_ms
+      `),
+      getAgentRef: this.db.prepare(`
+        SELECT rel_path AS relPath, blob_id AS blobId, etag, revision, updated_at_ms AS updatedAtMs
+        FROM account_agent_refs WHERE account_id = ? AND agent_id = ? AND rel_path = ? LIMIT 1
+      `),
+      listAgentRefs: this.db.prepare(`
+        SELECT rel_path AS relPath, blob_id AS blobId, etag, revision, updated_at_ms AS updatedAtMs
+        FROM account_agent_refs
+        WHERE account_id = @accountId AND agent_id = @agentId AND rel_path LIKE @prefix
+        ORDER BY rel_path ASC
+      `),
+      agentRefCount: this.db.prepare('SELECT COUNT(*) AS count FROM account_agent_refs WHERE account_id = ? AND agent_id = ?'),
+      getAgentBlob: this.db.prepare(`
+        SELECT blob_id AS blobId, sha256, data, size_bytes AS sizeBytes, created_at_ms AS createdAtMs
+        FROM account_agent_blobs WHERE account_id = ? AND agent_id = ? AND blob_id = ? LIMIT 1
+      `),
+      insertAgentBlob: this.db.prepare(`
+        INSERT OR IGNORE INTO account_agent_blobs
+          (account_id, agent_id, blob_id, sha256, data, size_bytes, created_at_ms)
+        VALUES (@accountId, @agentId, @blobId, @sha256, @data, @sizeBytes, @createdAtMs)
+      `),
+      upsertAgentRef: this.db.prepare(`
+        INSERT INTO account_agent_refs (account_id, agent_id, rel_path, blob_id, etag, revision, updated_at_ms)
+        VALUES (@accountId, @agentId, @relPath, @blobId, @etag, @revision, @updatedAtMs)
+        ON CONFLICT(account_id, agent_id, rel_path) DO UPDATE SET
+          blob_id = excluded.blob_id,
+          etag = excluded.etag,
+          revision = excluded.revision,
+          updated_at_ms = excluded.updated_at_ms
+      `),
+      deleteAgentRef: this.db.prepare('DELETE FROM account_agent_refs WHERE account_id = ? AND agent_id = ? AND rel_path = ?'),
+      listAgentStoreRevisions: this.db.prepare(`
+        SELECT agent_id AS agentId, rel_path AS path, etag, revision, updated_at_ms AS updatedAtMs
+        FROM account_agent_refs WHERE account_id = ? ORDER BY agent_id ASC, rel_path ASC
       `),
       cloudCount: this.db.prepare('SELECT COUNT(*) AS count FROM miniapp_cloud_storage WHERE account_id = ? AND mini_app_id = ?'),
       getCloudValue: this.db.prepare(`
@@ -294,6 +465,17 @@ export class AccountSyncStore {
         this.#appendEvent(accountId, previous ? 'miniapp.updated' : 'miniapp.installed', miniAppId, { miniAppId, version, bot }, now);
       }
       if (!previousBot) this.#appendEvent(accountId, 'bot.added', bot.id, { bot, source: 'miniapp', miniAppId }, now);
+      this.upsertAgent(accountId, bot.agentId, {
+        profile: {
+          agentId: bot.agentId,
+          name: bot.displayName,
+          description: bot.description,
+          title: bot.title,
+          avatarShape: bot.avatarShape,
+          avatarColor: bot.avatarColor,
+        },
+        metadata: { agentId: bot.agentId, name: bot.displayName },
+      });
       return { added: true, changed, miniAppId, version, bot };
     });
     return transaction();
@@ -349,6 +531,22 @@ export class AccountSyncStore {
         sourceId: normalizedSourceId,
       }, now);
     }
+    // A Bot is a profile/surface bound to one explicit Agent store. Creating or
+    // importing a Bot never aliases it with a human contact.
+    this.upsertAgent(accountId, bot.agentId, {
+      profile: {
+        agentId: bot.agentId,
+        name: bot.displayName,
+        description: bot.description,
+        title: bot.title,
+        avatarShape: bot.avatarShape,
+        avatarColor: bot.avatarColor,
+      },
+      metadata: {
+        agentId: bot.agentId,
+        name: bot.displayName,
+      },
+    });
     return { added: true, bot, source: normalizedSource, sourceId: normalizedSourceId };
   }
 
@@ -379,6 +577,166 @@ export class AccountSyncStore {
       grouped.set(row.botId, current);
     }
     return [...grouped.values()].sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.bot.id.localeCompare(right.bot.id));
+  }
+
+  upsertAgent(accountIdInput, agentIdInput, { profile = {}, metadata = {} } = {}) {
+    const accountId = normalizeAccountId(accountIdInput);
+    const agentId = normalizeAgentId(agentIdInput);
+    const previous = this.s.getAgent.get(accountId, agentId);
+    const normalizedProfile = normalizeAgentProfile({ ...(parseJson(previous?.profileJson, {}) ?? {}), ...profile, agentId }, agentId);
+    const normalizedMetadata = normalizeAgentMetadata({ ...(parseJson(previous?.metadataJson, {}) ?? {}), ...metadata, agentId }, agentId);
+    const now = this.now();
+    this.s.upsertAgent.run({
+      accountId,
+      agentId,
+      profileJson: json(normalizedProfile),
+      metadataJson: json(normalizedMetadata),
+      createdAtMs: Number(previous?.createdAtMs ?? normalizedMetadata.createdAt ?? now),
+      updatedAtMs: now,
+    });
+    this.#appendEvent(accountId, previous ? 'agent.updated' : 'agent.created', agentId, {
+      agentId,
+      profile: normalizedProfile,
+      metadata: normalizedMetadata,
+    }, now);
+    return { agentId, profile: normalizedProfile, metadata: normalizedMetadata, updatedAtMs: now };
+  }
+
+  getAgent(accountIdInput, agentIdInput) {
+    const accountId = normalizeAccountId(accountIdInput);
+    const agentId = normalizeAgentId(agentIdInput);
+    const row = this.s.getAgent.get(accountId, agentId);
+    if (!row) return null;
+    return {
+      agentId,
+      profile: parseJson(row.profileJson, {}),
+      metadata: parseJson(row.metadataJson, {}),
+      createdAtMs: Number(row.createdAtMs),
+      updatedAtMs: Number(row.updatedAtMs),
+    };
+  }
+
+  listAgents(accountIdInput) {
+    const accountId = normalizeAccountId(accountIdInput);
+    return this.s.listAgents.all(accountId).map((row) => ({
+      agentId: row.agentId,
+      profile: parseJson(row.profileJson, {}),
+      metadata: parseJson(row.metadataJson, {}),
+      createdAtMs: Number(row.createdAtMs),
+      updatedAtMs: Number(row.updatedAtMs),
+    }));
+  }
+
+  putAgentObject(accountIdInput, agentIdInput, relPathInput, dataInput, options = {}) {
+    const accountId = normalizeAccountId(accountIdInput);
+    const agentId = normalizeAgentId(agentIdInput);
+    const relPath = normalizeAgentPath(relPathInput);
+    const data = Buffer.isBuffer(dataInput) ? dataInput : Buffer.from(dataInput ?? []);
+    if (data.byteLength > MAX_AGENT_OBJECT_BYTES) throw new Error('Agent store object exceeds 8 MiB');
+    if (!this.s.getAgent.get(accountId, agentId)) this.upsertAgent(accountId, agentId, {});
+
+    const previous = this.s.getAgentRef.get(accountId, agentId, relPath);
+    if (!previous && Number(this.s.agentRefCount.get(accountId, agentId)?.count ?? 0) >= MAX_AGENT_OBJECTS) {
+      throw new Error('Agent store exceeds object limit');
+    }
+    const baseEtag = options.baseEtag == null ? null : String(options.baseEtag);
+    const expectAbsent = options.expectAbsent === true;
+    const conflict = (expectAbsent && previous) || (baseEtag !== null && previous?.etag !== baseEtag);
+    if (conflict) {
+      const suffix = crypto.createHash('sha256').update(data).digest('hex').slice(0, 16);
+      const conflictPath = normalizeAgentPath(`.conflicts/${this.now()}-${suffix}/${relPath}`);
+      const result = this.putAgentObject(accountId, agentId, conflictPath, data, { expectAbsent: true });
+      return {
+        outcome: 'conflict',
+        path: relPath,
+        conflictPath,
+        baseEtag: previous?.etag ?? null,
+        stored: result,
+      };
+    }
+
+    const sha256 = crypto.createHash('sha256').update(data).digest('hex');
+    const blobId = sha256;
+    const now = this.now();
+    const transaction = this.db.transaction(() => {
+      this.s.insertAgentBlob.run({
+        accountId,
+        agentId,
+        blobId,
+        sha256,
+        data,
+        sizeBytes: data.byteLength,
+        createdAtMs: now,
+      });
+      const revision = this.#appendEvent(accountId, 'agent.store.written', `${agentId}:${relPath}`, {
+        agentId,
+        path: relPath,
+        blobId,
+        sha256,
+        sizeBytes: data.byteLength,
+      }, now);
+      const etag = `sha256:${sha256}`;
+      this.s.upsertAgentRef.run({ accountId, agentId, relPath, blobId, etag, revision, updatedAtMs: now });
+      return { outcome: 'written', agentId, path: relPath, blobId, sha256, etag, revision, updatedAtMs: now };
+    });
+    return transaction();
+  }
+
+  getAgentObject(accountIdInput, agentIdInput, relPathInput) {
+    const accountId = normalizeAccountId(accountIdInput);
+    const agentId = normalizeAgentId(agentIdInput);
+    const relPath = normalizeAgentPath(relPathInput);
+    const ref = this.s.getAgentRef.get(accountId, agentId, relPath);
+    if (!ref) return null;
+    const blob = this.s.getAgentBlob.get(accountId, agentId, ref.blobId);
+    if (!blob) return null;
+    return {
+      agentId,
+      path: relPath,
+      blobId: blob.blobId,
+      sha256: blob.sha256,
+      etag: ref.etag,
+      revision: Number(ref.revision),
+      updatedAtMs: Number(ref.updatedAtMs),
+      sizeBytes: Number(blob.sizeBytes),
+      data: Buffer.from(blob.data),
+    };
+  }
+
+  listAgentObjects(accountIdInput, agentIdInput, prefixInput = '') {
+    const accountId = normalizeAccountId(accountIdInput);
+    const agentId = normalizeAgentId(agentIdInput);
+    const prefix = String(prefixInput ?? '').trim();
+    const normalizedPrefix = prefix ? normalizeAgentPath(prefix) : '';
+    return this.s.listAgentRefs.all({
+      accountId,
+      agentId,
+      prefix: `${normalizedPrefix}%`,
+    }).map((row) => ({
+      path: row.relPath,
+      blobId: row.blobId,
+      etag: row.etag,
+      revision: Number(row.revision),
+      updatedAtMs: Number(row.updatedAtMs),
+    }));
+  }
+
+  deleteAgentObject(accountIdInput, agentIdInput, relPathInput, { baseEtag } = {}) {
+    const accountId = normalizeAccountId(accountIdInput);
+    const agentId = normalizeAgentId(agentIdInput);
+    const relPath = normalizeAgentPath(relPathInput);
+    const previous = this.s.getAgentRef.get(accountId, agentId, relPath);
+    if (!previous) return { deleted: false, agentId, path: relPath };
+    if (baseEtag != null && String(baseEtag) !== previous.etag) {
+      return { deleted: false, conflict: true, agentId, path: relPath, etag: previous.etag };
+    }
+    const now = this.now();
+    const transaction = this.db.transaction(() => {
+      this.s.deleteAgentRef.run(accountId, agentId, relPath);
+      const revision = this.#appendEvent(accountId, 'agent.store.deleted', `${agentId}:${relPath}`, { agentId, path: relPath }, now);
+      return { deleted: true, agentId, path: relPath, revision, updatedAtMs: now };
+    });
+    return transaction();
   }
 
   setCloudValue(accountIdInput, miniAppIdInput, keyInput, valueInput) {
@@ -460,7 +818,9 @@ export class AccountSyncStore {
       snapshot: {
         miniApps: this.listMiniAppInstalls(accountId),
         bots: this.listBots(accountId),
+        agents: this.listAgents(accountId),
         cloudRevisions: this.s.listCloudRevisions.all(accountId),
+        agentStoreRevisions: this.s.listAgentStoreRevisions.all(accountId),
       },
       events: [],
     });
