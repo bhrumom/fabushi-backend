@@ -45,6 +45,8 @@ test('same account converges installed Mini App and Bot while another account st
     assert.equal(install.added, true);
     assert.equal(scope.store.listMiniAppInstalls(account)[0].miniAppId, 'global-dharma');
     assert.equal(scope.store.listBots(account)[0].bot.id, 'global-dharma-bot');
+    assert.equal(scope.store.listBots(account)[0].bot.agentId, 'global-dharma-bot');
+    assert.equal(scope.store.listAgents(account)[0].agentId, 'global-dharma-bot');
     assert.equal(scope.store.listMiniAppInstalls('user:other').length, 0);
     assert.equal(scope.store.listBots('user:other').length, 0);
 
@@ -52,6 +54,7 @@ test('same account converges installed Mini App and Bot while another account st
     assert.equal(initial.mode, 'snapshot');
     assert.equal(initial.snapshot.miniApps[0].miniAppId, 'global-dharma');
     assert.equal(initial.snapshot.bots[0].bot.id, 'global-dharma-bot');
+    assert.equal(initial.snapshot.agents[0].agentId, 'global-dharma-bot');
   } finally {
     scope.close();
   }
@@ -71,6 +74,7 @@ test('difference cursor replays Mini App install, Bot membership, cloud state, a
     assert.deepEqual(first.events.map((event) => event.type), [
       'miniapp.installed',
       'bot.added',
+      'agent.created',
       'miniapp.cloud.set',
     ]);
     assert.equal(scope.store.getCloudValue(account, 'global-dharma', 'mode').value, 'local');
@@ -101,6 +105,66 @@ test('manual Bot membership is independent from a Mini App installation source',
     const bots = scope.store.listBots(account);
     assert.equal(bots.length, 1);
     assert.deepEqual(bots[0].sources.map((entry) => entry.source), ['manual']);
+  } finally {
+    scope.close();
+  }
+});
+
+test('Agent Store keeps Bot identity separate, content-addresses state, and preserves conflicts', () => {
+  const scope = fixture();
+  try {
+    const account = 'user:108';
+    scope.store.addBot(account, {
+      id: 'research-bot',
+      agentId: 'agent-research',
+      displayName: 'Research Bot',
+      description: 'Researches sources',
+      conversationId: 'codex:agent:agent-research',
+    });
+
+    const membership = scope.store.listBots(account)[0];
+    assert.equal(membership.bot.id, 'research-bot');
+    assert.equal(membership.bot.agentId, 'agent-research');
+
+    const agent = scope.store.getAgent(account, 'agent-research');
+    assert.equal(agent.profile.name, 'Research Bot');
+    assert.equal(agent.metadata.agentId, 'agent-research');
+
+    const first = scope.store.putAgentObject(
+      account,
+      'agent-research',
+      'conversation/root.pb',
+      Buffer.from('checkpoint-one'),
+      { expectAbsent: true },
+    );
+    assert.equal(first.outcome, 'written');
+    assert.match(first.etag, /^sha256:/);
+
+    const loaded = scope.store.getAgentObject(account, 'agent-research', 'conversation/root.pb');
+    assert.equal(loaded.data.toString('utf8'), 'checkpoint-one');
+    assert.equal(loaded.blobId, loaded.sha256);
+    assert.equal(scope.store.listAgentObjects(account, 'agent-research').length, 1);
+    assert.equal(scope.store.listAgentObjects('user:other', 'agent-research').length, 0);
+
+    const conflict = scope.store.putAgentObject(
+      account,
+      'agent-research',
+      'conversation/root.pb',
+      Buffer.from('checkpoint-two'),
+      { expectAbsent: true },
+    );
+    assert.equal(conflict.outcome, 'conflict');
+    assert.match(conflict.conflictPath, /^\.conflicts\//);
+    assert.equal(
+      scope.store.getAgentObject(account, 'agent-research', 'conversation/root.pb').data.toString('utf8'),
+      'checkpoint-one',
+      'conflicting write must not overwrite the authoritative root',
+    );
+    assert.equal(
+      scope.store.getAgentObject(account, 'agent-research', conflict.conflictPath).data.toString('utf8'),
+      'checkpoint-two',
+      'conflicting data must be retained for reconciliation',
+    );
   } finally {
     scope.close();
   }

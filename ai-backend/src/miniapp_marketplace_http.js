@@ -247,6 +247,79 @@ export function createMiniAppMarketplaceRouter({
     res.json(syncStore.removeBot(identity.accountId, req.params.botId, { source: 'manual', sourceId: 'manual' }));
   }));
 
+  // Grok-style Agent Store: Bot profile and Agent runtime state have separate
+  // identities. Agent state is account-scoped, content-addressed and conflict
+  // preserving; removing a Bot membership intentionally does not delete it.
+  router.get('/v1/account/agents', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    res.json({ agents: syncStore.listAgents(identity.accountId), cursor: syncStore.currentCursor(identity.accountId) });
+  }));
+
+  router.get('/v1/account/agents/:agentId', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const agent = syncStore.getAgent(identity.accountId, req.params.agentId);
+    if (!agent) {
+      res.status(404).json({ error: 'agent_not_found', agentId: req.params.agentId });
+      return;
+    }
+    res.json(agent);
+  }));
+
+  router.put('/v1/account/agents/:agentId', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    res.json(syncStore.upsertAgent(identity.accountId, req.params.agentId, {
+      profile: req.body?.profile ?? {},
+      metadata: req.body?.metadata ?? {},
+    }));
+  }));
+
+  router.get('/v1/account/agents/:agentId/store', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const relPath = safeQuery(req.query.path, 4096);
+    if (!relPath) {
+      const prefix = safeQuery(req.query.prefix, 4096);
+      res.json({
+        agentId: req.params.agentId,
+        files: syncStore.listAgentObjects(identity.accountId, req.params.agentId, prefix),
+      });
+      return;
+    }
+    const object = syncStore.getAgentObject(identity.accountId, req.params.agentId, relPath);
+    if (!object) {
+      res.status(404).json({ error: 'agent_store_object_not_found', agentId: req.params.agentId, path: relPath });
+      return;
+    }
+    res.json({
+      ...object,
+      data: undefined,
+      dataBase64: object.data.toString('base64'),
+    });
+  }));
+
+  router.put('/v1/account/agents/:agentId/store', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const relPath = safeQuery(req.body?.path, 4096);
+    const dataBase64 = typeof req.body?.dataBase64 === 'string' ? req.body.dataBase64 : '';
+    if (!relPath || !dataBase64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(dataBase64)) {
+      throw new MiniAppMarketplaceError('INVALID_AGENT_STORE_OBJECT', 'path and base64 data are required');
+    }
+    const data = Buffer.from(dataBase64, 'base64');
+    const result = syncStore.putAgentObject(identity.accountId, req.params.agentId, relPath, data, {
+      baseEtag: req.body?.baseEtag,
+      expectAbsent: req.body?.expectAbsent === true,
+    });
+    res.status(result.outcome === 'conflict' ? 409 : 200).json(result);
+  }));
+
+  router.delete('/v1/account/agents/:agentId/store', route(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const relPath = safeQuery(req.query.path ?? req.body?.path, 4096);
+    if (!relPath) throw new MiniAppMarketplaceError('INVALID_AGENT_STORE_OBJECT', 'path is required');
+    res.json(syncStore.deleteAgentObject(identity.accountId, req.params.agentId, relPath, {
+      baseEtag: safeQuery(req.query.baseEtag ?? req.body?.baseEtag, 256) || undefined,
+    }));
+  }));
+
   router.get('/v1/miniapps/:pluginId/cloud-storage', route(async (req, res) => {
     const identity = await identityFor(req, { accountRequired: true });
     requireManifest(marketplace, req.params.pluginId);
