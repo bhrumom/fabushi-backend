@@ -513,7 +513,7 @@ test('terminal transition fences later mutations', async () => {
     ENV, db,
   );
   const ended = await handleAppendHumanCallEvent(
-    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-end-1',
       generation: 0,
       kind: 'transition',
