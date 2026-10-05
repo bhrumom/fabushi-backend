@@ -50,11 +50,11 @@ R10. The legacy `bhrumom/fabushi` repository is a reference source only and must
 
 | ID | Criterion | Status |
 | --- | --- | --- |
-| AC-1 | Canonical backend owns production delivery | pending |
-| AC-2 | Production secret preflight is fail-closed | pending |
-| AC-3 | Remote D1 migrations run before Worker deploy | pending |
-| AC-4 | Deployment is pinned to canonical main SHA | pending |
-| AC-5 | Public production health smoke succeeds | pending |
-| AC-6 | Deployment provenance artifact is uploaded | pending |
-| AC-7 | Delivery control-plane PR exact HEAD passes static gate | pending |
+| AC-1 | Canonical backend owns production delivery | passed — implemented by PR #6 in this repository |
+| AC-2 | Production secret preflight is fail-closed | passed — static contract run `37250287820` |
+| AC-3 | Remote D1 migrations run before Worker deploy | passed — ordering contract run `37250287820` |
+| AC-4 | Deployment is pinned to canonical main SHA | passed — main/ref/SHA guards verified in run `37250287820` |
+| AC-5 | Public production health smoke succeeds | pending production dispatch — smoke step is statically verified by run `37250287820` |
+| AC-6 | Deployment provenance artifact is uploaded | pending production dispatch — artifact contract is statically verified by run `37250287820` |
+| AC-7 | Delivery control-plane PR exact HEAD passes static gate | passed — HEAD `e1dd2bdb2074228ab5f0d23bab9e34311e271fe7`, run `37250287820` |
 | AC-8 | Canonical-main production delivery run succeeds | pending |
