@@ -82,6 +82,8 @@ function mapChannel(row) {
     callId: row.id,
     creatorUserId: row.creator_user_id,
     peerUserId: row.peer_user_id,
+    creatorDeviceId: row.creator_device_id ?? null,
+    peerDeviceId: row.peer_device_id ?? null,
     state: row.state,
     generation: Number(row.generation),
     eventSeq: Number(row.event_seq),
@@ -107,8 +109,8 @@ function mapEvent(row) {
 
 async function readAuthorizedChannel(db, callId, authUserId) {
   return await db.prepare(`
-    SELECT id, creator_user_id, peer_user_id, state, generation, event_seq,
-      terminal_state, created_at, updated_at
+    SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
+      state, generation, event_seq, terminal_state, created_at, updated_at
     FROM human_call_channels
     WHERE id = ? AND (creator_user_id = ? OR peer_user_id = ?)
     LIMIT 1
@@ -203,8 +205,8 @@ export async function handleCreateHumanCall(request, env, db) {
   }
 
   const existing = await db.prepare(`
-    SELECT id, creator_user_id, peer_user_id, state, generation, event_seq,
-      terminal_state, created_at, updated_at
+    SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
+      state, generation, event_seq, terminal_state, created_at, updated_at
     FROM human_call_channels WHERE id = ? LIMIT 1
   `).bind(callId).first();
   if (existing) {
@@ -220,14 +222,14 @@ export async function handleCreateHumanCall(request, env, db) {
   try {
     await db.prepare(`
       INSERT INTO human_call_channels (
-        id, creator_user_id, peer_user_id, state, generation, event_seq,
-        terminal_state, created_at, updated_at
-      ) VALUES (?, ?, ?, 'invited', 0, 0, NULL, ?, ?)
-    `).bind(callId, auth.userId, target.id, now, now).run();
+        id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
+        state, generation, event_seq, terminal_state, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, NULL, 'invited', 0, 0, NULL, ?, ?)
+    `).bind(callId, auth.userId, target.id, auth.deviceId, now, now).run();
   } catch {
     const raced = await db.prepare(`
-      SELECT id, creator_user_id, peer_user_id, generation, event_seq,
-        terminal_state, created_at, updated_at
+      SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
+        state, generation, event_seq, terminal_state, created_at, updated_at
       FROM human_call_channels WHERE id = ? LIMIT 1
     `).bind(callId).first();
     if (raced && raced.creator_user_id === auth.userId && raced.peer_user_id === target.id) {
@@ -246,8 +248,8 @@ export async function handleListHumanCalls(request, env, db) {
   const url = new URL(request.url);
   const limit = clampLimit(url.searchParams.get('limit'));
   const rows = await db.prepare(`
-    SELECT id, creator_user_id, peer_user_id, state, generation, event_seq,
-      terminal_state, created_at, updated_at
+    SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
+      state, generation, event_seq, terminal_state, created_at, updated_at
     FROM human_call_channels
     WHERE creator_user_id = ? OR peer_user_id = ?
     ORDER BY updated_at DESC, id DESC
@@ -342,9 +344,15 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
     });
   }
 
+  const isCreator = Number(call.creator_user_id) === auth.userId;
+  const isPeer = Number(call.peer_user_id) === auth.userId;
+  const claimedDeviceId = isCreator ? call.creator_device_id : call.peer_device_id;
+  let nextCreatorDeviceId = call.creator_device_id ?? null;
+  let nextPeerDeviceId = call.peer_device_id ?? null;
   let nextGeneration = Number(call.generation);
   let nextState = call.state;
   let terminalState = null;
+
   if (kind === 'transition') {
     const action = String(body.payload.action || '').trim();
     const target = transitionTarget(call.state, action);
@@ -354,6 +362,28 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
     if (body.payload.state != null && body.payload.state !== target) {
       return jsonResponse({ success: false, error: '通话状态载荷与服务端状态机不一致' }, 409);
     }
+    if (action === 'ring' && !isCreator) {
+      return jsonResponse({ success: false, error: '只有发起方设备可以进入振铃状态' }, 409);
+    }
+    if ((action === 'accept' || action === 'decline') && !isPeer) {
+      return jsonResponse({ success: false, error: '只有被叫方设备可以接受或拒绝通话' }, 409);
+    }
+    if (isCreator) {
+      if (claimedDeviceId != null && claimedDeviceId !== auth.deviceId) {
+        return jsonResponse({ success: false, error: '通话已由同账号的另一台发起设备接管' }, 409);
+      }
+      nextCreatorDeviceId = claimedDeviceId ?? auth.deviceId;
+    } else if (action === 'accept') {
+      if (claimedDeviceId != null && claimedDeviceId !== auth.deviceId) {
+        return jsonResponse({ success: false, error: '通话已由同账号的另一台接听设备接管' }, 409);
+      }
+      nextPeerDeviceId = claimedDeviceId ?? auth.deviceId;
+    } else if (action !== 'decline') {
+      if (claimedDeviceId == null || claimedDeviceId !== auth.deviceId) {
+        return jsonResponse({ success: false, error: '当前设备不是该通话的媒体传输设备' }, 409);
+      }
+    }
+
     if (action === 'reconnect') {
       if (generation !== Number(call.generation) + 1) {
         return jsonResponse({ success: false, error: '重连事件必须推进一个通话代际' }, 409);
@@ -364,18 +394,26 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
     }
     nextState = target;
     terminalState = ['ended', 'failed'].includes(target) ? target : null;
-  } else if (generation !== Number(call.generation)) {
-    return jsonResponse({ success: false, error: '通话事件代际已过期' }, 409);
+  } else {
+    if (generation !== Number(call.generation)) {
+      return jsonResponse({ success: false, error: '通话事件代际已过期' }, 409);
+    }
+    if (claimedDeviceId == null || claimedDeviceId !== auth.deviceId) {
+      return jsonResponse({ success: false, error: '当前设备不是该通话的媒体传输设备' }, 409);
+    }
   }
   const nextSeq = Number(call.event_seq) + 1;
   const now = new Date().toISOString();
   const updateStatement = db.prepare(`
     UPDATE human_call_channels
     SET state = ?, generation = ?, event_seq = ?, terminal_state = COALESCE(?, terminal_state),
+      creator_device_id = COALESCE(creator_device_id, ?),
+      peer_device_id = COALESCE(peer_device_id, ?),
       updated_at = ?
     WHERE id = ? AND state = ? AND generation = ? AND event_seq = ? AND terminal_state IS NULL
   `).bind(
-    nextState, nextGeneration, nextSeq, terminalState, now,
+    nextState, nextGeneration, nextSeq, terminalState,
+    nextCreatorDeviceId, nextPeerDeviceId, now,
     callId, call.state, Number(call.generation), Number(call.event_seq),
   );
   const insertStatement = db.prepare(`
