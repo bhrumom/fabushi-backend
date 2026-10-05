@@ -10,6 +10,7 @@ on:
       - "fabushi/web/migrations/20261005_human_message_extensions.sql"
       - "fabushi/web/tests/friends-and-messages-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-contract.test.js"
+      - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
       - "docs/specs/human-direct-messaging-extensions.md"
       - ".github/workflows/human-messaging-ci.yml"
   workflow_dispatch:
@@ -33,4 +34,4 @@ jobs:
       - name: Check community route syntax
         run: node --check src/routes/community-routes.js
       - name: Run existing and Phase 1 messaging contracts
-        run: node --test tests/friends-and-messages-contract.test.js tests/human-messaging-extensions-contract.test.js
+        run: node --test tests/friends-and-messages-contract.test.js tests/human-messaging-extensions-contract.test.js tests/human-messaging-extensions-behavior.test.js
