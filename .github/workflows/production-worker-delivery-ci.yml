@@ -1,0 +1,39 @@
+name: Production Worker Delivery CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/specs/production-worker-delivery.md"
+      - ".github/scripts/assert-worker-security-secrets.sh"
+      - ".github/scripts/run-wrangler-d1-migrations.sh"
+      - ".github/workflows/production-worker-delivery.yml"
+      - ".github/workflows/production-worker-delivery-ci.yml"
+      - "fabushi/web/tests/production-worker-delivery-contract.test.js"
+      - "fabushi/web/wrangler.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  static-delivery-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Validate deployment guard syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n .github/scripts/assert-worker-security-secrets.sh
+          bash -n .github/scripts/run-wrangler-d1-migrations.sh
+      - name: Reject committed Worker secret literals
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -Eq '^JWT_SECRET\s*=|ADMIN_EMAIL\s*=.*@|BEGIN (RSA )?PRIVATE KEY' fabushi/web/wrangler.toml
+      - name: Run canonical production delivery contracts
+        run: node --test fabushi/web/tests/production-worker-delivery-contract.test.js
