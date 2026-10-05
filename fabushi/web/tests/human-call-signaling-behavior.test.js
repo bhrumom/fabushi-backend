@@ -5,6 +5,7 @@ import {
   handleAppendHumanCallEvent,
   handleCreateHumanCall,
   handleGetHumanCall,
+  handleListHumanCalls,
 } from '../src/handlers/call-signaling.js';
 
 const ALICE = { id: 1, username: 'alice' };
@@ -67,6 +68,15 @@ function createDb() {
         throw new Error(`unhandled first query: ${q}`);
       },
       async all() {
+        if (q.includes('FROM human_call_channels') && q.includes('ORDER BY updated_at DESC')) {
+          return {
+            results: [...state.calls.values()]
+              .filter((call) => call.creator_user_id === Number(params[0]) || call.peer_user_id === Number(params[1]))
+              .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+              .slice(0, Number(params[2]))
+              .map((call) => ({ ...call })),
+          };
+        }
         if (q.includes('FROM human_call_events') && q.includes('seq > ?')) {
           return {
             results: state.events
@@ -84,30 +94,34 @@ function createDb() {
           if (state.calls.has(id)) throw new Error('constraint');
           state.calls.set(id, {
             id, creator_user_id: Number(creator), peer_user_id: Number(peer),
-            generation: 0, event_seq: 0, terminal_state: null,
+            state: 'invited', generation: 0, event_seq: 0, terminal_state: null,
             created_at: createdAt, updated_at: updatedAt,
           });
           return { meta: { changes: 1 } };
         }
-        if (q.startsWith('UPDATE human_call_channels SET generation = ?') && q.includes('terminal_state = COALESCE')) {
-          const [generation, eventSeq, terminalState, updatedAt, id, expectedGeneration, expectedSeq] = params;
+        if (q.startsWith('UPDATE human_call_channels SET state = ?') && q.includes('terminal_state = COALESCE')) {
+          const [nextState, generation, eventSeq, terminalState, updatedAt, id, expectedState, expectedGeneration, expectedSeq] = params;
           const call = state.calls.get(id);
-          if (!call || call.terminal_state || call.generation !== Number(expectedGeneration) || call.event_seq !== Number(expectedSeq)) {
+          if (!call || call.terminal_state || call.state !== expectedState
+              || call.generation !== Number(expectedGeneration) || call.event_seq !== Number(expectedSeq)) {
             return { meta: { changes: 0 } };
           }
+          call.state = nextState;
           call.generation = Number(generation);
           call.event_seq = Number(eventSeq);
           if (terminalState != null) call.terminal_state = terminalState;
           call.updated_at = updatedAt;
           return { meta: { changes: 1 } };
         }
-        if (q.startsWith('UPDATE human_call_channels SET generation = ?') && q.includes('terminal_state = NULL')) {
-          const [generation, eventSeq, updatedAt, id, expectedGeneration, expectedSeq] = params;
+        if (q.startsWith('UPDATE human_call_channels SET state = ?') && !q.includes('COALESCE')) {
+          const [oldState, generation, eventSeq, terminalState, updatedAt, id, expectedState, expectedGeneration, expectedSeq] = params;
           const call = state.calls.get(id);
-          if (call && call.generation === Number(expectedGeneration) && call.event_seq === Number(expectedSeq)) {
+          if (call && call.state === expectedState
+              && call.generation === Number(expectedGeneration) && call.event_seq === Number(expectedSeq)) {
+            call.state = oldState;
             call.generation = Number(generation);
             call.event_seq = Number(eventSeq);
-            call.terminal_state = null;
+            call.terminal_state = terminalState;
             call.updated_at = updatedAt;
             return { meta: { changes: 1 } };
           }
@@ -150,6 +164,15 @@ test('call create is friend-scoped and stable across devices', async () => {
   const retried = await retry.json();
   assert.equal(retry.status, 200);
   assert.equal(retried.deduplicated, true);
+  assert.equal(retried.call.state, 'invited');
+
+  const incoming = await handleListHumanCalls(
+    await makeRequest('https://api.example.com/api/social/calls?limit=20', BOB, 'bob-phone'),
+    ENV, db,
+  );
+  const incomingPayload = await incoming.json();
+  assert.equal(incoming.status, 200);
+  assert.deepEqual(incomingPayload.calls.map((call) => call.callId), [callId]);
 
   const denied = await handleCreateHumanCall(
     await makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', { callId: 'call-phase1-0002', targetUserId: CAROL.id }),
@@ -166,6 +189,27 @@ test('ordered events converge across participant devices with generation and ide
     ENV, db,
   );
 
+  const accept = await handleAppendHumanCallEvent(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
+      clientEventId: 'event-accept-1',
+      generation: 0,
+      kind: 'transition',
+      payload: { action: 'accept', state: 'negotiating' },
+    }),
+    ENV, db, callId,
+  );
+  assert.equal(accept.status, 201);
+  const connected = await handleAppendHumanCallEvent(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
+      clientEventId: 'event-connected-1',
+      generation: 0,
+      kind: 'transition',
+      payload: { action: 'connected', state: 'connected' },
+    }),
+    ENV, db, callId,
+  );
+  assert.equal(connected.status, 201);
+
   const signal = await handleAppendHumanCallEvent(
     await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-offer-1',
@@ -177,7 +221,7 @@ test('ordered events converge across participant devices with generation and ide
   );
   const signalPayload = await signal.json();
   assert.equal(signal.status, 201);
-  assert.equal(signalPayload.event.seq, 1);
+  assert.equal(signalPayload.event.seq, 3);
 
   const replay = await handleAppendHumanCallEvent(
     await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
@@ -236,12 +280,12 @@ test('ordered events converge across participant devices with generation and ide
 
   for (const deviceId of ['alice-laptop', 'alice-phone']) {
     const synced = await handleGetHumanCall(
-      await makeRequest(`https://api.example.com/api/social/calls/${callId}?afterSeq=1&limit=50`, ALICE, deviceId),
+      await makeRequest(`https://api.example.com/api/social/calls/${callId}?afterSeq=3&limit=50`, ALICE, deviceId),
       ENV, db, callId,
     );
     const payload = await synced.json();
     assert.equal(synced.status, 200);
-    assert.deepEqual(payload.events.map((event) => event.seq), [2, 3]);
+    assert.deepEqual(payload.events.map((event) => event.seq), [4, 5]);
     assert.equal(payload.call.generation, 1);
   }
 

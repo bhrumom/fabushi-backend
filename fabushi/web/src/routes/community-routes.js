@@ -31,6 +31,7 @@ import {
   handleAppendHumanCallEvent,
   handleCreateHumanCall,
   handleGetHumanCall,
+  handleListHumanCalls,
 } from '../handlers/call-signaling.js';
 import {
   handleToggleLike,
@@ -73,6 +74,7 @@ export async function routeCommunityRequest({ pathname, method, request, env, db
   const messageReactionMatch = pathname.match(/^\/api\/social\/messages\/(\d+)\/reactions$/);
   if (messageReactionMatch && method === 'POST') return handleSetDirectMessageReaction(request, env, db, messageReactionMatch[1]);
   if (pathname === '/api/social/calls' && method === 'POST') return handleCreateHumanCall(request, env, db);
+  if (pathname === '/api/social/calls' && method === 'GET') return handleListHumanCalls(request, env, db);
   const callEventMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/events$/);
   if (callEventMatch && method === 'POST') return handleAppendHumanCallEvent(request, env, db, callEventMatch[1]);
   const callMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})$/);

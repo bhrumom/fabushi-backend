@@ -62,11 +62,27 @@ async function areFriends(db, firstUserId, secondUserId) {
   return Boolean(row);
 }
 
+function transitionTarget(state, action) {
+  if (state === 'invited' && action === 'ring') return 'ringing';
+  if ((state === 'invited' || state === 'ringing') && action === 'accept') return 'negotiating';
+  if ((state === 'negotiating' || state === 'reconnecting') && action === 'connected') return 'connected';
+  if ((state === 'invited' || state === 'ringing') && action === 'decline') return 'ended';
+  if (['invited', 'ringing', 'negotiating', 'connected', 'reconnecting'].includes(state)
+      && action === 'hangup') return 'ended';
+  if (['invited', 'ringing', 'negotiating', 'connected', 'reconnecting'].includes(state)
+      && action === 'fail') return 'failed';
+  if (['negotiating', 'connected', 'reconnecting'].includes(state)
+      && action === 'reconnect') return 'reconnecting';
+  if (state === 'reconnecting' && action === 'resume') return 'negotiating';
+  return null;
+}
+
 function mapChannel(row) {
   return {
     callId: row.id,
     creatorUserId: row.creator_user_id,
     peerUserId: row.peer_user_id,
+    state: row.state,
     generation: Number(row.generation),
     eventSeq: Number(row.event_seq),
     terminalState: row.terminal_state ?? null,
@@ -91,7 +107,7 @@ function mapEvent(row) {
 
 async function readAuthorizedChannel(db, callId, authUserId) {
   return await db.prepare(`
-    SELECT id, creator_user_id, peer_user_id, generation, event_seq,
+    SELECT id, creator_user_id, peer_user_id, state, generation, event_seq,
       terminal_state, created_at, updated_at
     FROM human_call_channels
     WHERE id = ? AND (creator_user_id = ? OR peer_user_id = ?)
@@ -118,7 +134,7 @@ export async function handleCreateHumanCall(request, env, db) {
   }
 
   const existing = await db.prepare(`
-    SELECT id, creator_user_id, peer_user_id, generation, event_seq,
+    SELECT id, creator_user_id, peer_user_id, state, generation, event_seq,
       terminal_state, created_at, updated_at
     FROM human_call_channels WHERE id = ? LIMIT 1
   `).bind(callId).first();
@@ -135,9 +151,9 @@ export async function handleCreateHumanCall(request, env, db) {
   try {
     await db.prepare(`
       INSERT INTO human_call_channels (
-        id, creator_user_id, peer_user_id, generation, event_seq,
+        id, creator_user_id, peer_user_id, state, generation, event_seq,
         terminal_state, created_at, updated_at
-      ) VALUES (?, ?, ?, 0, 0, NULL, ?, ?)
+      ) VALUES (?, ?, ?, 'invited', 0, 0, NULL, ?, ?)
     `).bind(callId, auth.userId, target.id, now, now).run();
   } catch {
     const raced = await db.prepare(`
@@ -153,6 +169,25 @@ export async function handleCreateHumanCall(request, env, db) {
   const created = await readAuthorizedChannel(db, callId, auth.userId);
   if (!created) return jsonResponse({ success: false, error: '通话创建结果无法读取' }, 500);
   return jsonResponse({ success: true, deduplicated: false, call: mapChannel(created) }, 201);
+}
+
+export async function handleListHumanCalls(request, env, db) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const url = new URL(request.url);
+  const limit = clampLimit(url.searchParams.get('limit'));
+  const rows = await db.prepare(`
+    SELECT id, creator_user_id, peer_user_id, state, generation, event_seq,
+      terminal_state, created_at, updated_at
+    FROM human_call_channels
+    WHERE creator_user_id = ? OR peer_user_id = ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).bind(auth.userId, auth.userId, limit).all();
+  return jsonResponse({
+    success: true,
+    calls: (rows.results || []).map(mapChannel),
+  });
 }
 
 export async function handleGetHumanCall(request, env, db, rawCallId) {
@@ -239,29 +274,40 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
   }
 
   let nextGeneration = Number(call.generation);
-  if (kind === 'transition' && body.payload.action === 'reconnect') {
-    if (generation !== Number(call.generation) + 1) {
-      return jsonResponse({ success: false, error: '重连事件必须推进一个通话代际' }, 409);
+  let nextState = call.state;
+  let terminalState = null;
+  if (kind === 'transition') {
+    const action = String(body.payload.action || '').trim();
+    const target = transitionTarget(call.state, action);
+    if (!target) {
+      return jsonResponse({ success: false, error: '通话状态转换无效' }, 409);
     }
-    nextGeneration = generation;
+    if (body.payload.state != null && body.payload.state !== target) {
+      return jsonResponse({ success: false, error: '通话状态载荷与服务端状态机不一致' }, 409);
+    }
+    if (action === 'reconnect') {
+      if (generation !== Number(call.generation) + 1) {
+        return jsonResponse({ success: false, error: '重连事件必须推进一个通话代际' }, 409);
+      }
+      nextGeneration = generation;
+    } else if (generation !== Number(call.generation)) {
+      return jsonResponse({ success: false, error: '通话事件代际已过期' }, 409);
+    }
+    nextState = target;
+    terminalState = ['ended', 'failed'].includes(target) ? target : null;
   } else if (generation !== Number(call.generation)) {
     return jsonResponse({ success: false, error: '通话事件代际已过期' }, 409);
   }
-
-  const terminalState =
-    kind === 'transition' && ['ended', 'failed'].includes(body.payload.state)
-      ? body.payload.state
-      : null;
   const nextSeq = Number(call.event_seq) + 1;
   const now = new Date().toISOString();
   const updated = await db.prepare(`
     UPDATE human_call_channels
-    SET generation = ?, event_seq = ?, terminal_state = COALESCE(?, terminal_state),
+    SET state = ?, generation = ?, event_seq = ?, terminal_state = COALESCE(?, terminal_state),
       updated_at = ?
-    WHERE id = ? AND generation = ? AND event_seq = ? AND terminal_state IS NULL
+    WHERE id = ? AND state = ? AND generation = ? AND event_seq = ? AND terminal_state IS NULL
   `).bind(
-    nextGeneration, nextSeq, terminalState, now,
-    callId, Number(call.generation), Number(call.event_seq),
+    nextState, nextGeneration, nextSeq, terminalState, now,
+    callId, call.state, Number(call.generation), Number(call.event_seq),
   ).run();
   if (Number(updated.meta?.changes || 0) !== 1) {
     return jsonResponse({ success: false, error: '通话事件并发冲突，请同步后重试' }, 409);
@@ -280,11 +326,11 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
   } catch {
     await db.prepare(`
       UPDATE human_call_channels
-      SET generation = ?, event_seq = ?, terminal_state = NULL, updated_at = ?
-      WHERE id = ? AND generation = ? AND event_seq = ?
+      SET state = ?, generation = ?, event_seq = ?, terminal_state = ?, updated_at = ?
+      WHERE id = ? AND state = ? AND generation = ? AND event_seq = ?
     `).bind(
-      Number(call.generation), Number(call.event_seq), call.updated_at,
-      callId, nextGeneration, nextSeq,
+      call.state, Number(call.generation), Number(call.event_seq), call.terminal_state, call.updated_at,
+      callId, nextState, nextGeneration, nextSeq,
     ).run();
     return jsonResponse({ success: false, error: '通话事件保存失败，请重试' }, 409);
   }
