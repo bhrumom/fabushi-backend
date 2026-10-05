@@ -6,12 +6,16 @@ on:
     paths:
       - "fabushi/web/src/handlers/friends.js"
       - "fabushi/web/src/routes/community-routes.js"
+      - "fabushi/web/src/handlers/call-signaling.js"
       - "fabushi/web/migrations/20260713_friends_and_direct_messages.sql"
       - "fabushi/web/migrations/20261005_human_message_extensions.sql"
+      - "fabushi/web/migrations/20261005_human_call_signaling.sql"
       - "fabushi/web/tests/friends-and-messages-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
+      - "fabushi/web/tests/human-call-signaling-behavior.test.js"
       - "docs/specs/human-direct-messaging-extensions.md"
+      - "docs/specs/human-call-signaling.md"
       - ".github/workflows/human-messaging-ci.yml"
   workflow_dispatch:
 
@@ -33,5 +37,7 @@ jobs:
         run: node --check src/handlers/friends.js
       - name: Check community route syntax
         run: node --check src/routes/community-routes.js
+      - name: Check call signaling syntax
+        run: node --check src/handlers/call-signaling.js
       - name: Run existing and Phase 1 messaging contracts
-        run: node --test tests/friends-and-messages-contract.test.js tests/human-messaging-extensions-contract.test.js tests/human-messaging-extensions-behavior.test.js
+        run: node --test tests/friends-and-messages-contract.test.js tests/human-messaging-extensions-contract.test.js tests/human-messaging-extensions-behavior.test.js tests/human-call-signaling-behavior.test.js
