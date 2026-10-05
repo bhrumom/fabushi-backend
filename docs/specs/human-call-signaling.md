@@ -124,6 +124,7 @@ GitHub Actions only. Required contracts:
 
 | Requirement | Status | Evidence |
 | --- | --- | --- |
-| R1-R12 | pending | implementation and exact-HEAD CI required |
-| AC-1-AC-4 | pending | implementation and integration required |
-| AC-5 | passed | scope explicitly preserves remaining media/call work |
+| R1-R12 | passed | Canonical backend migration, authenticated handlers/routes, friend/participant authorization, ordering, per-device idempotency, generation and terminal fences, bounded replay, and legacy messaging regression all passed on implementation HEAD `609c040bc82b5aa3d6d73c278e4d831a1b1f7706`, Human Messaging CI run `37264867899`. |
+| AC-1-AC-3 | passed | Backend implementation and executable contracts passed exact-HEAD CI run `37264867899`. |
+| AC-4 | pending | Desktop Host `FabushiNativeMessagingClient` still must bind the verified API into the existing `CallSessionStore` owner without renderer/Electron direct backend ownership. |
+| AC-5 | passed | Scope explicitly preserves remaining voice/video/WebRTC/media-device/UX and packaged cross-device acceptance work. |
