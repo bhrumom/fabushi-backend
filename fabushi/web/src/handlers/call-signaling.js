@@ -300,7 +300,7 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
   }
   const nextSeq = Number(call.event_seq) + 1;
   const now = new Date().toISOString();
-  const updated = await db.prepare(`
+  const updateStatement = db.prepare(`
     UPDATE human_call_channels
     SET state = ?, generation = ?, event_seq = ?, terminal_state = COALESCE(?, terminal_state),
       updated_at = ?
@@ -308,31 +308,29 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
   `).bind(
     nextState, nextGeneration, nextSeq, terminalState, now,
     callId, call.state, Number(call.generation), Number(call.event_seq),
-  ).run();
-  if (Number(updated.meta?.changes || 0) !== 1) {
-    return jsonResponse({ success: false, error: '通话事件并发冲突，请同步后重试' }, 409);
-  }
+  );
+  const insertStatement = db.prepare(`
+    INSERT INTO human_call_events (
+      call_id, seq, generation, user_id, device_id, client_event_id,
+      kind, payload_json, created_at
+    )
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+    WHERE changes() = 1
+  `).bind(
+    callId, nextSeq, generation, auth.userId, auth.deviceId,
+    clientEventId, kind, payloadJson, now,
+  );
 
+  let batchResults;
   try {
-    await db.prepare(`
-      INSERT INTO human_call_events (
-        call_id, seq, generation, user_id, device_id, client_event_id,
-        kind, payload_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      callId, nextSeq, generation, auth.userId, auth.deviceId,
-      clientEventId, kind, payloadJson, now,
-    ).run();
+    batchResults = await db.batch([updateStatement, insertStatement]);
   } catch {
-    await db.prepare(`
-      UPDATE human_call_channels
-      SET state = ?, generation = ?, event_seq = ?, terminal_state = ?, updated_at = ?
-      WHERE id = ? AND state = ? AND generation = ? AND event_seq = ?
-    `).bind(
-      call.state, Number(call.generation), Number(call.event_seq), call.terminal_state, call.updated_at,
-      callId, nextState, nextGeneration, nextSeq,
-    ).run();
     return jsonResponse({ success: false, error: '通话事件保存失败，请重试' }, 409);
+  }
+  const updatedChanges = Number(batchResults?.[0]?.meta?.changes || 0);
+  const insertedChanges = Number(batchResults?.[1]?.meta?.changes || 0);
+  if (updatedChanges !== 1 || insertedChanges !== 1) {
+    return jsonResponse({ success: false, error: '通话事件并发冲突，请同步后重试' }, 409);
   }
 
   const event = await db.prepare(`
