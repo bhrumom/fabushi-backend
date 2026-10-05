@@ -18,7 +18,7 @@ const spec = readFileSync(
 
 test('durable spec preserves one social message truth and device/account separation', () => {
   assert.match(spec, /direct_messages.*canonical durable one-to-one Human message/i);
-  assert.match(spec, /DeviceId/i);
+  assert.match(spec, /x-fabushi-device-id/i);
   assert.match(spec, /Desktop Host Session\/Transcript.*local materialized/i);
   assert.match(spec, /No Telegram\/MTProto provider/i);
 });
@@ -37,6 +37,7 @@ test('message send validates canonical resources and same-pair reply before pers
   assert.match(handler, /requirePairMessage\(db, body\.replyToMessageId, auth\.userId, target\.id\)/);
   assert.match(handler, /回复目标不属于当前会话/);
   assert.match(handler, /消息附件不存在或不属于当前账号/);
+  assert.match(handler, /status = message === '消息附件不存在或不属于当前账号' \? 403 : 400/);
   assert.match(handler, /ON CONFLICT\(sender_user_id, client_request_id\).*DO NOTHING/s);
   assert.match(handler, /reply_to_message_id, attachments_json/);
 });
