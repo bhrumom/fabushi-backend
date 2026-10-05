@@ -5,6 +5,7 @@ import {
   handleAppendHumanCallEvent,
   handleCreateHumanCall,
   handleGetHumanCall,
+  handleGetHumanCallIceServers,
   handleListHumanCalls,
 } from '../src/handlers/call-signaling.js';
 
@@ -182,6 +183,79 @@ function createDb({ failNextEventInsert = false } = {}) {
 }
 
 const ENV = { JWT_SECRET: 'human-call-signaling-contract-secret-at-least-32-bytes-long' };
+
+test('TURN credentials stay server-side and issue bounded authenticated ICE configuration', async () => {
+  const db = createDb();
+  let requestRecord = null;
+  const fetchImpl = async (url, init) => {
+    requestRecord = { url: String(url), init };
+    return new Response(JSON.stringify({
+      iceServers: [
+        { urls: ['stun:stun.cloudflare.com:3478'] },
+        {
+          urls: [
+            'turn:turn.cloudflare.com:3478?transport=udp',
+            'turns:turn.cloudflare.com:443?transport=tcp',
+          ],
+          username: 'temporary-user',
+          credential: 'temporary-credential',
+        },
+      ],
+    }), { status: 201, headers: { 'content-type': 'application/json' } });
+  };
+  const env = {
+    ...ENV,
+    FABUSHI_TURN_KEY_ID: 'turn-key-12345678',
+    FABUSHI_TURN_KEY_API_TOKEN: 'server-only-turn-api-token',
+    FABUSHI_TURN_CREDENTIAL_TTL_SECONDS: '7200',
+  };
+  const response = await handleGetHumanCallIceServers(
+    await makeRequest('https://api.example.com/api/social/calls/ice', ALICE, 'alice-laptop'),
+    env,
+    db,
+    fetchImpl,
+  );
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
+  assert.equal(payload.success, true);
+  assert.equal(payload.ttlSeconds, 7200);
+  assert.equal(payload.iceServers.length, 2);
+  assert.equal(requestRecord.url,
+    'https://rtc.live.cloudflare.com/v1/turn/keys/turn-key-12345678/credentials/generate-ice-servers');
+  assert.equal(requestRecord.init.method, 'POST');
+  assert.equal(requestRecord.init.headers.Authorization, 'Bearer server-only-turn-api-token');
+  assert.deepEqual(JSON.parse(requestRecord.init.body), { ttl: 7200 });
+  assert.equal(JSON.stringify(payload).includes('server-only-turn-api-token'), false);
+});
+
+test('TURN endpoint fails closed when server credentials or upstream ICE data are invalid', async () => {
+  const db = createDb();
+  let fetchCalls = 0;
+  const missing = await handleGetHumanCallIceServers(
+    await makeRequest('https://api.example.com/api/social/calls/ice', ALICE, 'alice-laptop'),
+    ENV,
+    db,
+    async () => { fetchCalls += 1; throw new Error('must not call'); },
+  );
+  assert.equal(missing.status, 503);
+  assert.equal(fetchCalls, 0);
+
+  const invalid = await handleGetHumanCallIceServers(
+    await makeRequest('https://api.example.com/api/social/calls/ice', ALICE, 'alice-laptop'),
+    {
+      ...ENV,
+      FABUSHI_TURN_KEY_ID: 'turn-key-12345678',
+      FABUSHI_TURN_KEY_API_TOKEN: 'server-only-turn-api-token',
+    },
+    db,
+    async () => new Response(JSON.stringify({ iceServers: [{ urls: 'https://not-ice.example' }] }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    }),
+  );
+  assert.equal(invalid.status, 502);
+});
 
 test('call create is friend-scoped and stable across devices', async () => {
   const db = createDb();
