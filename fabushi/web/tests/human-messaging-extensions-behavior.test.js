@@ -325,7 +325,7 @@ function createR2() {
 async function headers(user, deviceId) {
   const token = await generateToken({ id: user.id, username: user.username }, ENV);
   return {
-    Authorization: \`Bearer \${token}\`,
+    Authorization: `Bearer ${token}`,
     'x-fabushi-device-id': deviceId,
   };
 }
@@ -402,7 +402,7 @@ test('account identity converges across devices by clientRequestId and afterId',
   for (const deviceId of ['alice-laptop', 'alice-phone']) {
     const response = await handleListDirectMessages(
       await get(
-        \`https://api.example.com/api/social/messages?contactId=\${BOB.id}&afterId=\${firstPayload.message.id}\`,
+        `https://api.example.com/api/social/messages?contactId=${BOB.id}&afterId=${firstPayload.message.id}`,
         ALICE,
         deviceId,
       ),
@@ -466,7 +466,7 @@ test('reply resource reaction and search remain server-canonical and participant
 
   const peerDownload = await handleGetDirectMessageResource(
     await get(
-      \`https://api.example.com/api/social/message-resources/\${resourceId}\`,
+      `https://api.example.com/api/social/message-resources/${resourceId}`,
       BOB,
       'bob-phone',
     ),
@@ -482,7 +482,7 @@ test('reply resource reaction and search remain server-canonical and participant
 
   const foreignDownload = await handleGetDirectMessageResource(
     await get(
-      \`https://api.example.com/api/social/message-resources/\${resourceId}\`,
+      `https://api.example.com/api/social/message-resources/${resourceId}`,
       CAROL,
       'carol-phone',
     ),
@@ -531,7 +531,7 @@ test('reply resource reaction and search remain server-canonical and participant
 
   const reactionResponse = await handleSetDirectMessageReaction(
     await post(
-      \`https://api.example.com/api/social/messages/\${base.message.id}/reactions\`,
+      `https://api.example.com/api/social/messages/${base.message.id}/reactions`,
       BOB,
       'bob-phone',
       { emoji: '👍', active: true },
@@ -544,7 +544,7 @@ test('reply resource reaction and search remain server-canonical and participant
 
   const searchResponse = await handleListDirectMessages(
     await get(
-      \`https://api.example.com/api/social/messages?contactId=\${BOB.id}&q=dharma\`,
+      `https://api.example.com/api/social/messages?contactId=${BOB.id}&q=dharma`,
       ALICE,
       'alice-phone',
     ),
@@ -561,7 +561,7 @@ test('reply resource reaction and search remain server-canonical and participant
 
   const outsiderReaction = await handleSetDirectMessageReaction(
     await post(
-      \`https://api.example.com/api/social/messages/\${base.message.id}/reactions\`,
+      `https://api.example.com/api/social/messages/${base.message.id}/reactions`,
       CAROL,
       'carol-phone',
       { emoji: '👀', active: true },
