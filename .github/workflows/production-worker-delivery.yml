@@ -1,0 +1,111 @@
+name: Production Worker Delivery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-worker-delivery
+  cancel-in-progress: false
+
+jobs:
+  deploy-production:
+    name: Migrate and deploy canonical production Worker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.WRANGLER_API_TOKEN || secrets.CLOUDFLARE_TOKEN || secrets.CF_TOKEN || vars.CLOUDFLARE_API_TOKEN || vars.CF_API_TOKEN || vars.WRANGLER_API_TOKEN || vars.CLOUDFLARE_TOKEN || vars.CF_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || secrets.CF_ACCOUNT_ID || secrets.CF_ACCOUNT || secrets.CLOUDFLARE_ACCOUNT || vars.CLOUDFLARE_ACCOUNT_ID || vars.CF_ACCOUNT_ID || vars.CF_ACCOUNT || vars.CLOUDFLARE_ACCOUNT }}
+    steps:
+      - name: Require canonical main dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main" || {
+            echo "Production delivery is permitted only from refs/heads/main; got ${GITHUB_REF}." >&2
+            exit 64
+          }
+
+      - name: Checkout exact canonical source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Verify exact source SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Verify Cloudflare production security preflight
+        working-directory: fabushi/web
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}"
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}"
+          bash ../../.github/scripts/assert-worker-security-secrets.sh production
+
+      - name: Apply production D1 migrations
+        working-directory: fabushi/web
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ../../.github/scripts/run-wrangler-d1-migrations.sh DB production
+
+      - name: Deploy production Worker
+        working-directory: fabushi/web
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4 deploy --env production
+
+      - name: Verify public production health
+        shell: bash
+        run: |
+          set -euo pipefail
+          health_url="https://api.ombhrum.com/health"
+          for attempt in $(seq 1 12); do
+            if response="$(curl --fail --silent --show-error --max-time 15 "${health_url}")" \
+              && jq -e '.status == "ok"' <<<"${response}" >/dev/null; then
+              printf '%s\n' "${response}" > production-health.json
+              exit 0
+            fi
+            test "${attempt}" -lt 12 || exit 1
+            sleep 5
+          done
+
+      - name: Write production provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg sourceSha "${GITHUB_SHA}" \
+            --arg runId "${GITHUB_RUN_ID}" \
+            --arg runAttempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg worker "fabushi-flutter-web-prod" \
+            --arg database "DB/fabushi-db" \
+            --arg healthUrl "https://api.ombhrum.com/health" \
+            --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{repository:$repository,sourceSha:$sourceSha,runId:$runId,runAttempt:$runAttempt,worker:$worker,database:$database,migrations:"success",deploy:"success",healthUrl:$healthUrl,completedAt:$completedAt}' \
+            > production-worker-delivery-provenance.json
+
+      - name: Upload production delivery provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-worker-delivery-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            production-worker-delivery-provenance.json
+            production-health.json
