@@ -25,12 +25,15 @@ async function makeRequest(url, user, deviceId, body) {
   });
 }
 
-function createDb() {
+function createDb({ failNextEventInsert = false } = {}) {
   const state = {
     users: [ALICE, BOB, CAROL],
     friends: new Set(['1:2', '2:1']),
     calls: new Map(),
     events: [],
+    batchCalls: 0,
+    lastChanges: 0,
+    rollbackUpdateCalls: 0,
   };
   const prepare = (sql) => {
     const q = sql.replace(/\s+/g, ' ').trim();
@@ -114,6 +117,7 @@ function createDb() {
           return { meta: { changes: 1 } };
         }
         if (q.startsWith('UPDATE human_call_channels SET state = ?') && !q.includes('COALESCE')) {
+          state.rollbackUpdateCalls += 1;
           const [oldState, generation, eventSeq, terminalState, updatedAt, id, expectedState, expectedGeneration, expectedSeq] = params;
           const call = state.calls.get(id);
           if (call && call.state === expectedState
@@ -128,6 +132,13 @@ function createDb() {
           return { meta: { changes: 0 } };
         }
         if (q.startsWith('INSERT INTO human_call_events')) {
+          if (q.includes('WHERE changes() = 1') && state.lastChanges !== 1) {
+            return { meta: { changes: 0 } };
+          }
+          if (failNextEventInsert) {
+            failNextEventInsert = false;
+            throw new Error('injected event insert failure');
+          }
           const [callId, seq, generation, userId, deviceId, clientEventId, kind, payloadJson, createdAt] = params;
           if (state.events.some((e) => e.call_id === callId && (
             e.seq === Number(seq) ||
@@ -144,7 +155,30 @@ function createDb() {
       },
     };
   };
-  return { state, prepare };
+  const batch = async (statements) => {
+    state.batchCalls += 1;
+    const callsSnapshot = new Map(
+      [...state.calls.entries()].map(([id, call]) => [id, { ...call }]),
+    );
+    const eventsSnapshot = state.events.map((event) => ({ ...event }));
+    const previousLastChanges = state.lastChanges;
+    try {
+      const results = [];
+      for (const statement of statements) {
+        const result = await statement.run();
+        state.lastChanges = Number(result.meta?.changes || 0);
+        results.push(result);
+      }
+      return results;
+    } catch (error) {
+      state.calls.clear();
+      for (const [id, call] of callsSnapshot.entries()) state.calls.set(id, call);
+      state.events.splice(0, state.events.length, ...eventsSnapshot);
+      state.lastChanges = previousLastChanges;
+      throw error;
+    }
+  };
+  return { state, prepare, batch };
 }
 
 const ENV = { JWT_SECRET: 'human-call-signaling-contract-secret-at-least-32-bytes-long' };
@@ -323,4 +357,49 @@ test('terminal transition fences later mutations', async () => {
     ENV, db, callId,
   );
   assert.equal(later.status, 409);
+});
+
+
+test('call channel CAS and event append commit atomically in one D1 batch', async () => {
+  const db = createDb({ failNextEventInsert: true });
+  const callId = 'call-phase1-atomic-0001';
+  await handleCreateHumanCall(
+    await makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', {
+      callId,
+      targetUserId: BOB.id,
+    }),
+    ENV, db,
+  );
+  const before = { ...db.state.calls.get(callId) };
+
+  const failed = await handleAppendHumanCallEvent(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
+      clientEventId: 'event-ring-atomic-1',
+      generation: 0,
+      kind: 'transition',
+      payload: { action: 'ring', state: 'ringing' },
+    }),
+    ENV, db, callId,
+  );
+  assert.equal(failed.status, 409);
+  assert.deepEqual(db.state.calls.get(callId), before);
+  assert.equal(db.state.events.length, 0);
+  assert.equal(db.state.batchCalls, 1);
+  assert.equal(db.state.rollbackUpdateCalls, 0);
+
+  const retried = await handleAppendHumanCallEvent(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
+      clientEventId: 'event-ring-atomic-1',
+      generation: 0,
+      kind: 'transition',
+      payload: { action: 'ring', state: 'ringing' },
+    }),
+    ENV, db, callId,
+  );
+  assert.equal(retried.status, 201);
+  assert.equal(db.state.calls.get(callId).state, 'ringing');
+  assert.equal(db.state.calls.get(callId).event_seq, 1);
+  assert.equal(db.state.events.length, 1);
+  assert.equal(db.state.batchCalls, 2);
+  assert.equal(db.state.rollbackUpdateCalls, 0);
 });
