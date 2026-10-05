@@ -94,17 +94,22 @@ function createDb({ failNextEventInsert = false } = {}) {
       },
       async run() {
         if (q.startsWith('INSERT INTO human_call_channels')) {
-          const [id, creator, peer, createdAt, updatedAt] = params;
+          const [id, creator, peer, creatorDeviceId, createdAt, updatedAt] = params;
           if (state.calls.has(id)) throw new Error('constraint');
           state.calls.set(id, {
             id, creator_user_id: Number(creator), peer_user_id: Number(peer),
+            creator_device_id: creatorDeviceId, peer_device_id: null,
             state: 'invited', generation: 0, event_seq: 0, terminal_state: null,
             created_at: createdAt, updated_at: updatedAt,
           });
           return { meta: { changes: 1 } };
         }
         if (q.startsWith('UPDATE human_call_channels SET state = ?') && q.includes('terminal_state = COALESCE')) {
-          const [nextState, generation, eventSeq, terminalState, updatedAt, id, expectedState, expectedGeneration, expectedSeq] = params;
+          const [
+            nextState, generation, eventSeq, terminalState,
+            nextCreatorDeviceId, nextPeerDeviceId, updatedAt,
+            id, expectedState, expectedGeneration, expectedSeq,
+          ] = params;
           const call = state.calls.get(id);
           if (!call || call.terminal_state || call.state !== expectedState
               || call.generation !== Number(expectedGeneration) || call.event_seq !== Number(expectedSeq)) {
@@ -114,6 +119,8 @@ function createDb({ failNextEventInsert = false } = {}) {
           call.generation = Number(generation);
           call.event_seq = Number(eventSeq);
           if (terminalState != null) call.terminal_state = terminalState;
+          if (call.creator_device_id == null && nextCreatorDeviceId != null) call.creator_device_id = nextCreatorDeviceId;
+          if (call.peer_device_id == null && nextPeerDeviceId != null) call.peer_device_id = nextPeerDeviceId;
           call.updated_at = updatedAt;
           return { meta: { changes: 1 } };
         }
@@ -273,6 +280,8 @@ test('call create is friend-scoped and stable across devices', async () => {
   assert.equal(retry.status, 200);
   assert.equal(retried.deduplicated, true);
   assert.equal(retried.call.state, 'invited');
+  assert.equal(retried.call.creatorDeviceId, 'alice-laptop');
+  assert.equal(retried.call.peerDeviceId, null);
 
   const incoming = await handleListHumanCalls(
     await makeRequest('https://api.example.com/api/social/calls?limit=20', BOB, 'bob-phone'),
@@ -287,6 +296,98 @@ test('call create is friend-scoped and stable across devices', async () => {
     ENV, db,
   );
   assert.equal(denied.status, 403);
+});
+
+test('media transport claims converge same-account devices onto one owner per participant', async () => {
+  const db = createDb();
+  const callId = 'call-phase1-device-claim-1';
+  const created = await handleCreateHumanCall(
+    await makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', {
+      callId,
+      targetUserId: BOB.id,
+    }),
+    ENV, db,
+  );
+  const createdPayload = await created.json();
+  assert.equal(created.status, 201);
+  assert.equal(createdPayload.call.creatorDeviceId, 'alice-laptop');
+  assert.equal(createdPayload.call.peerDeviceId, null);
+
+  const duplicateCreate = await handleCreateHumanCall(
+    await makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-phone', {
+      callId,
+      targetUserId: BOB.id,
+    }),
+    ENV, db,
+  );
+  assert.equal((await duplicateCreate.json()).call.creatorDeviceId, 'alice-laptop');
+
+  const wrongCreatorRing = await handleAppendHumanCallEvent(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-phone', {
+      clientEventId: 'wrong-creator-ring-1',
+      generation: 0,
+      kind: 'transition',
+      payload: { action: 'ring', state: 'ringing' },
+    }),
+    ENV, db, callId,
+  );
+  assert.equal(wrongCreatorRing.status, 409);
+
+  const accepted = await handleAppendHumanCallEvent(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-tablet', {
+      clientEventId: 'peer-accept-claim-1',
+      generation: 0,
+      kind: 'transition',
+      payload: { action: 'accept', state: 'negotiating' },
+    }),
+    ENV, db, callId,
+  );
+  const acceptedPayload = await accepted.json();
+  assert.equal(accepted.status, 201);
+  assert.equal(acceptedPayload.call.peerDeviceId, 'bob-tablet');
+  assert.equal(acceptedPayload.call.creatorDeviceId, 'alice-laptop');
+
+  const wrongPeerSignal = await handleAppendHumanCallEvent(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
+      clientEventId: 'wrong-peer-signal-1',
+      generation: 0,
+      kind: 'signal',
+      payload: { type: 'answer', sdp: 'must-be-rejected' },
+    }),
+    ENV, db, callId,
+  );
+  assert.equal(wrongPeerSignal.status, 409);
+
+  const wrongCreatorMedia = await handleAppendHumanCallEvent(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-phone', {
+      clientEventId: 'wrong-creator-media-1',
+      generation: 0,
+      kind: 'media',
+      payload: { muted: true },
+    }),
+    ENV, db, callId,
+  );
+  assert.equal(wrongCreatorMedia.status, 409);
+
+  const ownerSignal = await handleAppendHumanCallEvent(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
+      clientEventId: 'owner-offer-1',
+      generation: 0,
+      kind: 'signal',
+      payload: { type: 'offer', sdp: 'owner-offer' },
+    }),
+    ENV, db, callId,
+  );
+  assert.equal(ownerSignal.status, 201);
+
+  const observed = await handleGetHumanCall(
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}`, BOB, 'bob-phone'),
+    ENV, db, callId,
+  );
+  const observedPayload = await observed.json();
+  assert.equal(observed.status, 200);
+  assert.equal(observedPayload.call.peerDeviceId, 'bob-tablet');
+  assert.equal(observedPayload.call.creatorDeviceId, 'alice-laptop');
 });
 
 test('ordered events converge across participant devices with generation and idempotency fences', async () => {
@@ -354,7 +455,7 @@ test('ordered events converge across participant devices with generation and ide
   assert.equal(conflict.status, 409);
 
   const reconnect = await handleAppendHumanCallEvent(
-    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-phone', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-reconnect-1',
       generation: 1,
       kind: 'transition',
@@ -412,7 +513,7 @@ test('terminal transition fences later mutations', async () => {
     ENV, db,
   );
   const ended = await handleAppendHumanCallEvent(
-    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-end-1',
       generation: 0,
       kind: 'transition',

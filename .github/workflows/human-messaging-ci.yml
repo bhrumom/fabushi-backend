@@ -11,6 +11,7 @@ on:
       - "fabushi/web/migrations/20261005_human_message_extensions.sql"
       - "fabushi/web/migrations/20261005_human_call_signaling.sql"
       - "fabushi/web/migrations/20261005_human_call_convergence.sql"
+      - "fabushi/web/migrations/20261005_human_call_device_claim.sql"
       - "fabushi/web/tests/friends-and-messages-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
