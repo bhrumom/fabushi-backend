@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { generateToken } from '../auth-utils.js';
 import {
   handleAppendHumanCallEvent,
   handleCreateHumanCall,
@@ -10,12 +11,12 @@ const ALICE = { id: 1, username: 'alice' };
 const BOB = { id: 2, username: 'bob' };
 const CAROL = { id: 3, username: 'carol' };
 
-function makeRequest(url, user, deviceId, body) {
+async function makeRequest(url, user, deviceId, body) {
+  const token = await generateToken({ id: user.id, username: user.username }, ENV);
   return new Request(url, {
     method: body === undefined ? 'GET' : 'POST',
     headers: {
-      'x-test-user-id': String(user.id),
-      'x-test-username': user.username,
+      Authorization: `Bearer ${token}`,
       'x-fabushi-device-id': deviceId,
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     },
@@ -132,18 +133,18 @@ function createDb() {
   return { state, prepare };
 }
 
-const ENV = { TEST_AUTH_FROM_HEADERS: true };
+const ENV = { JWT_SECRET: 'human-call-signaling-contract-secret-at-least-32-bytes-long' };
 
 test('call create is friend-scoped and stable across devices', async () => {
   const db = createDb();
   const callId = 'call-phase1-0001';
   const first = await handleCreateHumanCall(
-    makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', { callId, targetUserId: BOB.id }),
+    await makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', { callId, targetUserId: BOB.id }),
     ENV, db,
   );
   assert.equal(first.status, 201);
   const retry = await handleCreateHumanCall(
-    makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-phone', { callId, targetUserId: BOB.id }),
+    await makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-phone', { callId, targetUserId: BOB.id }),
     ENV, db,
   );
   const retried = await retry.json();
@@ -151,7 +152,7 @@ test('call create is friend-scoped and stable across devices', async () => {
   assert.equal(retried.deduplicated, true);
 
   const denied = await handleCreateHumanCall(
-    makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', { callId: 'call-phase1-0002', targetUserId: CAROL.id }),
+    await makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', { callId: 'call-phase1-0002', targetUserId: CAROL.id }),
     ENV, db,
   );
   assert.equal(denied.status, 403);
@@ -161,12 +162,12 @@ test('ordered events converge across participant devices with generation and ide
   const db = createDb();
   const callId = 'call-phase1-1001';
   await handleCreateHumanCall(
-    makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', { callId, targetUserId: BOB.id }),
+    await makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', { callId, targetUserId: BOB.id }),
     ENV, db,
   );
 
   const signal = await handleAppendHumanCallEvent(
-    makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-offer-1',
       generation: 0,
       kind: 'signal',
@@ -179,7 +180,7 @@ test('ordered events converge across participant devices with generation and ide
   assert.equal(signalPayload.event.seq, 1);
 
   const replay = await handleAppendHumanCallEvent(
-    makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-offer-1',
       generation: 0,
       kind: 'signal',
@@ -190,7 +191,7 @@ test('ordered events converge across participant devices with generation and ide
   assert.equal((await replay.json()).deduplicated, true);
 
   const conflict = await handleAppendHumanCallEvent(
-    makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-offer-1',
       generation: 0,
       kind: 'signal',
@@ -201,7 +202,7 @@ test('ordered events converge across participant devices with generation and ide
   assert.equal(conflict.status, 409);
 
   const reconnect = await handleAppendHumanCallEvent(
-    makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-phone', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-phone', {
       clientEventId: 'event-reconnect-1',
       generation: 1,
       kind: 'transition',
@@ -212,7 +213,7 @@ test('ordered events converge across participant devices with generation and ide
   assert.equal(reconnect.status, 201);
 
   const stale = await handleAppendHumanCallEvent(
-    makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
       clientEventId: 'event-answer-stale',
       generation: 0,
       kind: 'signal',
@@ -223,7 +224,7 @@ test('ordered events converge across participant devices with generation and ide
   assert.equal(stale.status, 409);
 
   const peer = await handleAppendHumanCallEvent(
-    makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
       clientEventId: 'event-answer-1',
       generation: 1,
       kind: 'signal',
@@ -235,7 +236,7 @@ test('ordered events converge across participant devices with generation and ide
 
   for (const deviceId of ['alice-laptop', 'alice-phone']) {
     const synced = await handleGetHumanCall(
-      makeRequest(`https://api.example.com/api/social/calls/${callId}?afterSeq=1&limit=50`, ALICE, deviceId),
+      await makeRequest(`https://api.example.com/api/social/calls/${callId}?afterSeq=1&limit=50`, ALICE, deviceId),
       ENV, db, callId,
     );
     const payload = await synced.json();
@@ -245,7 +246,7 @@ test('ordered events converge across participant devices with generation and ide
   }
 
   const outsider = await handleGetHumanCall(
-    makeRequest(`https://api.example.com/api/social/calls/${callId}`, CAROL, 'carol-phone'),
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}`, CAROL, 'carol-phone'),
     ENV, db, callId,
   );
   assert.equal(outsider.status, 404);
@@ -255,11 +256,11 @@ test('terminal transition fences later mutations', async () => {
   const db = createDb();
   const callId = 'call-phase1-2001';
   await handleCreateHumanCall(
-    makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', { callId, targetUserId: BOB.id }),
+    await makeRequest('https://api.example.com/api/social/calls', ALICE, 'alice-laptop', { callId, targetUserId: BOB.id }),
     ENV, db,
   );
   const ended = await handleAppendHumanCallEvent(
-    makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
       clientEventId: 'event-end-1',
       generation: 0,
       kind: 'transition',
@@ -269,7 +270,7 @@ test('terminal transition fences later mutations', async () => {
   );
   assert.equal(ended.status, 201);
   const later = await handleAppendHumanCallEvent(
-    makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
+    await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-late-1',
       generation: 0,
       kind: 'media',
