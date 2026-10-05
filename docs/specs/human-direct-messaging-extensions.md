@@ -156,5 +156,5 @@ CI logs and exact commit SHA are required evidence. API failures return bounded 
 
 | Requirement / AC | Status | Evidence / reason |
 | --- | --- | --- |
-| R1-R10 | blocked | implementation and exact-HEAD verification pending |
-| AC-1-AC-8 | blocked | implementation and exact-HEAD verification pending |
+| R1-R10 | passed | Implemented in the canonical social messaging owner; executable source + handler-level D1/R2 contracts passed on implementation HEAD `1c544e5405512a4bd55b25cc9759fc5f55ad3612`, Human Messaging CI run `37249986917`. |
+| AC-1-AC-8 | passed | Backward compatibility, reply/resources/reactions, fail-closed authorization, `afterId` reconnect, `q` search, two-device convergence, private R2 reads, and exact-HEAD CI are covered by run `37249986917`; this evidence-only spec update must also pass the same workflow before integration. |
