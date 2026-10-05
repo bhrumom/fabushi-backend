@@ -471,7 +471,9 @@ export async function handleSendDirectMessage(request, env, db) {
   try {
     attachments = await canonicalizeMessageResources(db, auth.userId, body.attachments);
   } catch (error) {
-    return jsonResponse({ success: false, error: error instanceof Error ? error.message : String(error) }, 400);
+    const message = error instanceof Error ? error.message : String(error);
+    const status = message === '消息附件不存在或不属于当前账号' ? 403 : 400;
+    return jsonResponse({ success: false, error: message }, status);
   }
   if (!text && attachments.length === 0) {
     return jsonResponse({ success: false, error: '消息不能为空' }, 400);
