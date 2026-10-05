@@ -28,6 +28,11 @@ import {
   handleSetDirectMessageReaction,
 } from '../handlers/friends.js';
 import {
+  handleAppendHumanCallEvent,
+  handleCreateHumanCall,
+  handleGetHumanCall,
+} from '../handlers/call-signaling.js';
+import {
   handleToggleLike,
   handleGetLikeCount,
   handleBatchGetLikeCounts,
@@ -67,6 +72,11 @@ export async function routeCommunityRequest({ pathname, method, request, env, db
   if (messageResourceMatch && method === 'GET') return handleGetDirectMessageResource(request, env, db, messageResourceMatch[1]);
   const messageReactionMatch = pathname.match(/^\/api\/social\/messages\/(\d+)\/reactions$/);
   if (messageReactionMatch && method === 'POST') return handleSetDirectMessageReaction(request, env, db, messageReactionMatch[1]);
+  if (pathname === '/api/social/calls' && method === 'POST') return handleCreateHumanCall(request, env, db);
+  const callEventMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/events$/);
+  if (callEventMatch && method === 'POST') return handleAppendHumanCallEvent(request, env, db, callEventMatch[1]);
+  const callMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})$/);
+  if (callMatch && method === 'GET') return handleGetHumanCall(request, env, db, callMatch[1]);
 
   if (pathname === '/api/likes/toggle' && method === 'POST') return handleToggleLike(request, env, db);
   if (pathname === '/api/likes/count' && method === 'GET') return handleGetLikeCount(request, env, db);
