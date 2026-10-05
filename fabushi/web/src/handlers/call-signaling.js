@@ -115,6 +115,75 @@ async function readAuthorizedChannel(db, callId, authUserId) {
   `).bind(callId, authUserId, authUserId).first();
 }
 
+function readTurnConfiguration(env) {
+  const keyId = String(env?.FABUSHI_TURN_KEY_ID || '').trim();
+  const apiToken = String(env?.FABUSHI_TURN_KEY_API_TOKEN || '').trim();
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(keyId) || apiToken.length < 16 || apiToken.length > 512) {
+    return null;
+  }
+  const configuredTtl = Number.parseInt(String(env?.FABUSHI_TURN_CREDENTIAL_TTL_SECONDS || ''), 10);
+  const ttlSeconds = Number.isFinite(configuredTtl)
+    ? Math.min(Math.max(configuredTtl, 300), 86400)
+    : 3600;
+  return { keyId, apiToken, ttlSeconds };
+}
+
+function validIceServers(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 16) return false;
+  return value.every((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    const urls = Array.isArray(entry.urls) ? entry.urls : [entry.urls];
+    if (urls.length === 0 || urls.length > 16 || urls.some((url) =>
+      typeof url !== 'string' || !/^(stun|turn|turns):[^\s]{1,1024}$/i.test(url))) return false;
+    if (entry.username != null && (typeof entry.username !== 'string' || entry.username.length > 2048)) return false;
+    if (entry.credential != null && (typeof entry.credential !== 'string' || entry.credential.length > 2048)) return false;
+    return true;
+  });
+}
+
+export async function handleGetHumanCallIceServers(request, env, db, fetchImpl = fetch) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const config = readTurnConfiguration(env);
+  if (!config) {
+    return jsonResponse({ success: false, error: '实时通话中继服务尚未配置' }, 503);
+  }
+
+  let upstream;
+  try {
+    upstream = await fetchImpl(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(config.keyId)}/credentials/generate-ice-servers`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ ttl: config.ttlSeconds }),
+      },
+    );
+  } catch {
+    return jsonResponse({ success: false, error: '实时通话中继凭据暂时不可用' }, 502);
+  }
+
+  let payload;
+  try {
+    payload = await upstream.json();
+  } catch {
+    return jsonResponse({ success: false, error: '实时通话中继响应无效' }, 502);
+  }
+  if (!upstream.ok || !validIceServers(payload?.iceServers)) {
+    return jsonResponse({ success: false, error: '实时通话中继凭据生成失败' }, 502);
+  }
+  const response = jsonResponse({
+    success: true,
+    iceServers: payload.iceServers,
+    ttlSeconds: config.ttlSeconds,
+  });
+  response.headers.set('cache-control', 'private, no-store');
+  return response;
+}
+
 export async function handleCreateHumanCall(request, env, db) {
   const auth = await requireCallAuth(request, env, db);
   if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
