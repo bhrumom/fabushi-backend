@@ -1,0 +1,33 @@
+name: Story Authority CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "fabushi/web/src/handlers/stories.js"
+      - "fabushi/web/src/routes/community-routes.js"
+      - "fabushi/web/migrations/20261008_story_authority.sql"
+      - "fabushi/web/tests/story-authority.test.js"
+      - ".github/workflows/story-authority-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  story-authority:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: fabushi/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check Story handler syntax
+        run: node --check src/handlers/stories.js
+      - name: Check community router syntax
+        run: node --check src/routes/community-routes.js
+      - name: Run Story authority contracts
+        run: node --test tests/story-authority.test.js
