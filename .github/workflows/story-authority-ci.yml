@@ -29,5 +29,8 @@ jobs:
         run: node --check src/handlers/stories.js
       - name: Check community router syntax
         run: node --check src/routes/community-routes.js
+      - name: Validate D1 Story migration locally
+        run: npx --yes wrangler@latest d1 migrations apply DB --local --persist-to .wrangler-story-ci
+
       - name: Run Story authority contracts
         run: node --test tests/story-authority.test.js
