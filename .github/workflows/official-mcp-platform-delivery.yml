@@ -65,6 +65,15 @@ jobs:
           workspaces: core/deploy/platform-worker -> target
       - name: Install pinned Worker builder
         run: cargo install worker-build --version 0.8.5 --locked
+      - name: Register provider client IDs in the Worker secret namespace
+        working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: 1007111102015-4n9lrivofv2g7ttqph2u8nknimr1vav5.apps.googleusercontent.com
+          GITHUB_OAUTH_CLIENT_ID: Ov23liS9LtBHoVaEvKnb
+        run: |
+          set -euo pipefail
+          printf '%s' "$GOOGLE_OAUTH_CLIENT_ID" | npx --yes wrangler@4.110.0 secret put MCP_GOOGLE_CLIENT_ID
+          printf '%s' "$GITHUB_OAUTH_CLIENT_ID" | npx --yes wrangler@4.110.0 secret put MCP_GITHUB_CLIENT_ID
       - name: Confirm existing signing and provider registrations
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
         run: |
