@@ -126,8 +126,9 @@ jobs:
       - name: Verify real public routing and credential boundary
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --max-time 30 https://mahayana-platform.bhrumom.workers.dev/health | jq -e '.ok == true'
-          status=$(curl --silent --show-error --max-time 30 -D "$RUNNER_TEMP/mcp-route-headers" -o "$RUNNER_TEMP/mcp-route-body" -w '%{http_code}' -H 'Content-Type: application/json' --data '{"pluginId":"fabushi-official-github"}' https://api.ombhrum.com/api/mcp/oauth/start)
+          user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/154.0.0.0 Safari/537.36'
+          curl --fail --silent --show-error --max-time 30 -H "User-Agent: $user_agent" https://mahayana-platform.bhrumom.workers.dev/health | jq -e '.ok == true'
+          status=$(curl --silent --show-error --max-time 30 -D "$RUNNER_TEMP/mcp-route-headers" -o "$RUNNER_TEMP/mcp-route-body" -w '%{http_code}' -H "User-Agent: $user_agent" -H 'Content-Type: application/json' --data '{"pluginId":"fabushi-official-github"}' https://api.ombhrum.com/api/mcp/oauth/start)
           test "$status" = 401
           jq -e '.error == "session_required"' "$RUNNER_TEMP/mcp-route-body"
           grep -qi '^x-fabushi-control-plane: mahayana-platform' "$RUNNER_TEMP/mcp-route-headers"
