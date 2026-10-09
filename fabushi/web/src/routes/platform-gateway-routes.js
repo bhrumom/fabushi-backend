@@ -12,6 +12,7 @@ const EXACT_PLATFORM_PATHS = new Set([
 
 function isCanonicalPlatformPath(pathname) {
   if (EXACT_PLATFORM_PATHS.has(pathname)) return true;
+  if (pathname.startsWith('/api/mcp/oauth/') || pathname.startsWith('/api/mcp/connections/')) return true;
   if (pathname.startsWith('/api/auth/browser/')) return true;
   if (pathname.startsWith('/api/auth/oauth/attempts/')) return true;
   return pathname.startsWith('/v1/');
@@ -35,6 +36,8 @@ async function fetchPlatform(env, request) {
     try {
       return await env.MAHAYANA_PLATFORM.fetch(request);
     } catch (error) {
+      // Connection exchange/rotation/revocation may already have happened upstream.
+      if (new URL(request.url).pathname.startsWith('/api/mcp/')) throw new Error('MCP platform response unavailable; request was not retried');
       console.warn(
         'Mahayana platform service binding failed; retrying canonical HTTPS origin:',
         error?.message || error,
