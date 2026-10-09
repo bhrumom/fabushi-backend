@@ -65,26 +65,42 @@ jobs:
           workspaces: core/deploy/platform-worker -> target
       - name: Install pinned Worker builder
         run: cargo install worker-build --version 0.8.5 --locked
-      - name: Register provider client IDs in the Worker secret namespace
+      - name: Confirm existing signing and provider registrations
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
         env:
           GOOGLE_OAUTH_CLIENT_ID: 1007111102015-4n9lrivofv2g7ttqph2u8nknimr1vav5.apps.googleusercontent.com
           GITHUB_OAUTH_CLIENT_ID: Ov23liS9LtBHoVaEvKnb
         run: |
           set -euo pipefail
-          printf '%s' "$GOOGLE_OAUTH_CLIENT_ID" | npx --yes wrangler@4.110.0 secret put MCP_GOOGLE_CLIENT_ID
-          printf '%s' "$GITHUB_OAUTH_CLIENT_ID" | npx --yes wrangler@4.110.0 secret put MCP_GITHUB_CLIENT_ID
-      - name: Confirm existing signing and provider registrations
-        working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
-        run: |
-          set -euo pipefail
           npx --yes wrangler@4.110.0 secret list > "$RUNNER_TEMP/mcp-secret-names.json"
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/mahayana-platform/settings" \
+            > "$RUNNER_TEMP/mcp-worker-settings.json"
           python3 - <<'PY'
           import json,os
-          names={r['name'] for r in json.load(open(os.environ['RUNNER_TEMP']+'/mcp-secret-names.json'))}
-          assert {'ACCESS_TOKEN_PRIVATE_KEY_PEM','ACCESS_TOKEN_PUBLIC_KEY_PEM'} <= names,'Existing account signing configuration missing'
-          for provider in ('GOOGLE','GITHUB'):
-              assert any({prefix+provider+'_CLIENT_ID',prefix+provider+'_CLIENT_SECRET'} <= names for prefix in ('MCP_','OAUTH_')), 'Provider registration incomplete: '+provider
+          secrets={r['name'] for r in json.load(open(os.environ['RUNNER_TEMP']+'/mcp-secret-names.json'))}
+          settings=json.load(open(os.environ['RUNNER_TEMP']+'/mcp-worker-settings.json'))
+          assert settings.get('success') is True,'Unable to read deployed Worker bindings'
+          bindings=settings.get('result',{}).get('bindings',[])
+          by_name={b.get('name'):b for b in bindings if b.get('name')}
+          assert {'ACCESS_TOKEN_PRIVATE_KEY_PEM','ACCESS_TOKEN_PUBLIC_KEY_PEM'} <= secrets,'Existing account signing configuration missing'
+          expected={'GOOGLE':os.environ['GOOGLE_OAUTH_CLIENT_ID'],'GITHUB':os.environ['GITHUB_OAUTH_CLIENT_ID']}
+          for provider,expected_id in expected.items():
+              ok=False
+              for prefix in ('MCP_','OAUTH_'):
+                  id_name=prefix+provider+'_CLIENT_ID'
+                  secret_name=prefix+provider+'_CLIENT_SECRET'
+                  if secret_name not in secrets:
+                      continue
+                  if id_name in secrets:
+                      ok=True
+                      break
+                  binding=by_name.get(id_name)
+                  if binding and binding.get('type')=='plain_text' and binding.get('text')==expected_id:
+                      ok=True
+                      break
+              assert ok,'Provider registration incomplete: '+provider
           PY
       - name: Compile verified Worker source
         working-directory: core/deploy/platform-worker
