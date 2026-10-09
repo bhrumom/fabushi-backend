@@ -55,6 +55,10 @@ jobs:
           test -n "${CLOUDFLARE_ACCOUNT_ID:-}"
           bash ../../.github/scripts/assert-worker-security-secrets.sh production
 
+      - name: Capture production D1 recovery bookmark
+        working-directory: fabushi/web
+        run: npx --yes wrangler@4 d1 time-travel info DB --env production --json > "$RUNNER_TEMP/gateway-account-recovery.json"
+
       - name: Apply production D1 migrations
         working-directory: fabushi/web
         shell: bash
@@ -109,3 +113,12 @@ jobs:
           path: |
             production-worker-delivery-provenance.json
             production-health.json
+
+      - name: Preserve recovery bookmark on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-account-recovery-${{ github.sha }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: ${{ runner.temp }}/gateway-account-recovery.json

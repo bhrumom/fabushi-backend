@@ -53,3 +53,24 @@ test('production bindings and public smoke origin are canonical', () => {
   assert.match(workflow, /sourceSha/);
   assert.match(workflow, /runAttempt/);
 });
+
+
+test('recovery bookmark precedes gateway migrations and survives failure', () => {
+  const bookmark = workflow.indexOf('d1 time-travel info DB --env production --json');
+  assert.ok(bookmark >= 0 && bookmark < workflow.indexOf('run-wrangler-d1-migrations.sh DB production'));
+  assert.match(workflow, /if: always\(\)/);
+  assert.match(workflow, /gateway-account-recovery/);
+});
+
+test('platform broker delivery resolves canonical credential aliases and uses the verified locked build', () => {
+  const platform = readFileSync(join(repoRoot, '.github/workflows/official-mcp-platform-delivery.yml'), 'utf8');
+  for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) {
+    const credentialLine = workflow.split('\n').find(line => line.trim().startsWith(name + ':')).trim();
+    assert.ok(platform.includes(credentialLine), `platform credential resolution differs: ${name}`);
+  }
+  assert.match(platform, /worker-build --release --no-panic-recovery --locked/);
+  assert.match(platform, /Canonical build hook changed; refusing unverified rebuild/);
+  assert.match(platform, /refs\/heads\/main/);
+  assert.match(platform, /main.data.commit.sha!==sha/);
+  assert.match(platform, /Provider registration incomplete/);
+});

@@ -11,6 +11,9 @@ on:
       - ".github/workflows/production-worker-delivery-ci.yml"
       - "fabushi/web/tests/production-worker-delivery-contract.test.js"
       - "fabushi/web/wrangler.toml"
+      - "fabushi/web/migrations/*human_call*.sql"
+      - "scripts/test-human-call-migration.py"
+      - ".github/workflows/official-mcp-platform-delivery.yml"
 
 permissions:
   contents: read
@@ -37,3 +40,6 @@ jobs:
           ! grep -Eq '^JWT_SECRET\s*=|ADMIN_EMAIL\s*=.*@|BEGIN (RSA )?PRIVATE KEY' fabushi/web/wrangler.toml
       - name: Run canonical production delivery contracts
         run: node --test fabushi/web/tests/production-worker-delivery-contract.test.js
+
+      - name: Verify real SQLite migration ordering and data preservation
+        run: python3 scripts/test-human-call-migration.py
