@@ -62,7 +62,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: core/third_party/mahayana/mahayana-rs -> target
+          workspaces: core/deploy/platform-worker -> target
       - name: Install pinned Worker builder
         run: cargo install worker-build --version 0.8.5 --locked
       - name: Confirm existing signing and provider registrations
@@ -78,7 +78,7 @@ jobs:
               assert any({prefix+provider+'_CLIENT_ID',prefix+provider+'_CLIENT_SECRET'} <= names for prefix in ('MCP_','OAUTH_')), 'Provider registration incomplete: '+provider
           PY
       - name: Compile verified Worker source
-        working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
+        working-directory: core/deploy/platform-worker
         run: worker-build --release --no-panic-recovery
       - name: Capture ACCOUNT_DB recovery bookmark before mutation
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
@@ -88,7 +88,7 @@ jobs:
         run: npx --yes wrangler@4.110.0 d1 migrations apply ACCOUNT_DB --remote
       - name: Deploy the verified platform artifact
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
-        run: npx --yes wrangler@4.110.0 deploy --no-bundle --no-build
+        run: npx --yes wrangler@4.110.0 deploy
       - name: Verify real public routing and credential boundary
         run: |
           set -euo pipefail

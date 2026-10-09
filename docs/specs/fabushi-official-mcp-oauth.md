@@ -37,3 +37,5 @@ All acceptance is pending; no live OAuth/provider operation or publication is cl
 https://developers.google.com/workspace/guides/configure-mcp-servers
 https://github.com/github/github-mcp-server/blob/main/docs/host-integration.md
 Related: docs/specs/production-worker-delivery.md; Desktop docs/specs/fabushi-official-mcp-marketplace.md.
+
+Build closure: Core deploy/platform-worker/Cargo.toml references the canonical Worker src/lib.rs and the canonical platform-core dependency, with a committed dedicated lock. Build in core/deploy/platform-worker; wrangler remains in the canonical Worker directory and points to that output. Do not build the legacy imported parent workspace whose migrated CLI members are absent. Rollout order: merge verified Core/backend source; dispatch existing backend production gateway delivery; dispatch this platform delivery against verified Core main; configure/confirm provider applications and run real connection acceptance; publish verified Desktop candidate.
