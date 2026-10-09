@@ -97,7 +97,7 @@ jobs:
           assert text.count(hook)==1, 'Canonical build hook changed; refusing unverified rebuild'
           path.write_text(text.replace(hook,''))
           PYBUILD
-          npx --yes wrangler@4.110.0 deploy --no-bundle --config wrangler.toml
+          npx --yes wrangler@4.110.0 deploy --config wrangler.toml
       - name: Verify real public routing and credential boundary
         run: |
           set -euo pipefail
