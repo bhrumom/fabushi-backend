@@ -1,0 +1,22 @@
+name: Official MCP gateway integrity
+on:
+  pull_request:
+    paths: ['fabushi/web/src/routes/platform-gateway-routes.js', 'fabushi/web/tests/mcp-platform-gateway.test.js', '.github/workflows/official-mcp-*.yml']
+  push:
+    branches: [main, work/official-mcp-oauth-20261009]
+    paths: ['fabushi/web/src/routes/platform-gateway-routes.js', 'fabushi/web/tests/mcp-platform-gateway.test.js', '.github/workflows/official-mcp-*.yml']
+permissions:
+  contents: read
+jobs:
+  integrity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: node --test fabushi/web/tests/mcp-platform-gateway.test.js
+      - run: git rev-parse HEAD >> "$GITHUB_STEP_SUMMARY"
