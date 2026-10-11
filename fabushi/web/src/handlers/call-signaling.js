@@ -1835,6 +1835,352 @@ export async function handleAnswerHumanCallMediaSubscription(
 }
 
 
+
+async function readOwnedMediaSubscription(db, callId, mediaSessionId, subscriptionId, userId, deviceId) {
+  return await db.prepare(`
+    SELECT sub.id, sub.media_session_id, sub.call_id, sub.user_id, sub.device_id,
+      sub.generation, sub.publication_id, sub.receive_mid, sub.status,
+      sub.preferred_rid, sub.priority_ordering, sub.rid_not_available,
+      pub.track_name, pub.media_kind, pub.simulcast_rids_json,
+      publisher.provider_session_id AS publisher_provider_session_id
+    FROM human_call_media_subscriptions sub
+    JOIN human_call_media_publications pub ON pub.id = sub.publication_id
+    JOIN human_call_media_sessions publisher ON publisher.id = pub.media_session_id
+    WHERE sub.id = ? AND sub.media_session_id = ? AND sub.call_id = ?
+      AND sub.user_id = ? AND sub.device_id = ?
+    LIMIT 1
+  `).bind(subscriptionId, mediaSessionId, callId, userId, deviceId).first();
+}
+
+async function readMediaLayerMutation(db, mediaSessionId, clientMutationId) {
+  return await db.prepare(`
+    SELECT id, media_session_id, subscription_id, call_id, user_id, device_id,
+      generation, client_mutation_id, request_fingerprint, preferred_rid,
+      priority_ordering, rid_not_available, status, result_json, last_error_code,
+      created_at, updated_at
+    FROM human_call_media_layer_mutations
+    WHERE media_session_id = ? AND client_mutation_id = ?
+    LIMIT 1
+  `).bind(mediaSessionId, clientMutationId).first();
+}
+
+function mapStoredLayerMutation(row, deduplicated = false) {
+  let result = null;
+  try { result = row?.result_json ? JSON.parse(row.result_json) : null; } catch { result = null; }
+  return {
+    success: row?.status === 'applied',
+    deduplicated,
+    mutation: {
+      clientMutationId: row.client_mutation_id,
+      subscriptionId: row.subscription_id,
+      generation: Number(row.generation),
+      status: row.status,
+    },
+    ...(result ? { result } : {}),
+  };
+}
+
+async function retireUncertainLayerMutation(db, mediaSessionId, mutationId, errorCode, result = null) {
+  const now = new Date().toISOString();
+  try {
+    await db.batch([
+      db.prepare(`
+        UPDATE human_call_media_layer_mutations
+        SET status = 'uncertain', result_json = ?, last_error_code = ?, updated_at = ?
+        WHERE id = ? AND status = 'pending'
+      `).bind(result ? JSON.stringify(result) : null, errorCode, now, mutationId),
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET status = 'uncertain', mutation_state = 'retired',
+          last_error_code = ?, updated_at = ?
+        WHERE id = ? AND mutation_state = 'mutating'
+      `).bind(errorCode, now, mediaSessionId),
+    ]);
+  } catch {
+    // The session remains fail-closed; explicit reconciliation must inspect both durable rows.
+  }
+}
+
+async function failLayerMutationAndReleaseSession(db, mediaSessionId, mutationId, result, errorCode) {
+  const now = new Date().toISOString();
+  try {
+    const changed = await db.batch([
+      db.prepare(`
+        UPDATE human_call_media_layer_mutations
+        SET status = 'failed', result_json = ?, last_error_code = ?, updated_at = ?
+        WHERE id = ? AND status = 'pending'
+      `).bind(JSON.stringify(result), errorCode, now, mutationId),
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET mutation_state = 'idle', last_error_code = ?, updated_at = ?
+        WHERE id = ? AND status = 'ready' AND mutation_state = 'mutating'
+      `).bind(errorCode, now, mediaSessionId),
+    ]);
+    return changed.every((entry) => Number(entry?.meta?.changes || 0) === 1);
+  } catch {
+    return false;
+  }
+}
+
+export async function handleUpdateHumanCallMediaSubscriptionLayer(
+  request, env, db, rawCallId, rawMediaSessionId, rawSubscriptionId, fetchImpl = fetch,
+) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const config = readSfuConfiguration(env);
+  if (!config) return jsonResponse({ success: false, error: '群组通话媒体服务尚未配置' }, 503);
+
+  const callId = validOpaqueId(rawCallId, CALL_ID_RE);
+  const mediaSessionId = validOpaqueId(rawMediaSessionId, CALL_ID_RE);
+  const subscriptionId = validOpaqueId(rawSubscriptionId, CALL_ID_RE);
+  if (!callId || !mediaSessionId || !subscriptionId) {
+    return jsonResponse({ success: false, error: '媒体订阅层切换路径无效' }, 400);
+  }
+
+  const call = await readMembershipAuthorizedChannel(db, callId, auth.userId);
+  if (!call) return jsonResponse({ success: false, error: '通话不存在或无权访问' }, 404);
+  if (call.terminal_state) return jsonResponse({ success: false, error: '通话已结束，不能切换媒体层' }, 409);
+  const member = await readCallMember(db, callId, auth.userId);
+  if (member?.state !== 'active') return jsonResponse({ success: false, error: '当前账号不是活跃通话成员' }, 403);
+
+  const mediaSession = await readOwnedMediaSession(db, callId, mediaSessionId, auth.userId, auth.deviceId);
+  if (!mediaSession || mediaSession.purpose !== 'subscribe') {
+    return jsonResponse({ success: false, error: '媒体接收会话不存在或不属于当前设备' }, 404);
+  }
+  const subscription = await readOwnedMediaSubscription(
+    db, callId, mediaSessionId, subscriptionId, auth.userId, auth.deviceId,
+  );
+  if (!subscription || subscription.status !== 'ready') {
+    return jsonResponse({ success: false, error: '媒体订阅不存在或已关闭' }, 404);
+  }
+
+  let body;
+  try { body = await request.json(); } catch {
+    return jsonResponse({ success: false, error: '媒体订阅层切换请求格式无效' }, 400);
+  }
+  const clientMutationId = validOpaqueId(body.clientMutationId, EVENT_ID_RE);
+  const generation = parseGeneration(body.generation);
+  const simulcast = normalizeSimulcastSelection(body.simulcast);
+  if (!clientMutationId || generation == null || !simulcast) {
+    return jsonResponse({ success: false, error: '媒体订阅层切换参数无效' }, 400);
+  }
+  if (generation !== Number(call.generation)
+      || generation !== Number(mediaSession.generation)
+      || generation !== Number(subscription.generation)) {
+    return jsonResponse({ success: false, error: '媒体订阅层切换代际已过期' }, 409);
+  }
+  if (mediaSession.status !== 'ready' || mediaSession.mutation_state !== 'idle'
+      || !SFU_PROVIDER_SESSION_ID_RE.test(String(mediaSession.provider_session_id || ''))
+      || !SFU_PROVIDER_SESSION_ID_RE.test(String(subscription.publisher_provider_session_id || ''))) {
+    return jsonResponse({ success: false, error: '媒体接收会话当前不能切换层' }, 409);
+  }
+  if (subscription.media_kind !== 'video') {
+    return jsonResponse({ success: false, error: '音频订阅不支持 simulcast layer 切换' }, 400);
+  }
+  const availableRids = parseStoredSimulcastRids(subscription.simulcast_rids_json);
+  if (!availableRids.includes(simulcast.preferredRid)) {
+    return jsonResponse({ success: false, error: '请求的 simulcast layer 未由该发布广告' }, 409);
+  }
+
+  const requestFingerprint = await sha256Hex(JSON.stringify({
+    generation, subscriptionId, simulcast,
+  }));
+  const duplicate = await readMediaLayerMutation(db, mediaSessionId, clientMutationId);
+  if (duplicate) {
+    if (duplicate.request_fingerprint !== requestFingerprint
+        || duplicate.subscription_id !== subscriptionId
+        || Number(duplicate.generation) !== generation) {
+      return jsonResponse({ success: false, error: '重复 layer 切换与已保存参数冲突' }, 409);
+    }
+    if (duplicate.status === 'applied') {
+      const response = jsonResponse(mapStoredLayerMutation(duplicate, true));
+      response.headers.set('cache-control', 'private, no-store');
+      return response;
+    }
+    return jsonResponse({
+      success: false,
+      error: duplicate.status === 'uncertain'
+        ? 'layer 切换结果未知，已停用该媒体会话，禁止自动重试'
+        : 'layer 切换仍在处理或已失败，请同步后使用新的操作编号',
+      mutation: { clientMutationId, subscriptionId, generation, status: duplicate.status },
+    }, 409);
+  }
+
+  const mutationId = 'layermut_' + crypto.randomUUID().replaceAll('-', '');
+  const now = new Date().toISOString();
+  let claimed;
+  try {
+    claimed = await db.batch([
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET mutation_state = 'mutating', updated_at = ?
+        WHERE id = ? AND call_id = ? AND user_id = ? AND device_id = ?
+          AND generation = ? AND purpose = 'subscribe'
+          AND status = 'ready' AND mutation_state = 'idle'
+      `).bind(now, mediaSessionId, callId, auth.userId, auth.deviceId, generation),
+      db.prepare(`
+        INSERT INTO human_call_media_layer_mutations (
+          id, media_session_id, subscription_id, call_id, user_id, device_id,
+          generation, client_mutation_id, request_fingerprint, preferred_rid,
+          priority_ordering, rid_not_available, status, result_json, last_error_code,
+          created_at, updated_at
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?
+        WHERE changes() = 1
+      `).bind(
+        mutationId, mediaSessionId, subscriptionId, callId, auth.userId, auth.deviceId,
+        generation, clientMutationId, requestFingerprint, simulcast.preferredRid,
+        simulcast.priorityOrdering, simulcast.ridNotAvailable, now, now,
+      ),
+    ]);
+  } catch {
+    return jsonResponse({ success: false, error: '媒体订阅层切换并发冲突，请同步后重试' }, 409);
+  }
+  if (claimed.some((entry) => Number(entry?.meta?.changes || 0) !== 1)) {
+    return jsonResponse({ success: false, error: '媒体订阅层切换并发冲突，请同步后重试' }, 409);
+  }
+
+  let upstream;
+  try {
+    upstream = await fetchImpl(
+      `https://rtc.live.cloudflare.com/v1/apps/${encodeURIComponent(config.appId)}/sessions/${encodeURIComponent(mediaSession.provider_session_id)}/tracks/update`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${config.appSecret}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          tracks: [{
+            location: 'remote',
+            mid: subscription.receive_mid,
+            sessionId: subscription.publisher_provider_session_id,
+            trackName: subscription.track_name,
+            simulcast,
+          }],
+        }),
+      },
+    );
+  } catch {
+    await retireUncertainLayerMutation(
+      db, mediaSessionId, mutationId, 'layer_update_network_outcome_unknown',
+    );
+    return jsonResponse({
+      success: false,
+      error: 'layer 切换结果未知，已停用该媒体会话，禁止自动重试',
+    }, 502);
+  }
+
+  let providerPayload;
+  try { providerPayload = await upstream.json(); } catch { providerPayload = null; }
+  if (!upstream.ok || !providerPayload || providerPayload.errorCode
+      || !Array.isArray(providerPayload.tracks) || providerPayload.tracks.length !== 1) {
+    const errorCode = sanitizeProviderErrorCode(
+      providerPayload?.errorCode || `layer_update_http_${upstream.status}`,
+    );
+    await retireUncertainLayerMutation(db, mediaSessionId, mutationId, errorCode);
+    return jsonResponse({
+      success: false,
+      error: '媒体服务返回无法安全确认的 layer 切换结果，已停用该媒体会话',
+    }, 502);
+  }
+
+  const item = providerPayload.tracks[0];
+  const itemMid = String(item?.mid || '').trim();
+  if (itemMid !== subscription.receive_mid) {
+    await retireUncertainLayerMutation(
+      db, mediaSessionId, mutationId, 'layer_update_result_identity_mismatch',
+    );
+    return jsonResponse({
+      success: false,
+      error: '媒体服务返回无法安全对应的 layer 切换结果',
+    }, 502);
+  }
+  if (item.errorCode) {
+    const errorCode = sanitizeProviderErrorCode(item.errorCode);
+    const result = { subscriptionId, preferredRid: simulcast.preferredRid, status: 'failed', errorCode };
+    if (!(await failLayerMutationAndReleaseSession(
+      db, mediaSessionId, mutationId, result, errorCode,
+    ))) {
+      await retireUncertainLayerMutation(
+        db, mediaSessionId, mutationId, 'layer_update_failure_persist_conflict', result,
+      );
+    }
+    return jsonResponse({
+      success: false,
+      error: '媒体服务拒绝了 layer 切换',
+      mutation: { clientMutationId, subscriptionId, generation, status: 'failed' },
+      result,
+    }, 502);
+  }
+  if (providerPayload.requiresImmediateRenegotiation === true
+      || providerPayload.sessionDescription != null) {
+    const result = { subscriptionId, preferredRid: simulcast.preferredRid, status: 'unknown' };
+    await retireUncertainLayerMutation(
+      db, mediaSessionId, mutationId, 'layer_update_unexpected_renegotiation', result,
+    );
+    return jsonResponse({
+      success: false,
+      error: 'layer 切换要求未预期的重新协商，已退役媒体会话并要求显式恢复',
+      result,
+    }, 502);
+  }
+
+  const appliedAt = new Date().toISOString();
+  const result = {
+    subscriptionId,
+    preferredRid: simulcast.preferredRid,
+    priorityOrdering: simulcast.priorityOrdering,
+    ridNotAvailable: simulcast.ridNotAvailable,
+    status: 'applied',
+  };
+  let applied;
+  try {
+    applied = await db.batch([
+      db.prepare(`
+        UPDATE human_call_media_subscriptions
+        SET preferred_rid = ?, priority_ordering = ?, rid_not_available = ?, updated_at = ?
+        WHERE id = ? AND media_session_id = ? AND status = 'ready'
+      `).bind(
+        simulcast.preferredRid, simulcast.priorityOrdering, simulcast.ridNotAvailable,
+        appliedAt, subscriptionId, mediaSessionId,
+      ),
+      db.prepare(`
+        UPDATE human_call_media_layer_mutations
+        SET status = 'applied', result_json = ?, last_error_code = NULL, updated_at = ?
+        WHERE id = ? AND status = 'pending'
+      `).bind(JSON.stringify(result), appliedAt, mutationId),
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET mutation_state = 'idle', last_error_code = NULL, updated_at = ?
+        WHERE id = ? AND status = 'ready' AND mutation_state = 'mutating'
+      `).bind(appliedAt, mediaSessionId),
+    ]);
+  } catch {
+    await retireUncertainLayerMutation(
+      db, mediaSessionId, mutationId, 'layer_update_apply_persist_failed', result,
+    );
+    return jsonResponse({
+      success: false,
+      error: 'layer 切换已由媒体服务接受但本地持久化不确定，已退役媒体会话',
+    }, 502);
+  }
+  if (applied.some((entry) => Number(entry?.meta?.changes || 0) !== 1)) {
+    await retireUncertainLayerMutation(
+      db, mediaSessionId, mutationId, 'layer_update_apply_persist_conflict', result,
+    );
+    return jsonResponse({
+      success: false,
+      error: 'layer 切换持久化冲突，已退役媒体会话',
+    }, 502);
+  }
+
+  const stored = await readMediaLayerMutation(db, mediaSessionId, clientMutationId);
+  const response = jsonResponse(mapStoredLayerMutation(stored, false));
+  response.headers.set('cache-control', 'private, no-store');
+  return response;
+}
+
 async function readMediaTeardown(db, mediaSessionId, clientTeardownId) {
   return await db.prepare(`
     SELECT id, media_session_id, call_id, user_id, device_id, generation,
