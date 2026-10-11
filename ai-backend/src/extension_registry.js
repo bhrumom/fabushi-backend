@@ -247,10 +247,15 @@ export function projectOfficialMcpExtension(app) {
   });
 }
 
-function allExtensionEntries(marketplace) {
-  const miniApps = marketplace.list().map(projectMiniAppExtension);
-  const mcp = officialMcpApps.map(projectOfficialMcpExtension);
-  return [...miniApps, ...mcp].sort((left, right) => left.id.localeCompare(right.id));
+function allExtensionEntries(marketplace, releaseStore = null) {
+  const entries = new Map();
+  for (const entry of marketplace.list().map(projectMiniAppExtension)) entries.set(entry.id, entry);
+  for (const entry of officialMcpApps.map(projectOfficialMcpExtension)) entries.set(entry.id, entry);
+  // Approved canonical publisher releases take precedence over legacy projections
+  // with the same stable identity. Draft/pending/rejected/revoked releases are
+  // never returned by listApprovedLatest().
+  for (const entry of releaseStore?.listApprovedLatest?.() ?? []) entries.set(entry.id, entry);
+  return [...entries.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function encodeCursor(id) {
@@ -286,13 +291,13 @@ function queryDocument(entry) {
   ].join(' ').normalize('NFKC').toLocaleLowerCase();
 }
 
-export function browseExtensions(marketplace, options = {}) {
+export function browseExtensions(marketplace, options = {}, releaseStore = null) {
   const query = String(options.query ?? '').normalize('NFKC').trim().toLocaleLowerCase();
   const kind = options.kind ? requiredEnum(options.kind, 'kind', KINDS) : null;
   const origin = options.origin ? requiredEnum(options.origin, 'origin', ORIGINS) : null;
   const platform = options.platform ? requiredEnum(options.platform, 'platform', PLATFORMS) : null;
   const limit = Math.max(1, Math.min(100, Number(options.limit) || 50));
-  let entries = allExtensionEntries(marketplace)
+  let entries = allExtensionEntries(marketplace, releaseStore)
     .filter((entry) => !kind || entry.identity.kind === kind)
     .filter((entry) => !origin || entry.origin === origin)
     .filter((entry) => !platform || entry.release.platforms.includes(platform))
@@ -317,9 +322,9 @@ export function browseExtensions(marketplace, options = {}) {
   };
 }
 
-export function readExtension(marketplace, { kind, namespace, name } = {}) {
+export function readExtension(marketplace, { kind, namespace, name } = {}, releaseStore = null) {
   const identity = stableIdentity({ kind, namespace, name });
-  const entry = allExtensionEntries(marketplace).find((candidate) => candidate.id === identity.id);
+  const entry = allExtensionEntries(marketplace, releaseStore).find((candidate) => candidate.id === identity.id);
   if (!entry) {
     throw new ExtensionRegistryError('EXTENSION_NOT_FOUND', `extension ${identity.id} was not found`);
   }

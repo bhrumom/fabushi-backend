@@ -233,6 +233,10 @@ export class ExtensionPublisherStore {
     return publicNamespace(this.s.get.get(normalized));
   }
 
+  assertOwned(namespace, actorAccountId) {
+    return publicNamespace(this.#owned(namespace, actorAccountId));
+  }
+
   listOwned(actorAccountId) {
     const owner = accountId(actorAccountId);
     return this.s.listOwned.all(owner).map(publicNamespace);
