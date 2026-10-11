@@ -12,6 +12,11 @@ import {
   ExtensionPublisherStore,
   ExtensionPublisherStoreError,
 } from './extension_publisher_store.js';
+import {
+  ExtensionReleaseStore,
+  ExtensionReleaseStoreError,
+  extensionReleaseErrorFromRegistry,
+} from './extension_release_store.js';
 import { AccountSyncStore } from './account_sync_store.js';
 import { readGlobalDharmaEntitlement } from './global_dharma_entitlement.js';
 import { GlobalDharmaRuntimeStore } from './global_dharma_runtime_store.js';
@@ -81,6 +86,7 @@ export function createMiniAppMarketplaceRouter({
   });
   const syncStore = accountSyncStore ?? new AccountSyncStore({ dataDir: resolvedDataDir });
   const extensionPublisherStore = new ExtensionPublisherStore({ db: syncStore.db });
+  const extensionReleaseStore = new ExtensionReleaseStore({ db: syncStore.db, publisherStore: extensionPublisherStore });
   const globalDharmaRuntimeStore = new GlobalDharmaRuntimeStore({ accountSyncStore: syncStore });
   const router = express.Router();
   router.use(express.json({ limit: MAX_JSON_BYTES }));
@@ -277,6 +283,99 @@ export function createMiniAppMarketplaceRouter({
     res.json({ namespace });
   }));
 
+  function releaseErrorStatus(error) {
+    if (!(error instanceof ExtensionReleaseStoreError)) return 500;
+    if (error.code === 'RELEASE_NOT_FOUND') return 404;
+    if (error.code === 'RELEASE_CONFLICT' || error.code === 'INVALID_RELEASE_STATE') return 409;
+    if (error.code === 'NAMESPACE_FORBIDDEN') return 403;
+    return 400;
+  }
+
+  function releaseRoute(handler) {
+    return async (req, res) => {
+      try {
+        await handler(req, res);
+      } catch (rawError) {
+        const error = extensionReleaseErrorFromRegistry(rawError);
+        const status = releaseErrorStatus(error);
+        res.status(status).json({
+          success: false,
+          error: {
+            code: error?.code ?? 'EXTENSION_RELEASE_ERROR',
+            message: status >= 500 ? 'Extension release operation failed' : String(error?.message ?? error),
+          },
+        });
+      }
+    };
+  }
+
+  function releaseParams(req) {
+    return {
+      kind: req.params.kind,
+      namespace: req.params.namespace,
+      name: req.params.name,
+      version: req.params.version,
+    };
+  }
+
+  router.get('/v1/extensions/publisher/releases', releaseRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    res.json({ releases: extensionReleaseStore.listPublisher(identity.accountId) });
+  }));
+
+  router.post('/v1/extensions/publisher/releases', releaseRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const release = extensionReleaseStore.createDraft({
+      actorAccountId: identity.accountId,
+      descriptor: req.body?.descriptor ?? req.body,
+    });
+    res.status(201).json({ release });
+  }));
+
+  router.post('/v1/extensions/publisher/releases/:kind/:namespace/:name/:version/submit', releaseRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const release = extensionReleaseStore.submit({
+      actorAccountId: identity.accountId,
+      ...releaseParams(req),
+    });
+    res.json({ release });
+  }));
+
+  router.post('/v1/extensions/publisher/releases/:kind/:namespace/:name/:version/yank', releaseRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const release = extensionReleaseStore.yank({
+      actorAccountId: identity.accountId,
+      notes: req.body?.notes,
+      ...releaseParams(req),
+    });
+    res.json({ release });
+  }));
+
+  router.post('/v1/extensions/review/releases/:kind/:namespace/:name/:version', releaseRoute(async (req, res) => {
+    if (!reviewAuthorized(req)) {
+      throw new ExtensionReleaseStoreError('REVIEW_AUTH_REQUIRED', 'marketplace reviewer authorization is required');
+    }
+    const release = extensionReleaseStore.review({
+      approved: req.body?.approved === true,
+      reviewer: req.body?.reviewer,
+      notes: req.body?.notes,
+      ...releaseParams(req),
+    });
+    res.json({ release });
+  }));
+
+  router.post('/v1/extensions/review/releases/:kind/:namespace/:name/:version/revoke', releaseRoute(async (req, res) => {
+    if (!reviewAuthorized(req)) {
+      throw new ExtensionReleaseStoreError('REVIEW_AUTH_REQUIRED', 'marketplace reviewer authorization is required');
+    }
+    const release = extensionReleaseStore.revoke({
+      reviewer: req.body?.reviewer,
+      notes: req.body?.notes,
+      ...releaseParams(req),
+    });
+    res.json({ release });
+  }));
+
   router.get('/v1/extensions', extensionRoute(async (req, res) => {
     const payload = browseExtensions(marketplace, {
       query: safeQuery(req.query.q ?? req.query.query),
@@ -285,7 +384,7 @@ export function createMiniAppMarketplaceRouter({
       origin: safeQuery(req.query.origin, 32) || undefined,
       limit: Number(req.query.limit ?? 50),
       cursor: safeQuery(req.query.cursor, 4096) || undefined,
-    });
+    }, extensionReleaseStore);
     res.json(payload);
   }));
 
@@ -295,7 +394,7 @@ export function createMiniAppMarketplaceRouter({
         kind: req.params.kind,
         namespace: req.params.namespace,
         name: req.params.name,
-      }),
+      }, extensionReleaseStore),
     });
   }));
 
@@ -632,7 +731,7 @@ export function createMiniAppMarketplaceRouter({
     });
   }));
 
-  return { router, marketplace, accountSyncStore: syncStore, extensionPublisherStore, globalDharmaRuntimeStore };
+  return { router, marketplace, accountSyncStore: syncStore, extensionPublisherStore, extensionReleaseStore, globalDharmaRuntimeStore };
 }
 
 export function registerMiniAppMarketplaceRoutes(app, options = {}) {
