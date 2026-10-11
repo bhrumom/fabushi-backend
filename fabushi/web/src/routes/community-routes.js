@@ -36,6 +36,7 @@ import {
   handleDiscoverHumanCallMediaPublications,
   handleSubscribeHumanCallMedia,
   handleAnswerHumanCallMediaSubscription,
+  handleCloseHumanCallMediaSession,
   handleGetHumanCall,
   handleGetHumanCallIceServers,
   handleGetHumanCallMembers,
@@ -106,6 +107,12 @@ export async function routeCommunityRequest({ pathname, method, request, env, db
       callMediaSubscriptionAnswerMatch[1],
       callMediaSubscriptionAnswerMatch[2],
       callMediaSubscriptionAnswerMatch[3],
+    );
+  }
+  const callMediaCloseMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/close$/);
+  if (callMediaCloseMatch && method === 'POST') {
+    return handleCloseHumanCallMediaSession(
+      request, env, db, callMediaCloseMatch[1], callMediaCloseMatch[2],
     );
   }
   const callMediaPublicationMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/publications$/);
