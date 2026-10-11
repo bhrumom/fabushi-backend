@@ -69,6 +69,79 @@ test('REST catalog supports search, release install metadata, add and command ro
   });
 });
 
+test('Global Dharma route planning is fenced to active local WebMCP tools', async () => {
+  await withServer(async (baseUrl) => {
+    const headers = { 'x-fabushi-device-id': 'ios-live-page', 'content-type': 'application/json' };
+
+    const state = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '读取刚才操作后的状态',
+        availableTools: ['offline.state.read', 'offline.practice.record'],
+      }),
+    }));
+    assert.equal(state.command.tool, 'offline.state.read');
+    assert.equal(state.execution.kind, 'web');
+    assert.equal(state.surface.id, 'local-webmcp');
+    assert.equal(state.requiresApproval, false);
+
+    const freeMutation = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '执行一项免费的本地操作',
+        availableTools: ['offline.practice.record'],
+      }),
+    }));
+    assert.equal(freeMutation.command.tool, 'offline.practice.record');
+    assert.equal(freeMutation.requiresApproval, true);
+
+    const noRemoteFallback = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '查看状态',
+        availableTools: [],
+      }),
+    }));
+    assert.equal(noRemoteFallback.execution, undefined);
+    assert.equal(noRemoteFallback.suggestedCommand, null);
+    assert.equal(noRemoteFallback.activeToolFenced, true);
+
+    const protectedToolMissing = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '启动本地转经轮',
+        availableTools: ['offline.state.read'],
+      }),
+    }));
+    assert.equal(protectedToolMissing.execution, undefined);
+    assert.equal(protectedToolMissing.suggestedCommand, null);
+
+    const protectedTool = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '启动本地转经轮',
+        availableTools: ['local.prayer-wheel.start'],
+      }),
+    }));
+    assert.equal(protectedTool.command.tool, 'local.prayer-wheel.start');
+    assert.equal(protectedTool.requiresApproval, true);
+
+    // Legacy callers without the active page fence keep the existing remote contract.
+    const legacy = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ input: '/global-dharma:status' }),
+    }));
+    assert.equal(legacy.command.name, 'status');
+    assert.equal(legacy.execution.kind, 'mcp-http');
+  });
+});
+
 test('different device tokens for one account share Mini Apps, Bot membership, sync cursor and CloudStorage', async () => {
   const accounts = new Map([
     ['device-a-token', { userId: 'user:108', username: 'same-user', isAuthenticated: true }],
