@@ -92,6 +92,30 @@ test('difference cursor replays Mini App install, Bot membership, cloud state, a
   }
 });
 
+test('repeating the same Mini App install does not emit spurious Agent updates', () => {
+  const scope = fixture();
+  try {
+    const account = 'user:108';
+    const start = scope.store.currentCursor(account);
+    scope.store.installMiniApp(account, globalDharmaManifest());
+    const first = scope.store.sync(account, start, 20);
+    assert.deepEqual(first.events.map((event) => event.type), [
+      'miniapp.installed',
+      'bot.added',
+      'agent.created',
+    ]);
+
+    const checkpoint = first.cursor;
+    const repeated = scope.store.installMiniApp(account, globalDharmaManifest());
+    assert.equal(repeated.changed, false);
+    const afterRepeat = scope.store.sync(account, checkpoint, 20);
+    assert.equal(afterRepeat.mode, 'difference');
+    assert.deepEqual(afterRepeat.events, []);
+  } finally {
+    scope.close();
+  }
+});
+
 test('manual Bot membership is independent from a Mini App installation source', () => {
   const scope = fixture();
   try {
