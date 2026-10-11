@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { AccountSyncStore } from '../src/account_sync_store.js';
 import {
+  canonicalFabAppSigningPayload,
   canonicalReleaseSignaturePayload,
   ExtensionSigningStore,
   ExtensionSigningStoreError,
@@ -329,6 +330,128 @@ test('trust feed rejects excessive TTL and unreasonable future timestamps', () =
     assert.equal(
       verifyTrustFeedEnvelope(envelope, { nowMs: envelope.issuedAtMs - (6 * 60 * 1000) }),
       false,
+    );
+  } finally {
+    scope.close();
+  }
+});
+
+
+function fabAppManifest() {
+  return {
+    manifestVersion: 1,
+    packageClass: 'catalog',
+    appId: 'global-dharma',
+    publisherId: 'fabushi-official',
+    version: '1.1.0',
+    displayName: '全球法布施',
+    entrypoint: 'index.html',
+    runtime: 'web',
+    minHostApi: 1,
+    offlineCore: true,
+    requestedCapabilities: [
+      'offline.capabilities',
+      'offline.state.read',
+      'offline.practice.record',
+      'local.prayer-wheel.start',
+    ],
+    networkPolicy: { mode: 'deny', allowedOrigins: [] },
+    files: {
+      'index.html': { sha256: 'a'.repeat(64), bytes: 42, mime: 'text/html' },
+      'app.js': { sha256: 'b'.repeat(64), bytes: 84, mime: 'text/javascript' },
+    },
+  };
+}
+
+test('fabapp manifest signing matches domain-separated native contract and raw Ed25519 trust', () => {
+  const scope = dbFixture();
+  try {
+    const activeSigner = signer('catalog-key', 11);
+    const store = new ExtensionSigningStore({
+      db: scope.accountStore.db,
+      signer: activeSigner,
+    });
+    const unsigned = fabAppManifest();
+    const signed = store.signFabAppManifest(unsigned);
+
+    assert.equal(signed.manifest.signature.algorithm, 'Ed25519');
+    assert.equal(signed.manifest.signature.keyId, 'catalog-key');
+    assert.equal(signed.trust.keyId, 'catalog-key');
+    assert.equal(signed.trust.trustEpoch, 11);
+    assert.doesNotMatch(JSON.stringify(signed), /PRIVATE KEY/);
+
+    const raw = Buffer.from(signed.trust.rawPublicKeyBase64URL, 'base64url');
+    assert.equal(raw.length, 32);
+    const publicKey = crypto.createPublicKey({
+      key: { kty: 'OKP', crv: 'Ed25519', x: signed.trust.rawPublicKeyBase64URL },
+      format: 'jwk',
+    });
+    assert.equal(
+      crypto.verify(
+        null,
+        canonicalFabAppSigningPayload(unsigned),
+        publicKey,
+        Buffer.from(signed.manifest.signature.value, 'base64url'),
+      ),
+      true,
+    );
+
+    const tampered = { ...unsigned, version: '1.1.1' };
+    assert.equal(
+      crypto.verify(
+        null,
+        canonicalFabAppSigningPayload(tampered),
+        publicKey,
+        Buffer.from(signed.manifest.signature.value, 'base64url'),
+      ),
+      false,
+    );
+  } finally {
+    scope.close();
+  }
+});
+
+test('fabapp signing rejects networked offline manifests, unknown fields and caller signatures', () => {
+  const scope = dbFixture();
+  try {
+    const store = new ExtensionSigningStore({
+      db: scope.accountStore.db,
+      signer: signer('catalog-key', 1),
+    });
+    assert.throws(
+      () => store.signFabAppManifest({
+        ...fabAppManifest(),
+        networkPolicy: { mode: 'allowlist', allowedOrigins: ['https://example.com'] },
+      }),
+      (error) => error instanceof ExtensionSigningStoreError
+        && error.code === 'INVALID_FABAPP_MANIFEST',
+    );
+    assert.throws(
+      () => store.signFabAppManifest({ ...fabAppManifest(), extra: true }),
+      (error) => error instanceof ExtensionSigningStoreError
+        && error.code === 'INVALID_FABAPP_MANIFEST',
+    );
+    assert.throws(
+      () => store.signFabAppManifest({
+        ...fabAppManifest(),
+        signature: { algorithm: 'Ed25519', keyId: 'attacker', value: 'AA' },
+      }),
+      (error) => error instanceof ExtensionSigningStoreError
+        && error.code === 'INVALID_FABAPP_MANIFEST',
+    );
+  } finally {
+    scope.close();
+  }
+});
+
+test('fabapp signing fails closed without managed signer', () => {
+  const scope = dbFixture();
+  try {
+    const store = new ExtensionSigningStore({ db: scope.accountStore.db, signer: null });
+    assert.throws(
+      () => store.signFabAppManifest(fabAppManifest()),
+      (error) => error instanceof ExtensionSigningStoreError
+        && error.code === 'SIGNING_KEY_REQUIRED',
     );
   } finally {
     scope.close();
