@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { normalizeMiniAppBotCalls } from './miniapp_call_program.js';
-import { globalDharmaMarketplaceCommands } from './global_dharma_tool_contract.js';
+import { globalDharmaLocalMarketplaceCommands, globalDharmaMarketplaceCommands } from './global_dharma_tool_contract.js';
 
 export const MINIAPP_MARKETPLACE_PROTOCOL = 'fabushi.miniapp.marketplace.v2';
 export const MINIAPP_MANIFEST_PROTOCOL = 'fabushi.miniapp.manifest.v2';
@@ -906,17 +906,34 @@ export class MiniAppMarketplace {
     }));
   }
 
-  routeInput(id, input) {
+  routeInput(id, input, { availableTools } = {}) {
     const manifest = this.get(id);
     if (!manifest) throw new MiniAppMarketplaceError('NOT_FOUND', `mini app ${id} was not found`);
     const text = requiredText(input, 'input', 10000);
+    const hasActiveToolFence = Array.isArray(availableTools);
+    const localGlobalDharma = manifest.id === 'global-dharma' && hasActiveToolFence;
+    const commands = localGlobalDharma
+      ? globalDharmaLocalMarketplaceCommands(availableTools)
+      : manifest.commands;
+    const localSurface = localGlobalDharma
+      ? {
+          id: 'local-webmcp',
+          kind: 'web',
+          title: '本地 WebMCP',
+          entry: 'index.html',
+          platforms: ['mobile', 'ios'],
+          local: true,
+          priority: 120,
+        }
+      : null;
+
     const slash = text.match(/^\/([a-z0-9-]+):([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i);
     if (slash) {
       if (slash[1].toLocaleLowerCase() !== manifest.id) {
         throw new MiniAppMarketplaceError('COMMAND_MISMATCH', `command targets ${slash[1]}, not ${manifest.id}`);
       }
       const requested = slash[2].toLocaleLowerCase();
-      const command = manifest.commands.find((candidate) => candidate.name === requested || candidate.aliases.includes(requested));
+      const command = commands.find((candidate) => candidate.name === requested || candidate.aliases.includes(requested));
       if (!command) throw new MiniAppMarketplaceError('COMMAND_NOT_FOUND', `unknown command ${requested}`);
       return {
         kind: 'command',
@@ -924,24 +941,28 @@ export class MiniAppMarketplace {
         bot: manifest.bot,
         command,
         arguments: parseCommandArguments(slash[3]),
+        ...(localSurface ? { surface: localSurface } : {}),
       };
     }
+
     const normalized = text.toLocaleLowerCase();
-    const ranked = manifest.commands
+    const ranked = commands
       .map((command) => ({
         command,
         score: [command.name, command.description, ...command.aliases, ...command.naturalLanguageHints]
           .reduce((score, phrase) => score + (normalized.includes(String(phrase).toLocaleLowerCase()) ? 1 : 0), 0),
       }))
       .sort((left, right) => right.score - left.score);
+
     return {
       kind: 'natural-language',
       miniAppId: manifest.id,
       bot: manifest.bot,
       input: text,
       suggestedCommand: ranked[0]?.score > 0 ? ranked[0].command : null,
-      surface: manifest.surfaces[0],
+      surface: localSurface ?? manifest.surfaces[0],
       requiresMahayanaPlanning: true,
+      ...(localGlobalDharma ? { activeToolFenced: true } : {}),
     };
   }
 
