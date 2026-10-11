@@ -9,6 +9,12 @@ const MEMBER_ACTIONS = new Set(['add', 'remove']);
 const SFU_SESSION_PURPOSES = new Set(['publish', 'subscribe']);
 const SFU_APP_ID_RE = /^[A-Fa-f0-9]{32}$/;
 const SFU_PROVIDER_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,256}$/;
+const SFU_TRACK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SFU_MID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const SFU_MEDIA_KINDS = new Set(['audio', 'video']);
+const MAX_SFU_PUBLICATIONS = 16;
+const MAX_SFU_SDP_BYTES = 512 * 1024;
+const SFU_PUBLIC_ERROR_CODE_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
 
 async function requireCallAuth(request, env, db) {
   const auth = await requireAuthIdentity(request, env, db);
@@ -892,3 +898,451 @@ export async function handleCreateHumanCallMediaSession(request, env, db, rawCal
   response.headers.set('cache-control', 'private, no-store');
   return response;
 }
+
+function validSfuSessionDescription(value, expectedType) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const type = String(value.type || '').trim();
+  const sdp = typeof value.sdp === 'string' ? value.sdp : '';
+  if (type !== expectedType || !sdp || new TextEncoder().encode(sdp).byteLength > MAX_SFU_SDP_BYTES) {
+    return null;
+  }
+  return { type, sdp };
+}
+
+function normalizePublicationIntents(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_SFU_PUBLICATIONS) return null;
+  const seenClientIds = new Set();
+  const seenTrackNames = new Set();
+  const seenMids = new Set();
+  const normalized = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const clientPublicationId = validOpaqueId(raw.clientPublicationId, EVENT_ID_RE);
+    const trackName = String(raw.trackName || '').trim();
+    const mid = String(raw.mid || '').trim();
+    const mediaKind = String(raw.mediaKind || '').trim();
+    if (!clientPublicationId || !SFU_TRACK_NAME_RE.test(trackName)
+        || !SFU_MID_RE.test(mid) || !SFU_MEDIA_KINDS.has(mediaKind)) return null;
+    if (seenClientIds.has(clientPublicationId) || seenTrackNames.has(trackName) || seenMids.has(mid)) return null;
+    seenClientIds.add(clientPublicationId);
+    seenTrackNames.add(trackName);
+    seenMids.add(mid);
+    normalized.push({ clientPublicationId, trackName, mid, mediaKind });
+  }
+  return normalized;
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function sanitizeProviderErrorCode(value) {
+  const code = String(value || '').trim();
+  return SFU_PUBLIC_ERROR_CODE_RE.test(code) ? code : 'provider_item_failed';
+}
+
+async function readOwnedMediaSession(db, callId, mediaSessionId, userId, deviceId) {
+  return await db.prepare(`
+    SELECT id, call_id, user_id, device_id, generation, purpose, client_session_id,
+      provider_session_id, status, mutation_state, last_error_code, created_at, updated_at
+    FROM human_call_media_sessions
+    WHERE id = ? AND call_id = ? AND user_id = ? AND device_id = ?
+    LIMIT 1
+  `).bind(mediaSessionId, callId, userId, deviceId).first();
+}
+
+async function readMediaOperation(db, mediaSessionId, clientOperationId) {
+  return await db.prepare(`
+    SELECT id, media_session_id, call_id, user_id, device_id, generation,
+      client_operation_id, request_fingerprint, status, result_json,
+      response_session_description_json, last_error_code, created_at, updated_at
+    FROM human_call_media_operations
+    WHERE media_session_id = ? AND client_operation_id = ?
+    LIMIT 1
+  `).bind(mediaSessionId, clientOperationId).first();
+}
+
+function mapStoredMediaOperation(operation, deduplicated = false) {
+  let results = [];
+  try {
+    results = operation?.result_json ? JSON.parse(operation.result_json) : [];
+  } catch {
+    results = [];
+  }
+  let sessionDescription;
+  try {
+    sessionDescription = operation?.response_session_description_json
+      ? JSON.parse(operation.response_session_description_json)
+      : undefined;
+  } catch {
+    sessionDescription = undefined;
+  }
+  return {
+    success: operation?.status === 'awaiting_endpoint_apply' || operation?.status === 'applied',
+    deduplicated,
+    operation: {
+      clientOperationId: operation.client_operation_id,
+      generation: Number(operation.generation),
+      status: operation.status,
+    },
+    ...(sessionDescription ? { sessionDescription } : {}),
+    results,
+  };
+}
+
+async function retireUncertainMediaOperation(db, mediaSessionId, operationId, errorCode) {
+  const now = new Date().toISOString();
+  try {
+    await db.batch([
+      db.prepare(`
+        UPDATE human_call_media_operations
+        SET status = 'uncertain', last_error_code = ?, updated_at = ?
+        WHERE id = ? AND status = 'pending'
+      `).bind(errorCode, now, operationId),
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET status = 'uncertain', mutation_state = 'retired',
+          last_error_code = ?, updated_at = ?
+        WHERE id = ? AND mutation_state = 'mutating'
+      `).bind(errorCode, now, mediaSessionId),
+    ]);
+  } catch {
+    // The caller already fails closed; reconciliation must inspect both durable rows.
+  }
+}
+
+export async function handlePublishHumanCallMedia(
+  request, env, db, rawCallId, rawMediaSessionId, fetchImpl = fetch,
+) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const config = readSfuConfiguration(env);
+  if (!config) return jsonResponse({ success: false, error: '群组通话媒体服务尚未配置' }, 503);
+
+  const callId = validOpaqueId(rawCallId, CALL_ID_RE);
+  const mediaSessionId = validOpaqueId(rawMediaSessionId, CALL_ID_RE);
+  if (!callId || !mediaSessionId) return jsonResponse({ success: false, error: '媒体发布路径无效' }, 400);
+
+  const call = await readMembershipAuthorizedChannel(db, callId, auth.userId);
+  if (!call) return jsonResponse({ success: false, error: '通话不存在或无权访问' }, 404);
+  if (call.terminal_state) return jsonResponse({ success: false, error: '通话已结束，不能发布媒体' }, 409);
+  const member = await readCallMember(db, callId, auth.userId);
+  if (member?.state !== 'active') return jsonResponse({ success: false, error: '当前账号不是活跃通话成员' }, 403);
+
+  const mediaSession = await readOwnedMediaSession(db, callId, mediaSessionId, auth.userId, auth.deviceId);
+  if (!mediaSession) return jsonResponse({ success: false, error: '媒体会话不存在或不属于当前设备' }, 404);
+  if (mediaSession.status !== 'ready' || mediaSession.purpose !== 'publish'
+      || !SFU_PROVIDER_SESSION_ID_RE.test(String(mediaSession.provider_session_id || ''))) {
+    return jsonResponse({ success: false, error: '媒体会话当前不能发布媒体' }, 409);
+  }
+
+  let body;
+  try { body = await request.json(); } catch {
+    return jsonResponse({ success: false, error: '媒体发布请求格式无效' }, 400);
+  }
+  const clientOperationId = validOpaqueId(body.clientOperationId, EVENT_ID_RE);
+  const generation = parseGeneration(body.generation);
+  const sessionDescription = validSfuSessionDescription(body.sessionDescription, 'offer');
+  const publications = normalizePublicationIntents(body.publications);
+  if (!clientOperationId) return jsonResponse({ success: false, error: '媒体发布操作编号无效' }, 400);
+  if (generation == null || generation !== Number(call.generation)
+      || generation !== Number(mediaSession.generation)) {
+    return jsonResponse({ success: false, error: '媒体发布通话代际已过期' }, 409);
+  }
+  if (!sessionDescription) return jsonResponse({ success: false, error: '媒体发布 SDP offer 无效' }, 400);
+  if (!publications) return jsonResponse({ success: false, error: '媒体发布轨道列表无效' }, 400);
+
+  const requestFingerprint = await sha256Hex(JSON.stringify({
+    generation, sessionDescription, publications,
+  }));
+  const duplicate = await readMediaOperation(db, mediaSessionId, clientOperationId);
+  if (duplicate) {
+    if (duplicate.request_fingerprint !== requestFingerprint
+        || Number(duplicate.generation) !== generation) {
+      return jsonResponse({ success: false, error: '重复媒体发布操作与已保存参数冲突' }, 409);
+    }
+    if (duplicate.status === 'awaiting_endpoint_apply' || duplicate.status === 'applied') {
+      const response = jsonResponse(mapStoredMediaOperation(duplicate, true));
+      response.headers.set('cache-control', 'private, no-store');
+      return response;
+    }
+    return jsonResponse({
+      success: false,
+      error: duplicate.status === 'uncertain'
+        ? '媒体发布结果未知，已停用该媒体会话，禁止自动重试'
+        : '媒体发布操作尚未完成或已失败，请同步后使用新的操作编号',
+      operation: { clientOperationId, generation, status: duplicate.status },
+    }, 409);
+  }
+
+  if (mediaSession.mutation_state !== 'idle') {
+    return jsonResponse({ success: false, error: '媒体会话已有未完成变更，请先完成当前 SDP 交换' }, 409);
+  }
+
+  const operationId = 'mediaop_' + crypto.randomUUID().replaceAll('-', '');
+  const now = new Date().toISOString();
+  let claimed;
+  try {
+    claimed = await db.batch([
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET mutation_state = 'mutating', updated_at = ?
+        WHERE id = ? AND call_id = ? AND user_id = ? AND device_id = ?
+          AND generation = ? AND purpose = 'publish' AND status = 'ready' AND mutation_state = 'idle'
+      `).bind(now, mediaSessionId, callId, auth.userId, auth.deviceId, generation),
+      db.prepare(`
+        INSERT INTO human_call_media_operations (
+          id, media_session_id, call_id, user_id, device_id, generation,
+          client_operation_id, request_fingerprint, status, result_json,
+          response_session_description_json, last_error_code, created_at, updated_at
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, ?, ?
+        WHERE changes() = 1
+      `).bind(
+        operationId, mediaSessionId, callId, auth.userId, auth.deviceId, generation,
+        clientOperationId, requestFingerprint, now, now,
+      ),
+    ]);
+  } catch {
+    const raced = await readMediaOperation(db, mediaSessionId, clientOperationId);
+    if (raced && raced.request_fingerprint === requestFingerprint
+        && (raced.status === 'awaiting_endpoint_apply' || raced.status === 'applied')) {
+      const response = jsonResponse(mapStoredMediaOperation(raced, true));
+      response.headers.set('cache-control', 'private, no-store');
+      return response;
+    }
+    return jsonResponse({ success: false, error: '媒体发布操作并发冲突，请同步后重试' }, 409);
+  }
+  if (claimed.some((result) => Number(result?.meta?.changes || 0) !== 1)) {
+    return jsonResponse({ success: false, error: '媒体发布操作并发冲突，请同步后重试' }, 409);
+  }
+
+  let upstream;
+  try {
+    upstream = await fetchImpl(
+      `https://rtc.live.cloudflare.com/v1/apps/${encodeURIComponent(config.appId)}/sessions/${encodeURIComponent(mediaSession.provider_session_id)}/tracks/new`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.appSecret}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionDescription,
+          tracks: publications.map(({ trackName, mid }) => ({ location: 'local', mid, trackName })),
+        }),
+      },
+    );
+  } catch {
+    await retireUncertainMediaOperation(db, mediaSessionId, operationId, 'network_outcome_unknown');
+    return jsonResponse({ success: false, error: '媒体发布结果未知，已停用该媒体会话，禁止自动重试' }, 502);
+  }
+
+  let providerPayload;
+  try { providerPayload = await upstream.json(); } catch { providerPayload = null; }
+  if (!upstream.ok || !providerPayload || providerPayload.errorCode || !Array.isArray(providerPayload.tracks)) {
+    await retireUncertainMediaOperation(
+      db, mediaSessionId, operationId,
+      sanitizeProviderErrorCode(providerPayload?.errorCode || `provider_http_${upstream.status}`),
+    );
+    return jsonResponse({ success: false, error: '媒体服务返回了不确定结果，已停用该媒体会话' }, 502);
+  }
+
+  const requestedByTrack = new Map(publications.map((item) => [item.trackName, item]));
+  const providerByTrack = new Map();
+  for (const item of providerPayload.tracks) {
+    const trackName = String(item?.trackName || '').trim();
+    if (!requestedByTrack.has(trackName) || providerByTrack.has(trackName)) {
+      await retireUncertainMediaOperation(db, mediaSessionId, operationId, 'provider_result_identity_mismatch');
+      return jsonResponse({ success: false, error: '媒体服务返回无法安全对应的轨道结果' }, 502);
+    }
+    providerByTrack.set(trackName, item);
+  }
+  if (providerByTrack.size !== publications.length) {
+    await retireUncertainMediaOperation(db, mediaSessionId, operationId, 'provider_result_incomplete');
+    return jsonResponse({ success: false, error: '媒体服务返回不完整轨道结果，已停用该媒体会话' }, 502);
+  }
+
+  const publicResults = [];
+  const successfulRows = [];
+  for (const intent of publications) {
+    const item = providerByTrack.get(intent.trackName);
+    if (item.errorCode) {
+      publicResults.push({
+        clientPublicationId: intent.clientPublicationId,
+        status: 'failed',
+        errorCode: sanitizeProviderErrorCode(item.errorCode),
+      });
+      continue;
+    }
+    const publicationId = 'pub_' + crypto.randomUUID().replaceAll('-', '');
+    publicResults.push({
+      publicationId,
+      clientPublicationId: intent.clientPublicationId,
+      trackName: intent.trackName,
+      mid: intent.mid,
+      mediaKind: intent.mediaKind,
+      status: 'ready',
+    });
+    successfulRows.push({ publicationId, ...intent });
+  }
+
+  const answer = successfulRows.length
+    ? validSfuSessionDescription(providerPayload.sessionDescription, 'answer')
+    : null;
+  if (successfulRows.length && !answer) {
+    await retireUncertainMediaOperation(db, mediaSessionId, operationId, 'provider_answer_missing');
+    return jsonResponse({ success: false, error: '媒体服务未返回可安全应用的 SDP answer' }, 502);
+  }
+
+  const updatedAt = new Date().toISOString();
+  if (successfulRows.length === 0) {
+    let failed;
+    try {
+      failed = await db.batch([
+        db.prepare(`
+          UPDATE human_call_media_operations
+          SET status = 'failed', result_json = ?, last_error_code = 'all_tracks_rejected', updated_at = ?
+          WHERE id = ? AND status = 'pending'
+        `).bind(JSON.stringify(publicResults), updatedAt, operationId),
+        db.prepare(`
+          UPDATE human_call_media_sessions
+          SET mutation_state = 'idle', last_error_code = 'all_tracks_rejected', updated_at = ?
+          WHERE id = ? AND status = 'ready' AND mutation_state = 'mutating'
+        `).bind(updatedAt, mediaSessionId),
+      ]);
+    } catch {
+      await retireUncertainMediaOperation(db, mediaSessionId, operationId, 'result_persist_failed');
+      return jsonResponse({ success: false, error: '媒体发布结果保存失败，已停用该媒体会话' }, 502);
+    }
+    if (failed.some((result) => Number(result?.meta?.changes || 0) !== 1)) {
+      await retireUncertainMediaOperation(db, mediaSessionId, operationId, 'result_persist_conflict');
+      return jsonResponse({ success: false, error: '媒体发布结果保存发生冲突，已停用该媒体会话' }, 502);
+    }
+    return jsonResponse({
+      success: false,
+      error: '媒体服务拒绝了全部发布轨道',
+      operation: { clientOperationId, generation, status: 'failed' },
+      results: publicResults,
+    }, 502);
+  }
+
+  const publicationStatements = successfulRows.map((row) => db.prepare(`
+    INSERT INTO human_call_media_publications (
+      id, media_session_id, operation_id, call_id, user_id, device_id, generation,
+      client_publication_id, track_name, mid, media_kind, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)
+  `).bind(
+    row.publicationId, mediaSessionId, operationId, callId, auth.userId, auth.deviceId,
+    generation, row.clientPublicationId, row.trackName, row.mid, row.mediaKind, updatedAt, updatedAt,
+  ));
+  let persisted;
+  try {
+    persisted = await db.batch([
+      db.prepare(`
+        UPDATE human_call_media_operations
+        SET status = 'awaiting_endpoint_apply', result_json = ?,
+          response_session_description_json = ?, last_error_code = NULL, updated_at = ?
+        WHERE id = ? AND status = 'pending'
+      `).bind(JSON.stringify(publicResults), JSON.stringify(answer), updatedAt, operationId),
+      ...publicationStatements,
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET mutation_state = 'awaiting_endpoint_apply', last_error_code = NULL, updated_at = ?
+        WHERE id = ? AND status = 'ready' AND mutation_state = 'mutating'
+      `).bind(updatedAt, mediaSessionId),
+    ]);
+  } catch {
+    await retireUncertainMediaOperation(db, mediaSessionId, operationId, 'result_persist_failed');
+    return jsonResponse({ success: false, error: '媒体发布结果保存失败，已停用该媒体会话' }, 502);
+  }
+  if (persisted.some((result) => Number(result?.meta?.changes || 0) !== 1)) {
+    await retireUncertainMediaOperation(db, mediaSessionId, operationId, 'result_persist_conflict');
+    return jsonResponse({ success: false, error: '媒体发布结果保存发生冲突，已停用该媒体会话' }, 502);
+  }
+
+  const response = jsonResponse({
+    success: true,
+    deduplicated: false,
+    operation: { clientOperationId, generation, status: 'awaiting_endpoint_apply' },
+    sessionDescription: answer,
+    results: publicResults,
+  }, 201);
+  response.headers.set('cache-control', 'private, no-store');
+  return response;
+}
+
+export async function handleAcknowledgeHumanCallMediaOperationApplied(
+  request, env, db, rawCallId, rawMediaSessionId, rawClientOperationId,
+) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const callId = validOpaqueId(rawCallId, CALL_ID_RE);
+  const mediaSessionId = validOpaqueId(rawMediaSessionId, CALL_ID_RE);
+  const clientOperationId = validOpaqueId(rawClientOperationId, EVENT_ID_RE);
+  if (!callId || !mediaSessionId || !clientOperationId) {
+    return jsonResponse({ success: false, error: '媒体发布确认路径无效' }, 400);
+  }
+  const call = await readMembershipAuthorizedChannel(db, callId, auth.userId);
+  if (!call) return jsonResponse({ success: false, error: '通话不存在或无权访问' }, 404);
+  if (call.terminal_state) return jsonResponse({ success: false, error: '通话已结束，不能确认媒体发布' }, 409);
+  const member = await readCallMember(db, callId, auth.userId);
+  if (member?.state !== 'active') return jsonResponse({ success: false, error: '当前账号不是活跃通话成员' }, 403);
+  const mediaSession = await readOwnedMediaSession(db, callId, mediaSessionId, auth.userId, auth.deviceId);
+  if (!mediaSession) return jsonResponse({ success: false, error: '媒体会话不存在或不属于当前设备' }, 404);
+
+  let body;
+  try { body = await request.json(); } catch {
+    return jsonResponse({ success: false, error: '媒体发布确认格式无效' }, 400);
+  }
+  const generation = parseGeneration(body.generation);
+  if (generation == null || generation !== Number(call.generation)
+      || generation !== Number(mediaSession.generation)) {
+    return jsonResponse({ success: false, error: '媒体发布确认通话代际已过期' }, 409);
+  }
+
+  const operation = await readMediaOperation(db, mediaSessionId, clientOperationId);
+  if (!operation || Number(operation.user_id) !== auth.userId
+      || operation.device_id !== auth.deviceId || Number(operation.generation) !== generation) {
+    return jsonResponse({ success: false, error: '媒体发布操作不存在或无权确认' }, 404);
+  }
+  if (operation.status === 'applied') {
+    const response = jsonResponse(mapStoredMediaOperation(operation, true));
+    response.headers.set('cache-control', 'private, no-store');
+    return response;
+  }
+  if (operation.status !== 'awaiting_endpoint_apply'
+      || mediaSession.status !== 'ready'
+      || mediaSession.mutation_state !== 'awaiting_endpoint_apply') {
+    return jsonResponse({ success: false, error: '媒体发布操作当前不能确认应用' }, 409);
+  }
+
+  const now = new Date().toISOString();
+  let results;
+  try {
+    results = await db.batch([
+      db.prepare(`
+        UPDATE human_call_media_operations
+        SET status = 'applied', response_session_description_json = NULL, updated_at = ?
+        WHERE id = ? AND status = 'awaiting_endpoint_apply'
+      `).bind(now, operation.id),
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET mutation_state = 'idle', updated_at = ?
+        WHERE id = ? AND status = 'ready' AND mutation_state = 'awaiting_endpoint_apply'
+          AND generation = ?
+      `).bind(now, mediaSessionId, generation),
+    ]);
+  } catch {
+    return jsonResponse({ success: false, error: '媒体发布确认并发冲突，请同步后重试' }, 409);
+  }
+  if (results.some((result) => Number(result?.meta?.changes || 0) !== 1)) {
+    return jsonResponse({ success: false, error: '媒体发布确认并发冲突，请同步后重试' }, 409);
+  }
+  const applied = await readMediaOperation(db, mediaSessionId, clientOperationId);
+  const response = jsonResponse(mapStoredMediaOperation(applied, false));
+  response.headers.set('cache-control', 'private, no-store');
+  return response;
+}
+

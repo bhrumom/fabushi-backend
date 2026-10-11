@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   handleCreateHumanCallMediaSession,
+  handlePublishHumanCallMedia,
+  handleAcknowledgeHumanCallMediaOperationApplied,
   handleGetHumanCallMembers,
   handleMutateHumanCallMember,
 } from '../src/handlers/call-signaling.js';
@@ -11,6 +13,7 @@ const handler = fs.readFileSync(new URL('../src/handlers/call-signaling.js', imp
 const routes = fs.readFileSync(new URL('../src/routes/community-routes.js', import.meta.url), 'utf8');
 const migration = fs.readFileSync(new URL('../migrations/20261012_human_call_group_membership.sql', import.meta.url), 'utf8');
 const mediaMigration = fs.readFileSync(new URL('../migrations/20261012_human_call_sfu_sessions.sql', import.meta.url), 'utf8');
+const publicationMigration = fs.readFileSync(new URL('../migrations/20261012_human_call_sfu_publications.sql', import.meta.url), 'utf8');
 const spec = fs.readFileSync(new URL('../../../docs/specs/human-call-signaling.md', import.meta.url), 'utf8');
 
 test('group membership handlers are executable exports and stay on canonical call owner', () => {
@@ -70,3 +73,37 @@ test('SFU session allocation is backend-owned, durable, and fail-closed on uncer
   assert.match(spec, /MUST NOT issue another provider allocation/);
 });
 
+
+
+test('SFU publication mutations are durable, serialized, partial-result aware, and endpoint-applied fenced', () => {
+  assert.equal(typeof handlePublishHumanCallMedia, 'function');
+  assert.equal(typeof handleAcknowledgeHumanCallMediaOperationApplied, 'function');
+  assert.ok(routes.includes('/publications'));
+  assert.ok(routes.includes('/operations/'));
+  assert.ok(routes.includes('/applied'));
+  assert.match(handler, /human_call_media_operations/);
+  assert.match(handler, /human_call_media_publications/);
+  assert.match(handler, /request_fingerprint/);
+  assert.match(handler, /crypto\.subtle\.digest\('SHA-256'/);
+  assert.match(handler, /mutation_state = 'mutating'/);
+  assert.match(handler, /mutation_state = 'awaiting_endpoint_apply'/);
+  assert.match(handler, /mutation_state = 'retired'/);
+  assert.match(handler, /network_outcome_unknown/);
+  assert.match(handler, /provider_result_incomplete/);
+  assert.match(handler, /provider_answer_missing/);
+  assert.match(handler, /\/tracks\/new/);
+  assert.match(handler, /location: 'local'/);
+  assert.match(handler, /status: 'awaiting_endpoint_apply'/);
+  assert.match(handler, /status = 'applied'/);
+  assert.match(handler, /response_session_description_json = NULL/);
+  assert.match(publicationMigration, /ADD COLUMN mutation_state/);
+  assert.match(publicationMigration, /CREATE TABLE IF NOT EXISTS human_call_media_operations/);
+  assert.match(publicationMigration, /UNIQUE \(media_session_id, client_operation_id\)/);
+  assert.match(publicationMigration, /CREATE TABLE IF NOT EXISTS human_call_media_publications/);
+  assert.match(publicationMigration, /UNIQUE \(media_session_id, client_publication_id\)/);
+  assert.match(publicationMigration, /UNIQUE \(media_session_id, track_name\)/);
+  assert.match(spec, /A partially successful batch is never replayed as a whole/);
+  assert.match(spec, /awaiting_endpoint_apply/);
+  assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
+  assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
+});

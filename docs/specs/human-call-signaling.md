@@ -189,11 +189,11 @@ Full Group/SFU acceptance additionally requires a real shipping backend/SFU comp
 
 ### 12.5 Compliance status
 
-Verified implementation scope at `f8e6a4faccccfbdc9361f1a635a524abaea00347`: D1 member backfill, `membership_revision` CAS, creator/device/generation authorization, idempotent add/remove mutation record, member read route, legacy signaling regressions, and production-worker delivery. Real SFU session/media routing is intentionally not claimed.
+Verified predecessor scope includes durable roster plus exact-head Realtime SFU session allocation. The publication-mutation descendant implements a durable per-session mutation fence, request fingerprints, partial-result persistence, fail-closed uncertain retirement, application-owned publication ids and endpoint-applied acknowledgement. This text does not claim full Group/SFU acceptance until the descendant receives exact-head CI and deployed >=3-participant evidence.
 
 | Requirement | Status | Evidence |
 | --- | --- | --- |
 | Durable membership/revision contract | passed | Exact-head `f8e6a4faccccfbdc9361f1a635a524abaea00347`: Human Messaging CI `38176377368` executed the group-membership contract with 22/22 tests passing; Production Worker Delivery CI `38176377341` also passed. The following spec-only descendant must preserve those gates. |
-| Real SFU join/media routing | blocked | No production SFU session/provider composition has yet been verified in this repository. Do not substitute TURN or test SFU. |
+| Real SFU join/media routing | in progress | Exact-head `1f00ac99926ddf93a3b3fa831f76308da37509b0` preserved green Human Messaging CI `38177201022` and Production Worker Delivery `38177201039` for durable roster/session allocation. The publication-mutation descendant must independently pass both workflows; deployed media exchange is not yet claimed. |
 | >=3 participant production E2E | blocked | Requires real SFU service composition and deployed acceptance environment. |
 
