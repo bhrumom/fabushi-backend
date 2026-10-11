@@ -15,12 +15,12 @@ import {
   officialMiniAppPackageSeeds,
 } from '../src/miniapp_marketplace_catalog.js';
 
-function fixture() {
+function fixture({ environment = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabushi-miniapp-marketplace-'));
   const storagePath = path.join(root, 'marketplace.json');
   const marketplace = new MiniAppMarketplace({
     storagePath,
-    seed: officialMiniAppPackageSeeds(),
+    seed: officialMiniAppPackageSeeds(environment),
     now: () => 1_900_000_000_000,
   });
   return {
@@ -75,21 +75,28 @@ function thirdPartyManifest() {
   };
 }
 
-test('official catalog is searchable and uses immutable external artifacts', () => {
+test('official catalog keeps Global Dharma 1.1 metadata separate from legacy packages', () => {
   const scope = fixture();
   try {
     const result = scope.marketplace.browse({ query: 'global mcp cli', platform: 'desktop' });
     assert.equal(result.protocol, 'fabushi.miniapp.marketplace.v2');
     assert.equal(result.plugins[0].pluginId, 'global-dharma');
-    assert.equal(result.plugins[0].source.installMode, 'package');
+    assert.equal(result.plugins[0].latestVersion, '1.1.0');
+    assert.equal(result.plugins[0].source.installMode, 'metadata');
 
-    const manifest = scope.marketplace.get('global-dharma');
-    assert.equal(manifest.distribution.sourceRef, MINIAPP_PACKAGE_COMMIT);
-    assert.equal(manifest.distribution.marketplaceHostsPackage, false);
-    assert.match(manifest.distribution.artifacts[0].url, new RegExp(MINIAPP_PACKAGE_COMMIT));
-    assert.equal(manifest.distribution.artifacts[0].sha256.length, 64);
+    const globalDharma = scope.marketplace.get('global-dharma');
+    assert.equal(globalDharma.version, '1.1.0');
+    assert.equal(globalDharma.distribution.repository, 'https://github.com/bhrumom/fabushi-marketplace');
+    assert.equal(globalDharma.distribution.sourceRef, 'main');
+    assert.equal(globalDharma.distribution.artifacts.length, 0);
 
-    const release = marketplaceReleaseResponse(manifest, 'desktop');
+    const botFather = scope.marketplace.get('bot-father');
+    assert.equal(botFather.distribution.sourceRef, MINIAPP_PACKAGE_COMMIT);
+    assert.equal(botFather.distribution.marketplaceHostsPackage, false);
+    assert.match(botFather.distribution.artifacts[0].url, new RegExp(MINIAPP_PACKAGE_COMMIT));
+    assert.equal(botFather.distribution.artifacts[0].sha256.length, 64);
+
+    const release = marketplaceReleaseResponse(botFather, 'desktop');
     assert.equal(release.releaseManifest.schemaVersion, 1);
     assert.equal(release.releaseManifest.protocol, 'mahayana.external-release.v1');
     assert.equal(release.releaseManifest.artifacts[0].runtime, 'local-web');
@@ -97,13 +104,72 @@ test('official catalog is searchable and uses immutable external artifacts', () 
     assert.equal(release.install.protocol, 'fabushi.marketplace.install.v1');
     assert.equal(release.install.strategy, 'github-immutable');
     assert.equal(release.install.source.sourceRef, MINIAPP_PACKAGE_COMMIT);
-    assert.equal(release.install.artifacts[0].sha256, manifest.distribution.artifacts[0].sha256);
+    assert.equal(release.install.artifacts[0].sha256, botFather.distribution.artifacts[0].sha256);
     assert.equal(release.install.artifacts[0].runtime, 'local-web');
     assert.ok(release.install.artifacts[0].platforms.includes('desktop'));
     assert.ok(release.install.artifacts[0].platforms.includes('chrome-extension'));
     assert.equal(release.install.update.allowDowngrade, false);
     assert.equal(release.releaseManifest.install.protocol, 'fabushi.marketplace.install.v1');
     assert.equal(release.source.marketplaceHostsPackage, false);
+  } finally {
+    scope.cleanup();
+  }
+});
+
+test('Global Dharma iOS stays fail-closed until a complete signed fabapp release is configured', () => {
+  const scope = fixture();
+  try {
+    const ios = scope.marketplace.browse({ query: '全球法布施', platform: 'ios' });
+    assert.equal(ios.plugins.some((plugin) => plugin.pluginId === 'global-dharma'), true);
+    assert.throws(
+      () => marketplaceReleaseResponse(scope.marketplace.get('global-dharma'), 'ios'),
+      /not available on ios/,
+    );
+  } finally {
+    scope.cleanup();
+  }
+
+  assert.throws(
+    () => officialMiniAppPackageSeeds({
+      FABUSHI_GLOBAL_DHARMA_FABAPP_SOURCE_REF: 'a'.repeat(40),
+    }),
+    /must be configured atomically/,
+  );
+});
+
+test('Global Dharma iOS publishes only the pinned 1.1.0 fabapp release', () => {
+  const sourceRef = 'b'.repeat(40);
+  const sha256 = 'c'.repeat(64);
+  const sizeBytes = 8192;
+  const artifactUrl = 'https://github.com/bhrumom/fabushi-marketplace/releases/download/global-dharma-v1.1.0/global-dharma-1.1.0.fabapp';
+  const scope = fixture({
+    environment: {
+      FABUSHI_GLOBAL_DHARMA_FABAPP_SOURCE_REF: sourceRef,
+      FABUSHI_GLOBAL_DHARMA_FABAPP_URL: artifactUrl,
+      FABUSHI_GLOBAL_DHARMA_FABAPP_SHA256: sha256,
+      FABUSHI_GLOBAL_DHARMA_FABAPP_SIZE_BYTES: String(sizeBytes),
+    },
+  });
+  try {
+    const manifest = scope.marketplace.get('global-dharma');
+    assert.equal(manifest.version, '1.1.0');
+    assert.equal(manifest.distribution.installMode, 'package');
+    assert.equal(manifest.distribution.repository, 'https://github.com/bhrumom/fabushi-marketplace');
+    assert.equal(manifest.distribution.sourceRef, sourceRef);
+    assert.equal(manifest.distribution.artifacts.length, 1);
+    assert.equal(manifest.distribution.artifacts[0].platform, 'ios');
+    assert.equal(manifest.distribution.artifacts[0].archiveFormat, 'zip');
+    assert.equal(manifest.distribution.artifacts[0].url, artifactUrl);
+    assert.equal(manifest.distribution.artifacts[0].sha256, sha256);
+    assert.equal(manifest.distribution.artifacts[0].sizeBytes, sizeBytes);
+
+    const release = marketplaceReleaseResponse(manifest, 'ios');
+    assert.equal(release.releaseManifest.artifacts.length, 1);
+    assert.equal(release.releaseManifest.artifacts[0].format, 'zip');
+    assert.equal(release.releaseManifest.artifacts[0].entry, 'index.html');
+    assert.equal(release.install.source.sourceRef, sourceRef);
+    assert.equal(release.install.artifacts[0].sha256, sha256);
+    assert.deepEqual(release.install.artifacts[0].platforms, ['ios']);
   } finally {
     scope.cleanup();
   }
