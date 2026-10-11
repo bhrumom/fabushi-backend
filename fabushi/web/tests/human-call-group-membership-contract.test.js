@@ -20,6 +20,7 @@ const mediaMigration = fs.readFileSync(new URL('../migrations/20261012_human_cal
 const publicationMigration = fs.readFileSync(new URL('../migrations/20261013_human_call_sfu_publications.sql', import.meta.url), 'utf8');
 const subscriptionMigration = fs.readFileSync(new URL('../migrations/20261014_human_call_sfu_subscriptions.sql', import.meta.url), 'utf8');
 const teardownMigration = fs.readFileSync(new URL('../migrations/20261015_human_call_sfu_teardowns.sql', import.meta.url), 'utf8');
+const simulcastMigration = fs.readFileSync(new URL('../migrations/20261016_human_call_sfu_simulcast.sql', import.meta.url), 'utf8');
 const spec = fs.readFileSync(new URL('../../../docs/specs/human-call-signaling.md', import.meta.url), 'utf8');
 
 test('group membership handlers are executable exports and stay on canonical call owner', () => {
@@ -178,6 +179,27 @@ test('SFU teardown is durable, idempotent, partial-result aware, and generation-
   assert.match(spec, /session-local track teardown/);
   assert.match(spec, /partial close results/);
   assert.match(spec, /never automatically replayed/);
+  assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
+  assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
+});
+
+
+test('SFU simulcast publication and subscription layer policy stays application-owned', () => {
+  assert.match(handler, /simulcastRids/);
+  assert.match(handler, /sdpAdvertisesSimulcastRids/);
+  assert.match(handler, /a=simulcast:send/);
+  assert.match(handler, /a=rid:/);
+  assert.match(handler, /preferredRid/);
+  assert.match(handler, /priorityOrdering/);
+  assert.match(handler, /ridNotAvailable/);
+  assert.match(handler, /simulcast_rids_json/);
+  assert.match(handler, /请求的 simulcast layer 未由该发布广告/);
+  assert.match(handler, /\.\.\.\(simulcast \? \{ simulcast \} : \{\}\)/);
+  assert.match(simulcastMigration, /ADD COLUMN simulcast_rids_json TEXT/);
+  assert.match(simulcastMigration, /ADD COLUMN preferred_rid TEXT/);
+  assert.match(simulcastMigration, /'none', 'asciibetical'/);
+  assert.match(spec, /available RIDs/);
+  assert.match(spec, /preferredRid/);
   assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
   assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
 });
