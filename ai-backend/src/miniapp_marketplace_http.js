@@ -892,11 +892,17 @@ export function createMiniAppMarketplaceRouter({
 
   router.post('/v1/marketplace/plugins/:pluginId/route', route(async (req, res) => {
     const manifest = requireManifest(marketplace, req.params.pluginId);
-    const routed = marketplace.routeInput(req.params.pluginId, req.body?.input);
+    const routed = marketplace.routeInput(req.params.pluginId, req.body?.input, {
+      availableTools: req.body?.availableTools,
+    });
+    const dispatchManifest = routed.surface?.id
+      && !manifest.surfaces.some((surface) => surface.id === routed.surface.id)
+      ? { ...manifest, surfaces: [routed.surface, ...manifest.surfaces] }
+      : manifest;
     const payload = routed.kind === 'command'
-      ? commandDispatch(manifest, routed.command, routed.arguments)
+      ? commandDispatch(dispatchManifest, routed.command, routed.arguments)
       : routed.suggestedCommand
-        ? commandDispatch(manifest, routed.suggestedCommand, { input: req.body?.input })
+        ? commandDispatch(dispatchManifest, routed.suggestedCommand, { input: req.body?.input })
         : routed;
     res.json(payload);
   }));
