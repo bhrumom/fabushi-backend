@@ -3,6 +3,11 @@ import process from 'node:process';
 
 import express from 'express';
 
+import {
+  browseExtensions,
+  ExtensionRegistryError,
+  readExtension,
+} from './extension_registry.js';
 import { AccountSyncStore } from './account_sync_store.js';
 import { readGlobalDharmaEntitlement } from './global_dharma_entitlement.js';
 import { GlobalDharmaRuntimeStore } from './global_dharma_runtime_store.js';
@@ -155,6 +160,52 @@ export function createMiniAppMarketplaceRouter({
       },
     };
   }
+
+  function extensionErrorStatus(error) {
+    if (!(error instanceof ExtensionRegistryError)) return 500;
+    if (error.code === 'EXTENSION_NOT_FOUND') return 404;
+    if (error.code === 'STALE_EXTENSION_CURSOR') return 409;
+    return 400;
+  }
+
+  function extensionRoute(handler) {
+    return async (req, res) => {
+      try {
+        await handler(req, res);
+      } catch (error) {
+        const status = extensionErrorStatus(error);
+        res.status(status).json({
+          success: false,
+          error: {
+            code: error?.code ?? 'EXTENSION_REGISTRY_ERROR',
+            message: status >= 500 ? 'Extension registry operation failed' : String(error?.message ?? error),
+          },
+        });
+      }
+    };
+  }
+
+  router.get('/v1/extensions', extensionRoute(async (req, res) => {
+    const payload = browseExtensions(marketplace, {
+      query: safeQuery(req.query.q ?? req.query.query),
+      kind: safeQuery(req.query.kind, 32) || undefined,
+      platform: safeQuery(req.query.platform, 32) || undefined,
+      origin: safeQuery(req.query.origin, 32) || undefined,
+      limit: Number(req.query.limit ?? 50),
+      cursor: safeQuery(req.query.cursor, 4096) || undefined,
+    });
+    res.json(payload);
+  }));
+
+  router.get('/v1/extensions/:kind/:namespace/:name', extensionRoute(async (req, res) => {
+    res.json({
+      extension: readExtension(marketplace, {
+        kind: req.params.kind,
+        namespace: req.params.namespace,
+        name: req.params.name,
+      }),
+    });
+  }));
 
   router.get('/v1/marketplace/plugins', route(async (req, res) => {
     const identity = await identityFor(req, { publicRead: true });
