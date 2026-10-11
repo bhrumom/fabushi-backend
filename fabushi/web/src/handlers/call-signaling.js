@@ -1765,6 +1765,276 @@ export async function handleAnswerHumanCallMediaSubscription(
   return response;
 }
 
+
+async function readMediaTeardown(db, mediaSessionId, clientTeardownId) {
+  return await db.prepare(`
+    SELECT id, media_session_id, call_id, user_id, device_id, generation,
+      client_teardown_id, request_fingerprint, status, result_json,
+      last_error_code, created_at, updated_at
+    FROM human_call_media_teardowns
+    WHERE media_session_id = ? AND client_teardown_id = ?
+    LIMIT 1
+  `).bind(mediaSessionId, clientTeardownId).first();
+}
+
+function mapStoredMediaTeardown(teardown, deduplicated = false) {
+  let results = [];
+  try {
+    results = teardown?.result_json ? JSON.parse(teardown.result_json) : [];
+  } catch {
+    results = [];
+  }
+  return {
+    success: teardown?.status === 'applied',
+    deduplicated,
+    teardown: {
+      clientTeardownId: teardown.client_teardown_id,
+      generation: Number(teardown.generation),
+      status: teardown.status,
+    },
+    results,
+  };
+}
+
+async function readClosableMediaTracks(db, mediaSession) {
+  if (mediaSession.purpose === 'publish') {
+    const rows = await db.prepare(`
+      SELECT id, mid
+      FROM human_call_media_publications
+      WHERE media_session_id = ? AND status = 'ready'
+      ORDER BY created_at ASC, id ASC
+    `).bind(mediaSession.id).all();
+    return (rows.results || []).map((row) => ({
+      rowId: row.id,
+      mid: row.mid,
+      kind: 'publication',
+    }));
+  }
+  const rows = await db.prepare(`
+    SELECT id, receive_mid
+    FROM human_call_media_subscriptions
+    WHERE media_session_id = ? AND status = 'ready'
+    ORDER BY created_at ASC, id ASC
+  `).bind(mediaSession.id).all();
+  return (rows.results || []).map((row) => ({
+    rowId: row.id,
+    mid: row.receive_mid,
+    kind: 'subscription',
+  }));
+}
+
+async function persistClosedMediaTrack(db, track, now) {
+  const table = track.kind === 'publication'
+    ? 'human_call_media_publications'
+    : 'human_call_media_subscriptions';
+  const result = await db.prepare(`
+    UPDATE ${table}
+    SET status = 'closed', updated_at = ?
+    WHERE id = ? AND status = 'ready'
+  `).bind(now, track.rowId).run();
+  return Number(result?.meta?.changes || 0) === 1;
+}
+
+async function finalizeMediaTeardown(db, mediaSessionId, teardownId, status, results, errorCode = null) {
+  const now = new Date().toISOString();
+  try {
+    const writes = await db.batch([
+      db.prepare(`
+        UPDATE human_call_media_teardowns
+        SET status = ?, result_json = ?, last_error_code = ?, updated_at = ?
+        WHERE id = ? AND status = 'pending'
+      `).bind(status, JSON.stringify(results), errorCode, now, teardownId),
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET status = ?, mutation_state = 'retired', last_error_code = ?, updated_at = ?
+        WHERE id = ? AND mutation_state = 'retired'
+      `).bind(status === 'applied' ? 'closed' : 'uncertain', errorCode, now, mediaSessionId),
+    ]);
+    return writes.every((entry) => Number(entry?.meta?.changes || 0) === 1);
+  } catch {
+    return false;
+  }
+}
+
+export async function handleCloseHumanCallMediaSession(
+  request, env, db, rawCallId, rawMediaSessionId, fetchImpl = fetch,
+) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const config = readSfuConfiguration(env);
+  if (!config) return jsonResponse({ success: false, error: '群组通话媒体服务尚未配置' }, 503);
+
+  const callId = validOpaqueId(rawCallId, CALL_ID_RE);
+  const mediaSessionId = validOpaqueId(rawMediaSessionId, CALL_ID_RE);
+  if (!callId || !mediaSessionId) return jsonResponse({ success: false, error: '媒体会话关闭路径无效' }, 400);
+
+  const mediaSession = await readOwnedMediaSession(db, callId, mediaSessionId, auth.userId, auth.deviceId);
+  if (!mediaSession) return jsonResponse({ success: false, error: '媒体会话不存在或不属于当前设备' }, 404);
+
+  let body;
+  try { body = await request.json(); } catch {
+    return jsonResponse({ success: false, error: '媒体会话关闭请求格式无效' }, 400);
+  }
+  const clientTeardownId = validOpaqueId(body.clientTeardownId, EVENT_ID_RE);
+  const generation = parseGeneration(body.generation);
+  if (!clientTeardownId || generation == null || generation !== Number(mediaSession.generation)) {
+    return jsonResponse({ success: false, error: '媒体会话关闭参数或代际无效' }, 400);
+  }
+
+  const requestFingerprint = await sha256Hex(JSON.stringify({ generation }));
+  const duplicate = await readMediaTeardown(db, mediaSessionId, clientTeardownId);
+  if (duplicate) {
+    if (duplicate.request_fingerprint !== requestFingerprint
+        || Number(duplicate.generation) !== generation) {
+      return jsonResponse({ success: false, error: '重复媒体关闭操作与已保存参数冲突' }, 409);
+    }
+    if (duplicate.status === 'applied') {
+      const response = jsonResponse(mapStoredMediaTeardown(duplicate, true));
+      response.headers.set('cache-control', 'private, no-store');
+      return response;
+    }
+    return jsonResponse({
+      success: false,
+      error: duplicate.status === 'uncertain'
+        ? '媒体关闭结果未知，禁止自动重试；请显式重新同步后使用新的关闭操作编号'
+        : '媒体关闭操作已失败或仍在处理，请显式重新同步后继续',
+      teardown: { clientTeardownId, generation, status: duplicate.status },
+    }, 409);
+  }
+
+  if (mediaSession.status === 'closed') {
+    return jsonResponse({
+      success: true,
+      deduplicated: true,
+      teardown: { clientTeardownId, generation, status: 'applied' },
+      results: [],
+    });
+  }
+  if (!SFU_PROVIDER_SESSION_ID_RE.test(String(mediaSession.provider_session_id || ''))
+      || !['ready', 'uncertain'].includes(mediaSession.status)) {
+    return jsonResponse({
+      success: false,
+      error: '媒体会话缺少可验证的服务端会话定位，不能宣称已关闭',
+    }, 409);
+  }
+
+  const tracks = await readClosableMediaTracks(db, mediaSession);
+  const teardownId = 'teardown_' + crypto.randomUUID().replaceAll('-', '');
+  const now = new Date().toISOString();
+  let claimed;
+  try {
+    claimed = await db.batch([
+      db.prepare(`
+        INSERT INTO human_call_media_teardowns (
+          id, media_session_id, call_id, user_id, device_id, generation,
+          client_teardown_id, request_fingerprint, status, result_json,
+          last_error_code, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)
+      `).bind(
+        teardownId, mediaSessionId, callId, auth.userId, auth.deviceId, generation,
+        clientTeardownId, requestFingerprint, now, now,
+      ),
+      db.prepare(`
+        UPDATE human_call_media_sessions
+        SET mutation_state = 'retired', updated_at = ?
+        WHERE id = ? AND status IN ('ready', 'uncertain')
+          AND mutation_state IN ('idle', 'mutating', 'awaiting_endpoint_apply', 'retired')
+      `).bind(now, mediaSessionId),
+    ]);
+  } catch {
+    const raced = await readMediaTeardown(db, mediaSessionId, clientTeardownId);
+    if (raced?.status === 'applied') {
+      const response = jsonResponse(mapStoredMediaTeardown(raced, true));
+      response.headers.set('cache-control', 'private, no-store');
+      return response;
+    }
+    return jsonResponse({ success: false, error: '媒体关闭操作并发冲突，请同步后重试' }, 409);
+  }
+  if (claimed.some((entry) => Number(entry?.meta?.changes || 0) !== 1)) {
+    return jsonResponse({ success: false, error: '媒体关闭操作并发冲突，请同步后重试' }, 409);
+  }
+
+  const results = [];
+  for (const track of tracks) {
+    let upstream;
+    try {
+      upstream = await fetchImpl(
+        `https://rtc.live.cloudflare.com/v1/apps/${encodeURIComponent(config.appId)}/sessions/${encodeURIComponent(mediaSession.provider_session_id)}/tracks/close`,
+        {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${config.appSecret}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ tracks: [{ mid: track.mid }], force: true }),
+        },
+      );
+    } catch {
+      results.push({ mid: track.mid, kind: track.kind, status: 'unknown', errorCode: 'track_close_network_outcome_unknown' });
+      await finalizeMediaTeardown(
+        db, mediaSessionId, teardownId, 'uncertain', results, 'track_close_network_outcome_unknown',
+      );
+      return jsonResponse({
+        success: false,
+        error: '媒体轨道关闭结果未知，已退役该媒体会话且禁止自动重试',
+        teardown: { clientTeardownId, generation, status: 'uncertain' },
+        results,
+      }, 502);
+    }
+
+    let payload;
+    try { payload = await upstream.json(); } catch { payload = null; }
+    const item = Array.isArray(payload?.tracks) ? payload.tracks[0] : null;
+    if (!upstream.ok || !item) {
+      const errorCode = sanitizeProviderErrorCode(payload?.errorCode || `track_close_http_${upstream.status}`);
+      results.push({ mid: track.mid, kind: track.kind, status: 'unknown', errorCode });
+      await finalizeMediaTeardown(db, mediaSessionId, teardownId, 'uncertain', results, errorCode);
+      return jsonResponse({
+        success: false,
+        error: '媒体服务未返回可验证的逐轨道关闭结果，已退役该媒体会话',
+        teardown: { clientTeardownId, generation, status: 'uncertain' },
+        results,
+      }, 502);
+    }
+
+    if (item.errorCode) {
+      const errorCode = sanitizeProviderErrorCode(item.errorCode);
+      results.push({ mid: track.mid, kind: track.kind, status: 'failed', errorCode });
+      if (!(await finalizeMediaTeardown(db, mediaSessionId, teardownId, 'failed', results, errorCode))) {
+        return jsonResponse({ success: false, error: '媒体关闭失败状态保存冲突，请重新同步' }, 409);
+      }
+      return jsonResponse({
+        success: false,
+        error: '媒体服务拒绝关闭至少一个轨道；已保留部分关闭结果并要求显式恢复',
+        teardown: { clientTeardownId, generation, status: 'failed' },
+        results,
+      }, 502);
+    }
+
+    if (!(await persistClosedMediaTrack(db, track, new Date().toISOString()))) {
+      results.push({ mid: track.mid, kind: track.kind, status: 'unknown', errorCode: 'track_close_persist_conflict' });
+      await finalizeMediaTeardown(
+        db, mediaSessionId, teardownId, 'uncertain', results, 'track_close_persist_conflict',
+      );
+      return jsonResponse({
+        success: false,
+        error: '媒体轨道已关闭但本地持久化结果不确定，已退役该媒体会话',
+        teardown: { clientTeardownId, generation, status: 'uncertain' },
+        results,
+      }, 502);
+    }
+    results.push({ mid: track.mid, kind: track.kind, status: 'closed' });
+  }
+
+  if (!(await finalizeMediaTeardown(db, mediaSessionId, teardownId, 'applied', results))) {
+    return jsonResponse({ success: false, error: '媒体关闭最终状态保存冲突，请重新同步' }, 409);
+  }
+  const applied = await readMediaTeardown(db, mediaSessionId, clientTeardownId);
+  const response = jsonResponse(mapStoredMediaTeardown(applied, false));
+  response.headers.set('cache-control', 'private, no-store');
+  return response;
+}
+
 export async function handleAcknowledgeHumanCallMediaOperationApplied(
   request, env, db, rawCallId, rawMediaSessionId, rawClientOperationId,
 ) {
