@@ -123,6 +123,7 @@ export class ExtensionReleaseStore {
     this.db = db;
     this.publisherStore = publisherStore;
     this.now = now;
+    this.artifactStore = null;
     this.#ensureSchema();
     this.#prepare();
   }
@@ -246,6 +247,16 @@ export class ExtensionReleaseStore {
     };
   }
 
+  setArtifactStore(artifactStore) {
+    this.artifactStore = artifactStore;
+    return this;
+  }
+
+  getRelease(rawKey) {
+    const key = releaseKey(rawKey);
+    return publicRelease(this.#row(key));
+  }
+
   #row(key) {
     return this.s.get.get(key.kind, key.namespace, key.name, key.version);
   }
@@ -342,6 +353,10 @@ export class ExtensionReleaseStore {
       throw new ExtensionReleaseStoreError('INVALID_RELEASE_STATE', 'release is not pending review');
     }
     const state = approved === true ? 'approved' : 'rejected';
+    let approvedArtifacts = null;
+    if (approved === true && this.artifactStore) {
+      approvedArtifacts = this.artifactStore.approvalGate(key);
+    }
     const reviewerName = String(reviewer ?? 'marketplace-reviewer').trim().slice(0, 160) || 'marketplace-reviewer';
     const reviewNotes = String(notes ?? '').trim().slice(0, 4000);
     const now = this.now();
@@ -354,7 +369,15 @@ export class ExtensionReleaseStore {
         reviewNotes,
         updatedAtMs: now,
       });
-      this.#audit(key, `release.${state}`, reviewerName, { notes: reviewNotes }, now);
+      this.#audit(key, `release.${state}`, reviewerName, {
+        notes: reviewNotes,
+        ...(approvedArtifacts ? {
+          artifacts: approvedArtifacts.map((artifact) => ({
+            artifactId: artifact.artifactId,
+            digest: artifact.digest,
+          })),
+        } : {}),
+      }, now);
     });
     transaction();
     return publicRelease(this.#require(key));
@@ -421,13 +444,24 @@ export class ExtensionReleaseStore {
       }
     }
     return [...byIdentity.values()]
-      .map(({ descriptor, digest }) => ({
-        ...descriptor,
-        release: {
-          ...descriptor.release,
-          descriptorDigest: digest,
-        },
-      }))
+      .map(({ descriptor, digest, ...value }) => {
+        const artifacts = this.artifactStore
+          ? this.artifactStore.listForRelease({
+              kind: descriptor.identity.kind,
+              namespace: descriptor.identity.namespace,
+              name: descriptor.identity.name,
+              version: value.version,
+            })
+          : [];
+        return {
+          ...descriptor,
+          release: {
+            ...descriptor.release,
+            descriptorDigest: digest,
+            ...(artifacts.length ? { artifacts } : {}),
+          },
+        };
+      })
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
