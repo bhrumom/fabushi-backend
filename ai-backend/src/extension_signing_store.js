@@ -165,10 +165,24 @@ export class ExtensionSigningStore {
     this.now = now;
     this.#ensureSchema();
     this.#prepare();
+    if (this.signer) this.#registerConfiguredSigner();
   }
 
   #ensureSchema() {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS extension_trust_keys (
+        key_id TEXT NOT NULL,
+        trust_epoch INTEGER NOT NULL,
+        algorithm TEXT NOT NULL,
+        public_key TEXT NOT NULL,
+        public_key_fingerprint TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at_ms INTEGER NOT NULL,
+        revoked_at_ms INTEGER,
+        revocation_reason TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (key_id, trust_epoch)
+      );
+
       CREATE TABLE IF NOT EXISTS extension_release_signatures (
         kind TEXT NOT NULL,
         namespace TEXT NOT NULL,
@@ -189,6 +203,38 @@ export class ExtensionSigningStore {
 
   #prepare() {
     this.s = {
+      trustGet: this.db.prepare(`
+        SELECT key_id AS keyId, trust_epoch AS trustEpoch, algorithm,
+          public_key AS publicKey, public_key_fingerprint AS publicKeyFingerprint,
+          status, created_at_ms AS createdAtMs, revoked_at_ms AS revokedAtMs,
+          revocation_reason AS revocationReason
+        FROM extension_trust_keys
+        WHERE key_id = ? AND trust_epoch = ?
+        LIMIT 1
+      `),
+      trustList: this.db.prepare(`
+        SELECT key_id AS keyId, trust_epoch AS trustEpoch, algorithm,
+          public_key AS publicKey, public_key_fingerprint AS publicKeyFingerprint,
+          status, created_at_ms AS createdAtMs, revoked_at_ms AS revokedAtMs,
+          revocation_reason AS revocationReason
+        FROM extension_trust_keys
+        ORDER BY trust_epoch DESC, key_id ASC
+      `),
+      trustInsert: this.db.prepare(`
+        INSERT INTO extension_trust_keys (
+          key_id, trust_epoch, algorithm, public_key, public_key_fingerprint,
+          status, created_at_ms
+        ) VALUES (
+          @keyId, @trustEpoch, 'Ed25519', @publicKey, @publicKeyFingerprint,
+          'active', @createdAtMs
+        )
+      `),
+      trustRevoke: this.db.prepare(`
+        UPDATE extension_trust_keys
+        SET status = 'revoked', revoked_at_ms = @revokedAtMs,
+          revocation_reason = @revocationReason
+        WHERE key_id = @keyId AND trust_epoch = @trustEpoch AND status = 'active'
+      `),
       get: this.db.prepare(`
         SELECT algorithm, key_id AS keyId, trust_epoch AS trustEpoch,
           public_key AS publicKey, public_key_fingerprint AS publicKeyFingerprint,
@@ -207,6 +253,90 @@ export class ExtensionSigningStore {
         )
       `),
     };
+  }
+
+  #registerConfiguredSigner() {
+    const existing = this.s.trustGet.get(this.signer.keyId, this.signer.trustEpoch);
+    if (existing) {
+      if (
+        existing.algorithm !== 'Ed25519'
+        || existing.publicKey !== this.signer.publicKey
+        || existing.publicKeyFingerprint !== this.signer.publicKeyFingerprint
+      ) {
+        throw new ExtensionSigningStoreError(
+          'TRUST_KEY_MATERIAL_CONFLICT',
+          'configured key id/trust epoch already exists with different key material',
+        );
+      }
+      if (existing.status !== 'active') {
+        throw new ExtensionSigningStoreError(
+          'TRUST_KEY_REVOKED',
+          'configured signing key is already revoked',
+        );
+      }
+      return;
+    }
+    this.s.trustInsert.run({
+      keyId: this.signer.keyId,
+      trustEpoch: this.signer.trustEpoch,
+      publicKey: this.signer.publicKey,
+      publicKeyFingerprint: this.signer.publicKeyFingerprint,
+      createdAtMs: this.now(),
+    });
+  }
+
+  listTrustKeys() {
+    return this.s.trustList.all().map((row) => ({
+      protocol: SIGNATURE_PROTOCOL,
+      algorithm: row.algorithm,
+      keyId: row.keyId,
+      trustEpoch: Number(row.trustEpoch),
+      publicKey: row.publicKey,
+      publicKeyFingerprint: row.publicKeyFingerprint,
+      status: row.status,
+      createdAtMs: Number(row.createdAtMs),
+      revokedAtMs: row.revokedAtMs == null ? null : Number(row.revokedAtMs),
+      revocationReason: row.revocationReason || '',
+    }));
+  }
+
+  revokeTrustKey({ keyId: rawKeyId, trustEpoch: rawTrustEpoch, reason = '' }) {
+    const normalizedKeyId = keyId(rawKeyId);
+    const epoch = positiveEpoch(rawTrustEpoch);
+    const existing = this.s.trustGet.get(normalizedKeyId, epoch);
+    if (!existing) {
+      throw new ExtensionSigningStoreError('TRUST_KEY_NOT_FOUND', 'trust key was not found');
+    }
+    if (existing.status === 'revoked') {
+      throw new ExtensionSigningStoreError('TRUST_KEY_ALREADY_REVOKED', 'trust key is already revoked');
+    }
+    const revokedAtMs = this.now();
+    this.s.trustRevoke.run({
+      keyId: normalizedKeyId,
+      trustEpoch: epoch,
+      revokedAtMs,
+      revocationReason: String(reason ?? '').trim().slice(0, 4000),
+    });
+    return this.listTrustKeys().find(
+      (item) => item.keyId === normalizedKeyId && item.trustEpoch === epoch,
+    );
+  }
+
+  getTrustedSignature(input) {
+    const signature = this.getSignature(input);
+    if (!signature) return null;
+    const trust = this.s.trustGet.get(signature.keyId, signature.trustEpoch);
+    if (
+      !trust
+      || trust.status !== 'active'
+      || trust.algorithm !== signature.algorithm
+      || trust.publicKey !== signature.publicKey
+      || trust.publicKeyFingerprint !== signature.publicKeyFingerprint
+      || !verifyReleaseSignatureEnvelope(signature)
+    ) {
+      return null;
+    }
+    return signature;
   }
 
   currentTrust() {
