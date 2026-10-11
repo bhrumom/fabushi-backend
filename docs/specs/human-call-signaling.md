@@ -2,7 +2,7 @@
 
 Status: active
 Owner: Fabushi Backend / Social Signaling
-Last updated: 2026-10-05
+Last updated: 2026-10-12
 Related task: Fabushi Desktop FBCP Phase 1 / desktop PR #27 / ADR FBCP-ADR-003
 
 ## 1. Context
@@ -128,3 +128,53 @@ GitHub Actions only. Required contracts:
 | AC-1-AC-3 | passed | Backend implementation and executable contracts passed exact-HEAD CI run `37264867899`. |
 | AC-4 | pending | Desktop Host `FabushiNativeMessagingClient` still must bind the verified API into the existing `CallSessionStore` owner without renderer/Electron direct backend ownership. |
 | AC-5 | passed | Scope explicitly preserves remaining voice/video/WebRTC/media-device/UX and packaged cross-device acceptance work. |
+
+## 12. Phase 2 — Group/SFU existing-owner extension
+
+This phase extends the same canonical `human_call_channels` / `human_call_events` service. It MUST NOT introduce a second call store, standalone production signaling hub, Telegram/tgcalls runtime, or in-process test SFU.
+
+### 12.1 Durable membership
+
+- Add a monotonic `membership_revision` to each call channel.
+- Add durable member rows keyed by `(call_id,user_id)`, with role, lifecycle state, claimed media device, joined generation and optional left generation.
+- Existing creator and peer are backfilled as active members so one-to-one calls remain compatible.
+- Only an active authorized participant may read membership.
+- Participant mutation is generation-fenced and compare-and-swap fenced by `membership_revision`.
+- The creator/admin role may add or remove members. Adding a member requires the existing account relationship authorization policy; removing a member cannot silently rewrite historical events.
+- Stale generation, stale membership revision, foreign account, conflicting replay or terminal call mutation fails closed.
+
+### 12.2 Join/media lease boundary
+
+A production group media join MUST use a short-lived account/device-scoped lease that binds call id, member id, device id, reconnect generation, expiry, provider session/route identity and allowed publication/subscription capabilities. Provider administrative credentials MUST remain server-side and MUST NOT be returned to renderer code.
+
+The service contract represents media identities source-neutrally: member/participant id, publication id, track id, media kind, codec parameters and optional simulcast RID/layer. Publication/subscription authorization and route state are service-owned. The concrete SFU provider may own RTP/RTCP/TWCC packet mechanics, but observable behavior must preserve secure participant identity, per-receiver subscriptions, congestion/layer adaptation, keyframe recovery, generation fencing and deterministic teardown.
+
+Until a real production SFU provider/session API is configured and exercised, join/media-route endpoints remain blocked and MUST fail closed rather than returning fake routes, TURN-only success, local in-memory peers or the tgcalls Go test SFU.
+
+### 12.3 Ordering, recovery and teardown
+
+Membership mutations and media route lifecycle participate in the existing ordered/idempotent call event stream. A restarted client can replay channel state plus membership revision and rebuild only the current reconnect generation. Old member/device claims, leases, publications and subscriptions cannot resurrect after a newer generation or terminal call state.
+
+Leave/hangup tears down durable active membership and provider publications/subscriptions. Temporary provider/network failure may renew a current-generation lease and routes, but cannot duplicate members or fall back to a standalone signaling implementation.
+
+### 12.4 Verification and acceptance
+
+GitHub Actions only. Required executable coverage:
+- schema migration backfills creator/peer membership and keeps existing one-to-one data readable;
+- authorized add/remove is atomic with membership-revision CAS;
+- unauthorized/foreign/stale-generation/stale-revision mutation fails;
+- exact mutation replay is idempotent and conflicting replay fails;
+- terminal calls reject membership mutation;
+- multi-device device claims do not transfer media ownership without the explicit current-generation contract;
+- legacy one-to-one signaling and TURN tests remain green.
+
+Full Group/SFU acceptance additionally requires a real shipping backend/SFU composition with at least three participants, concurrent audio/video, directed subscriptions, simulcast/layer adaptation where supported, participant churn, disconnect/reconnect generation fencing, process restart/replay, terminal teardown, and proof that provider/admin tokens never reach the renderer. Upstream tgcalls CLI/Go SFU is test authority only, never shipping evidence.
+
+### 12.5 Compliance status
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Durable membership/revision contract | planned | This spec update; implementation and exact-head CI required. |
+| Real SFU join/media routing | blocked | No production SFU session/provider composition has yet been verified in this repository. Do not substitute TURN or test SFU. |
+| >=3 participant production E2E | blocked | Requires real SFU service composition and deployed acceptance environment. |
+
