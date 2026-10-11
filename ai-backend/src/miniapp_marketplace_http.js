@@ -25,6 +25,10 @@ import {
   ExtensionSigningStore,
   ExtensionSigningStoreError,
 } from './extension_signing_store.js';
+import {
+  ExtensionModerationStore,
+  ExtensionModerationStoreError,
+} from './extension_moderation_store.js';
 import { AccountSyncStore } from './account_sync_store.js';
 import { readGlobalDharmaEntitlement } from './global_dharma_entitlement.js';
 import { GlobalDharmaRuntimeStore } from './global_dharma_runtime_store.js';
@@ -105,6 +109,11 @@ export function createMiniAppMarketplaceRouter({
   const extensionSigningStore = new ExtensionSigningStore({ db: syncStore.db });
   extensionReleaseStore.setSigningStore(extensionSigningStore);
   extensionArtifactStore.setSigningStore(extensionSigningStore);
+  const extensionModerationStore = new ExtensionModerationStore({
+    db: syncStore.db,
+    publisherStore: extensionPublisherStore,
+    releaseStore: extensionReleaseStore,
+  });
   const globalDharmaRuntimeStore = new GlobalDharmaRuntimeStore({ accountSyncStore: syncStore });
   const router = express.Router();
   router.use(express.json({ limit: MAX_JSON_BYTES }));
@@ -390,6 +399,37 @@ export function createMiniAppMarketplaceRouter({
     res.sendFile(artifact.path);
   }));
 
+
+  function moderationErrorStatus(error) {
+    if (error instanceof ExtensionPublisherStoreError) return publisherErrorStatus(error);
+    if (!(error instanceof ExtensionModerationStoreError)) return 500;
+    if (error.code === 'CASE_NOT_FOUND' || error.code === 'MODERATION_RELEASE_NOT_FOUND') return 404;
+    if (error.code === 'DUPLICATE_OPEN_REPORT'
+      || error.code === 'DUPLICATE_OPEN_APPEAL'
+      || error.code === 'CASE_ALREADY_RESOLVED'
+      || error.code === 'REPORT_NOT_APPEALABLE'
+      || error.code === 'RELEASE_NOT_ACTIONABLE') return 409;
+    if (error.code === 'NAMESPACE_FORBIDDEN') return 403;
+    return 400;
+  }
+
+  function moderationRoute(handler) {
+    return async (req, res) => {
+      try {
+        await handler(req, res);
+      } catch (error) {
+        const status = moderationErrorStatus(error);
+        res.status(status).json({
+          success: false,
+          error: {
+            code: error?.code ?? 'EXTENSION_MODERATION_ERROR',
+            message: status >= 500 ? 'Extension moderation operation failed' : String(error?.message ?? error),
+          },
+        });
+      }
+    };
+  }
+
   function releaseErrorStatus(error) {
     if (error instanceof ExtensionPublisherStoreError) return publisherErrorStatus(error);
     if (error instanceof ExtensionArtifactStoreError) return artifactErrorStatus(error);
@@ -493,6 +533,75 @@ export function createMiniAppMarketplaceRouter({
       ...releaseParams(req),
     });
     res.json({ release });
+  }));
+
+
+  router.post('/v1/extensions/reports', moderationRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const report = extensionModerationStore.createReport({
+      reporterAccountId: identity.accountId,
+      kind: req.body?.kind,
+      namespace: req.body?.namespace,
+      name: req.body?.name,
+      version: req.body?.version,
+      reasonCode: req.body?.reasonCode,
+      details: req.body?.details,
+    });
+    res.status(201).json({ report });
+  }));
+
+  router.get('/v1/extensions/reports/mine', moderationRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    res.json({ reports: extensionModerationStore.listMine(identity.accountId) });
+  }));
+
+  router.post('/v1/extensions/review/reports/:caseId/resolve', moderationRoute(async (req, res) => {
+    if (!reviewAuthorized(req)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'REVIEW_AUTH_REQUIRED', message: 'marketplace reviewer authorization is required' },
+      });
+      return;
+    }
+    const report = extensionModerationStore.resolveReport({
+      caseId: req.params.caseId,
+      decision: req.body?.decision,
+      reviewer: req.body?.reviewer,
+      resolution: req.body?.resolution,
+    });
+    res.json({ report });
+  }));
+
+  router.post('/v1/extensions/publisher/reports/:caseId/appeal', moderationRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const appeal = extensionModerationStore.createAppeal({
+      reportCaseId: req.params.caseId,
+      actorAccountId: identity.accountId,
+      details: req.body?.details,
+    });
+    res.status(201).json({ appeal });
+  }));
+
+  router.get('/v1/extensions/publisher/appeals', moderationRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    res.json({ appeals: extensionModerationStore.listPublisherAppeals(identity.accountId) });
+  }));
+
+  router.post('/v1/extensions/review/appeals/:caseId/resolve', moderationRoute(async (req, res) => {
+    if (!reviewAuthorized(req)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'REVIEW_AUTH_REQUIRED', message: 'marketplace reviewer authorization is required' },
+      });
+      return;
+    }
+    const appeal = extensionModerationStore.resolveAppeal({
+      caseId: req.params.caseId,
+      decision: req.body?.decision,
+      reviewer: req.body?.reviewer,
+      resolution: req.body?.resolution,
+    });
+    res.json({ appeal });
   }));
 
   router.get('/v1/extensions/trust', releaseRoute(async (_req, res) => {
