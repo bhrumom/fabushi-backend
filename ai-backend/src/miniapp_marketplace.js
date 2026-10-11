@@ -730,6 +730,7 @@ export function createReleaseMetadata(manifestInput, platform = 'desktop') {
     surfaces: manifest.surfaces,
     bot: manifest.bot,
     commands: manifest.commands,
+    permissions: manifest.permissions,
     requestedPermissions: manifest.permissions,
     source: {
       repository: manifest.distribution.repository,
