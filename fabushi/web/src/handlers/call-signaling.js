@@ -960,7 +960,10 @@ function normalizeSimulcastRids(value, mediaKind) {
 function sdpAdvertisesSimulcastRids(sdp, rids) {
   if (!rids.length) return true;
   if (!/a=simulcast:send\s+[^\r\n]+/m.test(sdp)) return false;
-  return rids.every((rid) => new RegExp(`^a=rid:${rid.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\function normalizePublicationIntents(value) {
+  return rids.every((rid) => new RegExp(`^a=rid:${rid} send(?:\\s|$)`, 'm').test(sdp));
+}
+
+function normalizePublicationIntents(value) {
 ')} send(?:\\s|$)`, 'm').test(sdp));
 }
 
