@@ -298,6 +298,7 @@ export function createMiniAppMarketplaceRouter({
     if (error instanceof ExtensionPublisherStoreError) return publisherErrorStatus(error);
     if (!(error instanceof ExtensionArtifactStoreError)) return 500;
     if (error.code === 'RELEASE_NOT_FOUND' || error.code === 'ARTIFACT_NOT_FOUND') return 404;
+    if (error.code === 'REVIEW_AUTH_REQUIRED') return 403;
     if (error.code === 'ARTIFACT_BINDING_CONFLICT'
       || error.code === 'ARTIFACT_RELEASE_FROZEN'
       || error.code === 'SCAN_ALREADY_FINAL') return 409;
