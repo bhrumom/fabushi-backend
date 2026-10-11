@@ -11,6 +11,7 @@ import {
 } from '../src/miniapp_marketplace.js';
 import {
   MINIAPP_PACKAGE_COMMIT,
+  browseMarketplace,
   marketplaceReleaseResponse,
   officialMiniAppPackageSeeds,
 } from '../src/miniapp_marketplace_catalog.js';
@@ -187,6 +188,13 @@ test('Global Dharma iOS publishes only the pinned 1.1.0 fabapp release', () => {
     assert.equal(release.install.source.sourceRef, sourceRef);
     assert.equal(release.install.artifacts[0].sha256, sha256);
     assert.deepEqual(release.install.artifacts[0].platforms, ['ios']);
+
+    const browse = browseMarketplace(scope.marketplace, { query: '全球法布施', platform: 'ios' });
+    const listed = browse.plugins.find((plugin) => plugin.pluginId === 'global-dharma');
+    assert.ok(listed);
+    assert.equal(listed.latestVersion, '1.1.0');
+    assert.equal(listed.releaseManifest.artifacts[0].id, 'global-dharma-ios-fabapp');
+    assert.deepEqual(listed.releaseManifest.fabappTrust, manifest.distribution.fabappTrust);
   } finally {
     scope.cleanup();
   }
