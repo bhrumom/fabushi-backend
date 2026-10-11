@@ -14,6 +14,7 @@ import {
   ExtensionReleaseStoreError,
 } from '../src/extension_release_store.js';
 import { createMiniAppMarketplaceRouter } from '../src/miniapp_marketplace_http.js';
+import { verifyReleaseSignatureEnvelope } from '../src/extension_signing_store.js';
 
 function descriptor(version = '1.0.0') {
   return {
@@ -427,7 +428,17 @@ test('HTTP workflow gates public discovery on authenticated publisher and review
 
     const afterApproval = await fetch(`${baseUrl}/v1/extensions?q=offline%20notes`);
     const afterPayload = await afterApproval.json();
-    assert.equal(afterPayload.entries.filter((item) => item.id === 'acme-labs/offline-notes:web-miniapp').length, 1);
+    const approvedEntry = afterPayload.entries.find(
+      (item) => item.id === 'acme-labs/offline-notes:web-miniapp',
+    );
+    assert.ok(approvedEntry);
+    assert.equal(verifyReleaseSignatureEnvelope(approvedEntry.release.signature), true);
+    const signedPayload = JSON.parse(approvedEntry.release.signature.payload);
+    assert.equal(signedPayload.descriptorDigest, approvedEntry.release.descriptorDigest);
+    assert.deepEqual(
+      signedPayload.artifacts.map((artifact) => artifact.digest),
+      approvedEntry.release.artifacts.map((artifact) => artifact.digest),
+    );
 
     const yanked = await fetch(
       `${baseUrl}/v1/extensions/publisher/releases/web-miniapp/acme-labs/offline-notes/1.0.0/yank`,
