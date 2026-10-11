@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -286,7 +287,15 @@ test('release audit records state transitions in order without reviewer credenti
 async function withServer(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabushi-release-http-'));
   const previousReviewToken = process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN;
+  const previousSigningKey = process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY;
+  const previousSigningKeyId = process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID;
+  const previousTrustEpoch = process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH;
   process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN = 'r'.repeat(48);
+  const testSigningKey = crypto.generateKeyPairSync('ed25519').privateKey
+    .export({ type: 'pkcs8', format: 'pem' });
+  process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY = testSigningKey;
+  process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID = 'test-marketplace-key';
+  process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH = '1';
   const users = new Map([
     ['owner-token', { userId: 'user:owner', username: 'owner', isAuthenticated: true }],
     ['attacker-token', { userId: 'user:attacker', username: 'attacker', isAuthenticated: true }],
@@ -315,6 +324,12 @@ async function withServer(run) {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     if (previousReviewToken === undefined) delete process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN;
     else process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN = previousReviewToken;
+    if (previousSigningKey === undefined) delete process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY;
+    else process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY = previousSigningKey;
+    if (previousSigningKeyId === undefined) delete process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID;
+    else process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID = previousSigningKeyId;
+    if (previousTrustEpoch === undefined) delete process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH;
+    else process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH = previousTrustEpoch;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
