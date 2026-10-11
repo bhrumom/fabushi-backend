@@ -477,8 +477,9 @@ export class ExtensionReleaseStore {
           ? this.artifactStore.listForRelease(releaseKeyValue)
           : [];
         const signature = this.signingStore
-          ? this.signingStore.getSignature(releaseKeyValue)
+          ? this.signingStore.getTrustedSignature(releaseKeyValue)
           : null;
+        if (this.signingStore && !signature) return null;
         return {
           ...descriptor,
           release: {
@@ -489,6 +490,7 @@ export class ExtensionReleaseStore {
           },
         };
       })
+      .filter((entry) => entry != null)
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
