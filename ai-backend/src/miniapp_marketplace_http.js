@@ -398,7 +398,8 @@ export function createMiniAppMarketplaceRouter({
       if (error.code === 'SIGNATURE_CONFLICT'
         || error.code === 'TRUST_KEY_ALREADY_REVOKED'
         || error.code === 'TRUST_KEY_MATERIAL_CONFLICT'
-        || error.code === 'TRUST_KEY_REVOKED') return 409;
+        || error.code === 'TRUST_KEY_REVOKED'
+        || error.code === 'ACTIVE_SIGNER_REVOCATION_REQUIRES_ROTATION') return 409;
       if (error.code === 'SIGNING_KEY_REQUIRED') return 503;
       return 400;
     }
@@ -494,12 +495,9 @@ export function createMiniAppMarketplaceRouter({
     res.json({ release });
   }));
 
-  router.get('/v1/extensions/trust', (_req, res) => {
-    res.json({
-      protocol: 'fabushi.extension-release-signature.v1',
-      keys: extensionSigningStore.listTrustKeys(),
-    });
-  });
+  router.get('/v1/extensions/trust', releaseRoute(async (_req, res) => {
+    res.json({ trust: extensionSigningStore.trustFeed() });
+  }));
 
   router.post('/v1/extensions/review/trust/:keyId/:trustEpoch/revoke', releaseRoute(async (req, res) => {
     if (!reviewAuthorized(req)) {
