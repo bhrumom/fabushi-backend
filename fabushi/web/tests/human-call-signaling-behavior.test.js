@@ -31,6 +31,7 @@ function createDb({ failNextEventInsert = false } = {}) {
     users: [ALICE, BOB, CAROL],
     friends: new Set(['1:2', '2:1']),
     calls: new Map(),
+    members: new Map(),
     events: [],
     batchCalls: 0,
     lastChanges: 0,
@@ -54,10 +55,15 @@ function createDb({ failNextEventInsert = false } = {}) {
         if (q.includes('FROM human_call_channels WHERE id = ? LIMIT 1')) {
           return state.calls.get(String(params[0])) || null;
         }
-        if (q.includes('FROM human_call_channels') && q.includes('(creator_user_id = ? OR peer_user_id = ?)')) {
-          const call = state.calls.get(String(params[0]));
-          return call && (call.creator_user_id === Number(params[1]) || call.peer_user_id === Number(params[2]))
-            ? { ...call } : null;
+        if (q.includes('FROM human_call_channels c') && q.includes('JOIN human_call_members m')) {
+          const userId = Number(params[0]);
+          const call = state.calls.get(String(params[1]));
+          const member = state.members.get(`${params[1]}:${userId}`);
+          return call && member?.state === 'active' ? { ...call } : null;
+        }
+        if (q.includes('FROM human_call_members') && q.includes('WHERE call_id = ? AND user_id = ?')) {
+          const member = state.members.get(`${params[0]}:${Number(params[1])}`);
+          return member ? { ...member } : null;
         }
         if (q.includes('FROM human_call_events') && q.includes('client_event_id = ?')) {
           return state.events.find((e) =>
@@ -72,12 +78,14 @@ function createDb({ failNextEventInsert = false } = {}) {
         throw new Error(`unhandled first query: ${q}`);
       },
       async all() {
-        if (q.includes('FROM human_call_channels') && q.includes('ORDER BY updated_at DESC')) {
+        if (q.includes('FROM human_call_channels c') && q.includes('JOIN human_call_members m')
+            && q.includes('ORDER BY c.updated_at DESC')) {
+          const userId = Number(params[0]);
           return {
             results: [...state.calls.values()]
-              .filter((call) => call.creator_user_id === Number(params[0]) || call.peer_user_id === Number(params[1]))
+              .filter((call) => state.members.get(`${call.id}:${userId}`)?.state === 'active')
               .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-              .slice(0, Number(params[2]))
+              .slice(0, Number(params[1]))
               .map((call) => ({ ...call })),
           };
         }
@@ -99,8 +107,32 @@ function createDb({ failNextEventInsert = false } = {}) {
           state.calls.set(id, {
             id, creator_user_id: Number(creator), peer_user_id: Number(peer),
             creator_device_id: creatorDeviceId, peer_device_id: null,
-            state: 'invited', generation: 0, event_seq: 0, terminal_state: null,
+            state: 'invited', generation: 0, event_seq: 0, membership_revision: 0, terminal_state: null,
             created_at: createdAt, updated_at: updatedAt,
+          });
+          return { meta: { changes: 1 } };
+        }
+        if (q.startsWith('INSERT INTO human_call_members')) {
+          if (q.includes('WHERE changes() = 1') && state.lastChanges !== 1) {
+            return { meta: { changes: 0 } };
+          }
+          const creator = q.includes("'creator', 'active'");
+          const [callId, userId] = params;
+          const deviceId = creator ? params[2] : null;
+          const createdAt = creator ? params[3] : params[2];
+          const updatedAt = creator ? params[4] : params[3];
+          const key = `${callId}:${Number(userId)}`;
+          if (state.members.has(key)) throw new Error('constraint');
+          state.members.set(key, {
+            call_id: callId,
+            user_id: Number(userId),
+            role: creator ? 'creator' : 'member',
+            state: 'active',
+            device_id: deviceId,
+            joined_generation: 0,
+            left_generation: null,
+            created_at: createdAt,
+            updated_at: updatedAt,
           });
           return { meta: { changes: 1 } };
         }
@@ -168,6 +200,9 @@ function createDb({ failNextEventInsert = false } = {}) {
     const callsSnapshot = new Map(
       [...state.calls.entries()].map(([id, call]) => [id, { ...call }]),
     );
+    const membersSnapshot = new Map(
+      [...state.members.entries()].map(([id, member]) => [id, { ...member }]),
+    );
     const eventsSnapshot = state.events.map((event) => ({ ...event }));
     const previousLastChanges = state.lastChanges;
     try {
@@ -181,6 +216,8 @@ function createDb({ failNextEventInsert = false } = {}) {
     } catch (error) {
       state.calls.clear();
       for (const [id, call] of callsSnapshot.entries()) state.calls.set(id, call);
+      state.members.clear();
+      for (const [id, member] of membersSnapshot.entries()) state.members.set(id, member);
       state.events.splice(0, state.events.length, ...eventsSnapshot);
       state.lastChanges = previousLastChanges;
       throw error;
@@ -282,6 +319,9 @@ test('call create is friend-scoped and stable across devices', async () => {
   assert.equal(retried.call.state, 'invited');
   assert.equal(retried.call.creatorDeviceId, 'alice-laptop');
   assert.equal(retried.call.peerDeviceId, null);
+  assert.equal(db.state.members.get(`${callId}:1`)?.role, 'creator');
+  assert.equal(db.state.members.get(`${callId}:1`)?.device_id, 'alice-laptop');
+  assert.equal(db.state.members.get(`${callId}:2`)?.role, 'member');
 
   const incoming = await handleListHumanCalls(
     await makeRequest('https://api.example.com/api/social/calls?limit=20', BOB, 'bob-phone'),
@@ -559,7 +599,7 @@ test('call channel CAS and event append commit atomically in one D1 batch', asyn
   assert.equal(failed.status, 409);
   assert.deepEqual(db.state.calls.get(callId), before);
   assert.equal(db.state.events.length, 0);
-  assert.equal(db.state.batchCalls, 1);
+  assert.equal(db.state.batchCalls, 3);
   assert.equal(db.state.rollbackUpdateCalls, 0);
 
   const retried = await handleAppendHumanCallEvent(
