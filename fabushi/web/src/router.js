@@ -1,6 +1,7 @@
 import { CORS_HEADERS } from './config/constants.js';
 import { jsonResponse } from './utils/response.js';
 import { routePlatformGateway } from './routes/platform-gateway-routes.js';
+import { routeExtensionSigningRequest } from './routes/extension-signing-routes.js';
 import { routeCoreRequest } from './routes/core-routes.js';
 import { routeAuthRequest } from './routes/auth-routes.js';
 import { routeMembershipRequest } from './routes/membership-routes.js';
@@ -13,6 +14,7 @@ import { routeOpsRequest } from './routes/ops-routes.js';
 import { routeLegacyPracticeRequest } from './routes/legacy-practice-routes.js';
 
 const ROUTERS = Object.freeze([
+  routeExtensionSigningRequest,
   routePlatformGateway,
   routeCoreRequest,
   routeAuthRequest,
