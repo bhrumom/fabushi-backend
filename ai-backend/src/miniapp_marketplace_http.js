@@ -21,6 +21,10 @@ import {
   ExtensionArtifactStore,
   ExtensionArtifactStoreError,
 } from './extension_artifact_store.js';
+import {
+  ExtensionSigningStore,
+  ExtensionSigningStoreError,
+} from './extension_signing_store.js';
 import { AccountSyncStore } from './account_sync_store.js';
 import { readGlobalDharmaEntitlement } from './global_dharma_entitlement.js';
 import { GlobalDharmaRuntimeStore } from './global_dharma_runtime_store.js';
@@ -98,6 +102,8 @@ export function createMiniAppMarketplaceRouter({
     releaseStore: extensionReleaseStore,
   });
   extensionReleaseStore.setArtifactStore(extensionArtifactStore);
+  const extensionSigningStore = new ExtensionSigningStore({ db: syncStore.db });
+  extensionReleaseStore.setSigningStore(extensionSigningStore);
   const globalDharmaRuntimeStore = new GlobalDharmaRuntimeStore({ accountSyncStore: syncStore });
   const router = express.Router();
   router.use(express.json({ limit: MAX_JSON_BYTES }));
@@ -386,6 +392,11 @@ export function createMiniAppMarketplaceRouter({
   function releaseErrorStatus(error) {
     if (error instanceof ExtensionPublisherStoreError) return publisherErrorStatus(error);
     if (error instanceof ExtensionArtifactStoreError) return artifactErrorStatus(error);
+    if (error instanceof ExtensionSigningStoreError) {
+      if (error.code === 'SIGNATURE_CONFLICT') return 409;
+      if (error.code === 'SIGNING_KEY_REQUIRED') return 503;
+      return 400;
+    }
     if (!(error instanceof ExtensionReleaseStoreError)) return 500;
     if (error.code === 'RELEASE_NOT_FOUND') return 404;
     if (error.code === 'RELEASE_CONFLICT' || error.code === 'INVALID_RELEASE_STATE') return 409;
@@ -477,6 +488,10 @@ export function createMiniAppMarketplaceRouter({
     });
     res.json({ release });
   }));
+
+  router.get('/v1/extensions/trust/current', (_req, res) => {
+    res.json({ trust: extensionSigningStore.currentTrust() });
+  });
 
   router.get('/v1/extensions', extensionRoute(async (req, res) => {
     const payload = browseExtensions(marketplace, {
@@ -833,7 +848,7 @@ export function createMiniAppMarketplaceRouter({
     });
   }));
 
-  return { router, marketplace, accountSyncStore: syncStore, extensionPublisherStore, extensionReleaseStore, extensionArtifactStore, globalDharmaRuntimeStore };
+  return { router, marketplace, accountSyncStore: syncStore, extensionPublisherStore, extensionReleaseStore, extensionArtifactStore, extensionSigningStore, globalDharmaRuntimeStore };
 }
 
 export function registerMiniAppMarketplaceRoutes(app, options = {}) {
