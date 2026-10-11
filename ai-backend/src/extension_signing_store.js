@@ -209,6 +209,24 @@ export class ExtensionSigningStore {
     };
   }
 
+  currentTrust() {
+    if (!this.signer) {
+      return {
+        configured: false,
+        protocol: SIGNATURE_PROTOCOL,
+      };
+    }
+    return {
+      configured: true,
+      protocol: SIGNATURE_PROTOCOL,
+      algorithm: 'Ed25519',
+      keyId: this.signer.keyId,
+      trustEpoch: this.signer.trustEpoch,
+      publicKey: this.signer.publicKey,
+      publicKeyFingerprint: this.signer.publicKeyFingerprint,
+    };
+  }
+
   getSignature(input) {
     const key = releaseKey(input);
     return publicEnvelope(this.s.get.get(key.kind, key.namespace, key.name, key.version));
