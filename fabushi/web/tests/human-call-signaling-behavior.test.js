@@ -6,6 +6,7 @@ import {
   handleCreateHumanCall,
   handleGetHumanCall,
   handleGetHumanCallIceServers,
+  handleListHumanCallMediaSessionsForRecovery,
   handleListHumanCalls,
 } from '../src/handlers/call-signaling.js';
 
@@ -33,6 +34,7 @@ function createDb({ failNextEventInsert = false } = {}) {
     calls: new Map(),
     members: new Map(),
     events: [],
+    mediaSessions: [],
     batchCalls: 0,
     lastChanges: 0,
     rollbackUpdateCalls: 0,
@@ -96,6 +98,23 @@ function createDb({ failNextEventInsert = false } = {}) {
               .sort((a, b) => a.seq - b.seq)
               .slice(0, Number(params[2]))
               .map((e) => ({ ...e })),
+          };
+        }
+        if (q.includes('FROM human_call_media_sessions')
+            && q.includes('WHERE call_id = ? AND user_id = ? AND device_id = ?')) {
+          return {
+            results: state.mediaSessions
+              .filter((session) =>
+                session.call_id === String(params[0]) &&
+                session.user_id === Number(params[1]) &&
+                session.device_id === String(params[2]) &&
+                ['pending', 'ready', 'uncertain'].includes(session.status))
+              .sort((a, b) =>
+                Number(b.generation) - Number(a.generation) ||
+                String(b.created_at).localeCompare(String(a.created_at)) ||
+                String(b.id).localeCompare(String(a.id)))
+              .slice(0, 64)
+              .map((session) => ({ ...session })),
           };
         }
         throw new Error(`unhandled all query: ${q}`);
@@ -233,6 +252,58 @@ function createDb({ failNextEventInsert = false } = {}) {
 }
 
 const ENV = { JWT_SECRET: 'human-call-signaling-contract-secret-at-least-32-bytes-long' };
+
+test('media recovery rediscovery survives restart and stays account-device scoped', async () => {
+  const db = createDb();
+  db.state.mediaSessions.push(
+    {
+      id: 'media_alice_retired_0001',
+      call_id: 'call-recovery-0001',
+      user_id: ALICE.id,
+      device_id: 'alice-laptop',
+      generation: 0,
+      purpose: 'publish',
+      provider_session_id: 'provider-private-laptop',
+      status: 'uncertain',
+      mutation_state: 'retired',
+      created_at: '2026-10-12T00:00:00.000Z',
+      updated_at: '2026-10-12T00:01:00.000Z',
+    },
+    {
+      id: 'media_alice_phone_0001',
+      call_id: 'call-recovery-0001',
+      user_id: ALICE.id,
+      device_id: 'alice-phone',
+      generation: 1,
+      purpose: 'subscribe',
+      provider_session_id: 'provider-private-phone',
+      status: 'ready',
+      mutation_state: 'idle',
+      created_at: '2026-10-12T00:02:00.000Z',
+      updated_at: '2026-10-12T00:02:00.000Z',
+    },
+  );
+
+  const response = await handleListHumanCallMediaSessionsForRecovery(
+    await makeRequest(
+      'https://api.example.com/api/social/calls/call-recovery-0001/media/sessions',
+      ALICE,
+      'alice-laptop',
+    ),
+    ENV,
+    db,
+    'call-recovery-0001',
+  );
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
+  assert.deepEqual(payload.mediaSessions.map((session) => session.mediaSessionId), [
+    'media_alice_retired_0001',
+  ]);
+  assert.equal(payload.mediaSessions[0].cleanupRequired, true);
+  assert.equal(payload.mediaSessions[0].mutationState, 'retired');
+  assert.equal(JSON.stringify(payload).includes('provider-private'), false);
+});
 
 test('TURN credentials stay server-side and issue bounded authenticated ICE configuration', async () => {
   const db = createDb();
