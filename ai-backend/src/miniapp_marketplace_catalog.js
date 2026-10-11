@@ -19,6 +19,8 @@ const GLOBAL_DHARMA_FABAPP_ENV = Object.freeze({
   url: 'FABUSHI_GLOBAL_DHARMA_FABAPP_URL',
   sha256: 'FABUSHI_GLOBAL_DHARMA_FABAPP_SHA256',
   sizeBytes: 'FABUSHI_GLOBAL_DHARMA_FABAPP_SIZE_BYTES',
+  keyId: 'FABUSHI_MARKETPLACE_SIGNING_KEY_ID',
+  rawPublicKeyBase64Url: 'FABUSHI_MARKETPLACE_SIGNING_PUBLIC_KEY_RAW',
 });
 
 function configuredGlobalDharmaFabappRelease(environment = process.env) {
@@ -53,6 +55,18 @@ function configuredGlobalDharmaFabappRelease(environment = process.env) {
       'Global Dharma .fabapp size must be a positive safe integer',
     );
   }
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(raw.keyId)) {
+    throw new MiniAppMarketplaceError(
+      'INVALID_GLOBAL_DHARMA_FABAPP_RELEASE',
+      'Global Dharma .fabapp signing keyId is invalid',
+    );
+  }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(raw.rawPublicKeyBase64Url)) {
+    throw new MiniAppMarketplaceError(
+      'INVALID_GLOBAL_DHARMA_FABAPP_RELEASE',
+      'Global Dharma .fabapp raw Ed25519 public key must be canonical 32-byte base64url',
+    );
+  }
   let artifactUrl;
   try {
     artifactUrl = new URL(raw.url);
@@ -76,6 +90,8 @@ function configuredGlobalDharmaFabappRelease(environment = process.env) {
     url: artifactUrl.toString(),
     sha256: raw.sha256.toLocaleLowerCase(),
     sizeBytes,
+    keyId: raw.keyId,
+    rawPublicKeyBase64Url: raw.rawPublicKeyBase64Url,
   });
 }
 
@@ -235,6 +251,13 @@ export function officialMiniAppPackageSeeds(environment = process.env) {
               sizeBytes: globalDharmaFabapp.sizeBytes,
             },
           ],
+          fabappTrust: {
+            publisherId: 'fabushi-official',
+            appId: 'global-dharma',
+            artifactId: 'global-dharma-ios-fabapp',
+            keyId: globalDharmaFabapp.keyId,
+            rawPublicKeyBase64Url: globalDharmaFabapp.rawPublicKeyBase64Url,
+          },
         },
       };
     }
