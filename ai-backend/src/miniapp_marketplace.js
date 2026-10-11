@@ -261,6 +261,35 @@ function normalizedDistribution(value, surfaces) {
       'metadata installs require a web or remote MCP surface; local runtimes must use external package artifacts',
     );
   }
+  let fabappTrust;
+  if (distribution.fabappTrust !== undefined) {
+    const trust = distribution.fabappTrust;
+    if (!trust || typeof trust !== 'object' || Array.isArray(trust)) {
+      throw new MiniAppMarketplaceError('INVALID_MANIFEST', 'distribution.fabappTrust must be an object');
+    }
+    fabappTrust = {
+      publisherId: requiredText(trust.publisherId, 'distribution.fabappTrust.publisherId', 128),
+      appId: requiredText(trust.appId, 'distribution.fabappTrust.appId', 128),
+      artifactId: requiredText(trust.artifactId, 'distribution.fabappTrust.artifactId', 128),
+      keyId: requiredText(trust.keyId, 'distribution.fabappTrust.keyId', 128),
+      rawPublicKeyBase64Url: requiredText(
+        trust.rawPublicKeyBase64Url,
+        'distribution.fabappTrust.rawPublicKeyBase64Url',
+        128,
+      ),
+    };
+    const boundArtifact = artifacts.find((artifact) => artifact.id === fabappTrust.artifactId);
+    if (installMode !== 'package'
+      || !boundArtifact
+      || boundArtifact.archiveFormat !== 'zip'
+      || boundArtifact.platform !== 'ios'
+      || !/^[A-Za-z0-9_-]{43}$/.test(fabappTrust.rawPublicKeyBase64Url)) {
+      throw new MiniAppMarketplaceError(
+        'INVALID_MANIFEST',
+        'fabapp trust must bind the iOS zip artifact and canonical Ed25519 public key',
+      );
+    }
+  }
   return {
     installMode,
     repository,
@@ -268,6 +297,7 @@ function normalizedDistribution(value, surfaces) {
     sourceRef,
     license: optionalText(distribution.license, 80),
     artifacts,
+    fabappTrust,
     marketplaceHostsPackage: false,
   };
 }
@@ -426,7 +456,12 @@ const officialSeeds = [
       ]),
       ...globalDharmaMarketplaceCommands(),
     ],
-    permissions: ['network', 'local-execution'],
+    permissions: [
+      'offline.capabilities',
+      'offline.state.read',
+      'offline.practice.record',
+      'local.prayer-wheel.start',
+    ],
     distribution: {
       installMode: 'metadata',
       repository: 'https://github.com/bhrumom/fabushi-marketplace',
@@ -703,6 +738,9 @@ export function createReleaseMetadata(manifestInput, platform = 'desktop') {
       marketplaceHostsPackage: false,
     },
     artifacts: matchingArtifacts,
+    ...(manifest.distribution.fabappTrust
+      ? { fabappTrust: manifest.distribution.fabappTrust }
+      : {}),
   };
   const install = {
     protocol: 'fabushi.marketplace.install.v1',
