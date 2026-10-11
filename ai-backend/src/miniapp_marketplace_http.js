@@ -284,10 +284,11 @@ export function createMiniAppMarketplaceRouter({
   }));
 
   function releaseErrorStatus(error) {
+    if (error instanceof ExtensionPublisherStoreError) return publisherErrorStatus(error);
     if (!(error instanceof ExtensionReleaseStoreError)) return 500;
     if (error.code === 'RELEASE_NOT_FOUND') return 404;
     if (error.code === 'RELEASE_CONFLICT' || error.code === 'INVALID_RELEASE_STATE') return 409;
-    if (error.code === 'NAMESPACE_FORBIDDEN') return 403;
+    if (error.code === 'REVIEW_AUTH_REQUIRED') return 403;
     return 400;
   }
 
