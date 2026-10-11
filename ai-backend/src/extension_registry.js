@@ -7,7 +7,7 @@ const KINDS = new Set(['mcp-connector', 'skill', 'web-miniapp']);
 const ORIGINS = new Set(['public', 'team', 'private-created']);
 const TRUST_DOMAINS = new Set(['catalog-authorized', 'team-authorized', 'private-local-author']);
 const CHANNELS = new Set(['stable', 'preview']);
-const PLATFORMS = new Set(['desktop', 'ios', 'android', 'web', 'cli', 'mobile']);
+const PLATFORMS = new Set(['desktop', 'ios', 'android', 'web', 'cli', 'mobile', 'chrome-extension']);
 const SAFE_COMPONENT = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const SECRET_FIELD = /(token|secret|password|api[-_]?key|credential|authorization)/i;
 
