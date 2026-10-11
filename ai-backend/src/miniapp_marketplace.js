@@ -399,25 +399,40 @@ function officialManifest(input) {
 const officialSeeds = [
   officialManifest({
     id: 'global-dharma',
-    version: '1.0.0',
+    version: '1.1.0',
     title: '全球法布施',
-    description: '同时提供图形界面、自然语言、MCP 与 CLI 的全平台法布施小程序。',
+    description: 'iOS 以签名 .fabapp 提供离线免费能力；在线发送、部署等服务能力继续明确走远程服务。',
     categories: ['official', 'buddhism', 'automation'],
-    tags: ['全球法布施', 'mcp', 'cli', '本地运行', '多端'],
+    tags: ['全球法布施', 'mcp', 'webmcp', '离线', '本地运行', '多端'],
     homepage: 'https://fabushi.ombhrum.com/miniapps/global-dharma/',
     bot: {
       id: 'global-dharma-bot',
       username: 'global_dharma_bot',
       displayName: '全球法布施',
-      description: '用自然语言或 / 命令驱动全球发送、本地转经轮与场能模式。',
+      description: '通过当前活动 Mini App 的本地 WebMCP 操作离线状态；在线服务能力保持显式联网。',
     },
     surfaces: [
+      { id: 'local-webmcp', kind: 'web', title: 'iOS 离线 WebMCP', entry: 'index.html', platforms: ['ios'], local: true, priority: 120 },
       { id: 'remote-mcp', kind: 'mcp-http', title: '在线 MCP', url: 'https://api.ombhrum.com/api/mcp/apps/global-dharma', platforms: ['desktop', 'mobile', 'web', 'cli'], priority: 100 },
       { id: 'local-cli', kind: 'cli', title: '本地 CLI', command: 'mahayana miniapp run global-dharma', platforms: ['desktop', 'cli'], local: true, priority: 90 },
-      { id: 'web-ui', kind: 'web', title: '图形界面', url: 'https://fabushi.ombhrum.com/miniapps/global-dharma/', platforms: ['desktop', 'mobile', 'web'], priority: 80 },
+      { id: 'web-ui', kind: 'web', title: '在线图形界面', url: 'https://fabushi.ombhrum.com/miniapps/global-dharma/', platforms: ['desktop', 'mobile', 'web'], priority: 80 },
     ],
-    commands: globalDharmaMarketplaceCommands(),
+    commands: [
+      ...globalDharmaLocalMarketplaceCommands([
+        'offline.capabilities',
+        'offline.state.read',
+        'offline.practice.record',
+        'local.prayer-wheel.start',
+      ]),
+      ...globalDharmaMarketplaceCommands(),
+    ],
     permissions: ['network', 'local-execution'],
+    distribution: {
+      installMode: 'metadata',
+      repository: 'https://github.com/bhrumom/fabushi-marketplace',
+      sourceRef: 'main',
+      license: 'repository-license',
+    },
     stats: { monthlyActiveUsers: 1000 },
   }),
   officialManifest({
