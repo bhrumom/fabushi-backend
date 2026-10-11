@@ -964,10 +964,6 @@ function sdpAdvertisesSimulcastRids(sdp, rids) {
 }
 
 function normalizePublicationIntents(value) {
-')} send(?:\\s|$)`, 'm').test(sdp));
-}
-
-function normalizePublicationIntents(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_SFU_PUBLICATIONS) return null;
   const seenClientIds = new Set();
   const seenTrackNames = new Set();
