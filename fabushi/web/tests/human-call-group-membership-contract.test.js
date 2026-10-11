@@ -8,6 +8,7 @@ import {
   handleDiscoverHumanCallMediaPublications,
   handleSubscribeHumanCallMedia,
   handleAnswerHumanCallMediaSubscription,
+  handleCloseHumanCallMediaSession,
   handleGetHumanCallMembers,
   handleMutateHumanCallMember,
 } from '../src/handlers/call-signaling.js';
@@ -18,6 +19,7 @@ const migration = fs.readFileSync(new URL('../migrations/20261012_human_call_gro
 const mediaMigration = fs.readFileSync(new URL('../migrations/20261012_human_call_sfu_sessions.sql', import.meta.url), 'utf8');
 const publicationMigration = fs.readFileSync(new URL('../migrations/20261013_human_call_sfu_publications.sql', import.meta.url), 'utf8');
 const subscriptionMigration = fs.readFileSync(new URL('../migrations/20261014_human_call_sfu_subscriptions.sql', import.meta.url), 'utf8');
+const teardownMigration = fs.readFileSync(new URL('../migrations/20261015_human_call_sfu_teardowns.sql', import.meta.url), 'utf8');
 const spec = fs.readFileSync(new URL('../../../docs/specs/human-call-signaling.md', import.meta.url), 'utf8');
 
 test('group membership handlers are executable exports and stay on canonical call owner', () => {
@@ -151,6 +153,31 @@ test('SFU publication discovery and remote subscription stay authorized and prov
   assert.match(spec, /Publication discovery/);
   assert.match(spec, /Directed subscription/);
   assert.match(spec, /\/renegotiate/);
+  assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
+  assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
+});
+
+
+test('SFU teardown is durable, idempotent, partial-result aware, and generation-local', () => {
+  assert.equal(typeof handleCloseHumanCallMediaSession, 'function');
+  assert.match(routes, /media\\\/sessions\\\/.*close/);
+  assert.match(handler, /human_call_media_teardowns/);
+  assert.match(handler, /clientTeardownId/);
+  assert.match(handler, /requestFingerprint/);
+  assert.match(handler, /readClosableMediaTracks/);
+  assert.match(handler, /\/tracks\/close/);
+  assert.match(handler, /force: true/);
+  assert.match(handler, /track_close_network_outcome_unknown/);
+  assert.match(handler, /track_close_persist_conflict/);
+  assert.match(handler, /mutation_state = 'retired'/);
+  assert.match(handler, /status === 'closed'/);
+  assert.match(handler, /\['ready', 'uncertain'\]\.includes\(mediaSession\.status\)/);
+  assert.match(teardownMigration, /CREATE TABLE IF NOT EXISTS human_call_media_teardowns/);
+  assert.match(teardownMigration, /UNIQUE \(media_session_id, client_teardown_id\)/);
+  assert.match(teardownMigration, /'pending', 'applied', 'uncertain', 'failed'/);
+  assert.match(spec, /session-local track teardown/);
+  assert.match(spec, /partial close results/);
+  assert.match(spec, /never automatically replayed/);
   assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
   assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
 });
