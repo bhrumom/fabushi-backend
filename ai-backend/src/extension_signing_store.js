@@ -259,6 +259,149 @@ export function verifyReleaseSignatureEnvelope(envelope) {
   }
 }
 
+
+const FABAPP_DOMAIN_SEPARATOR = Buffer.from('fabushi.fabapp.manifest.v1\0', 'utf8');
+const FABAPP_FIELDS = new Set([
+  'manifestVersion', 'packageClass', 'appId', 'publisherId', 'version',
+  'displayName', 'entrypoint', 'runtime', 'minHostApi', 'offlineCore',
+  'requestedCapabilities', 'networkPolicy', 'files',
+]);
+
+function canonicalJson(value) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) {
+      throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'manifest numbers must be safe integers');
+    }
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(canonicalJson).join(',') + ']';
+  }
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return '{' + Object.keys(value).sort()
+      .map((key) => JSON.stringify(key) + ':' + canonicalJson(value[key]))
+      .join(',') + '}';
+  }
+  throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'manifest contains unsupported JSON value');
+}
+
+function validFabAppPath(value) {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 1024) return false;
+  if (value.startsWith('/') || value.includes('\\') || value.includes('\0')) return false;
+  const parts = value.split('/');
+  return parts.every((part) => part && part !== '.' && part !== '..');
+}
+
+function validateFabAppManifest(rawManifest) {
+  if (!rawManifest || typeof rawManifest !== 'object' || Array.isArray(rawManifest)) {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp manifest must be an object');
+  }
+  const keys = Object.keys(rawManifest);
+  if (keys.includes('signature') || keys.some((field) => !FABAPP_FIELDS.has(field)) || keys.length !== FABAPP_FIELDS.size) {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp unsigned manifest fields are invalid');
+  }
+  const identifier = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+  const semver = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/;
+  if (rawManifest.manifestVersion !== 1 || rawManifest.packageClass !== 'catalog') {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp manifest version/class is unsupported');
+  }
+  if (!identifier.test(rawManifest.appId) || !identifier.test(rawManifest.publisherId) || !semver.test(rawManifest.version)) {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp identity/version is invalid');
+  }
+  if (typeof rawManifest.displayName !== 'string' || rawManifest.displayName.length < 1 || rawManifest.displayName.length > 160) {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp displayName is invalid');
+  }
+  if (!validFabAppPath(rawManifest.entrypoint) || rawManifest.runtime !== 'web') {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp entrypoint/runtime is invalid');
+  }
+  if (!Number.isSafeInteger(rawManifest.minHostApi) || rawManifest.minHostApi < 1 || typeof rawManifest.offlineCore !== 'boolean') {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp host/offline contract is invalid');
+  }
+  if (!Array.isArray(rawManifest.requestedCapabilities)) {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp capabilities are invalid');
+  }
+  const capabilities = new Set();
+  for (const capability of rawManifest.requestedCapabilities) {
+    if (typeof capability !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(capability) || capabilities.has(capability)) {
+      throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp capability is invalid or duplicated');
+    }
+    capabilities.add(capability);
+  }
+  const policy = rawManifest.networkPolicy;
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)
+    || Object.keys(policy).sort().join(',') !== 'allowedOrigins,mode'
+    || !['deny', 'allowlist'].includes(policy.mode)
+    || !Array.isArray(policy.allowedOrigins)
+    || policy.allowedOrigins.some((origin) => typeof origin !== 'string')) {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp network policy is invalid');
+  }
+  if ((policy.mode === 'deny' && policy.allowedOrigins.length !== 0)
+    || (rawManifest.offlineCore && policy.mode !== 'deny')) {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'offline fabapp network policy must deny network');
+  }
+  const files = rawManifest.files;
+  if (!files || typeof files !== 'object' || Array.isArray(files) || Object.keys(files).length < 1 || Object.keys(files).length > 10000) {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp file table is invalid');
+  }
+  for (const [path, item] of Object.entries(files)) {
+    if (!validFabAppPath(path) || !item || typeof item !== 'object' || Array.isArray(item)
+      || Object.keys(item).sort().join(',') !== 'bytes,mime,sha256'
+      || !/^[0-9a-f]{64}$/.test(String(item.sha256 ?? ''))
+      || !Number.isSafeInteger(item.bytes) || item.bytes < 0
+      || typeof item.mime !== 'string' || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(item.mime)) {
+      throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp file declaration is invalid: ' + path);
+    }
+  }
+  if (!files[rawManifest.entrypoint] || files[rawManifest.entrypoint].mime !== 'text/html') {
+    throw new ExtensionSigningStoreError('INVALID_FABAPP_MANIFEST', 'fabapp entrypoint must be declared as text/html');
+  }
+  return JSON.parse(JSON.stringify(rawManifest));
+}
+
+export function canonicalFabAppSigningPayload(rawManifest) {
+  const manifest = validateFabAppManifest(rawManifest);
+  return Buffer.concat([
+    FABAPP_DOMAIN_SEPARATOR,
+    Buffer.from(canonicalJson(manifest), 'utf8'),
+  ]);
+}
+
+export function signFabAppManifestWithSigner({ signer, manifest: rawManifest }) {
+  if (!signer) {
+    throw new ExtensionSigningStoreError('SIGNING_KEY_REQUIRED', 'managed Marketplace signing key is not configured');
+  }
+  const manifest = validateFabAppManifest(rawManifest);
+  const payload = canonicalFabAppSigningPayload(manifest);
+  const signatureBytes = crypto.sign(null, payload, signer.privateKey);
+  if (!crypto.verify(null, payload, signer.publicKeyObject, signatureBytes)) {
+    throw new ExtensionSigningStoreError('SIGNATURE_SELF_CHECK_FAILED', 'fabapp signature self-verification failed');
+  }
+  const jwk = signer.publicKeyObject.export({ format: 'jwk' });
+  if (jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519' || typeof jwk.x !== 'string') {
+    throw new ExtensionSigningStoreError('INVALID_SIGNING_PRIVATE_KEY', 'managed signer did not yield raw Ed25519 public key');
+  }
+  return {
+    manifest: {
+      ...manifest,
+      signature: {
+        algorithm: 'Ed25519',
+        keyId: signer.keyId,
+        value: signatureBytes.toString('base64url'),
+      },
+    },
+    trust: {
+      algorithm: 'Ed25519',
+      keyId: signer.keyId,
+      trustEpoch: signer.trustEpoch,
+      publicKeyFingerprint: signer.publicKeyFingerprint,
+      rawPublicKeyBase64URL: jwk.x,
+    },
+  };
+}
+
 export class ExtensionSigningStore {
   constructor({ db, signer = undefined, now = () => Date.now() } = {}) {
     if (!db) throw new Error('ExtensionSigningStore requires existing Marketplace SQLite connection');
@@ -487,6 +630,10 @@ export class ExtensionSigningStore {
       throw new ExtensionSigningStoreError('TRUST_FEED_SELF_CHECK_FAILED', 'trust feed signature self-verification failed');
     }
     return envelope;
+  }
+
+  signFabAppManifest(manifest) {
+    return signFabAppManifestWithSigner({ signer: this.signer, manifest });
   }
 
   currentTrust() {

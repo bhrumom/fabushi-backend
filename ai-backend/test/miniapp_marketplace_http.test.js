@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -65,6 +66,79 @@ test('REST catalog supports search, release install metadata, add and command ro
     }));
     assert.equal(routed.command.name, 'status');
     assert.equal(routed.execution.kind, 'mcp-http');
+  });
+});
+
+test('Global Dharma route planning is fenced to active local WebMCP tools', async () => {
+  await withServer(async (baseUrl) => {
+    const headers = { 'x-fabushi-device-id': 'ios-live-page', 'content-type': 'application/json' };
+
+    const state = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '读取刚才操作后的状态',
+        availableTools: ['offline.state.read', 'offline.practice.record'],
+      }),
+    }));
+    assert.equal(state.command.tool, 'offline.state.read');
+    assert.equal(state.execution.kind, 'web');
+    assert.equal(state.surface.id, 'local-webmcp');
+    assert.equal(state.requiresApproval, false);
+
+    const freeMutation = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '执行一项免费的本地操作',
+        availableTools: ['offline.practice.record'],
+      }),
+    }));
+    assert.equal(freeMutation.command.tool, 'offline.practice.record');
+    assert.equal(freeMutation.requiresApproval, true);
+
+    const noRemoteFallback = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '查看状态',
+        availableTools: [],
+      }),
+    }));
+    assert.equal(noRemoteFallback.execution, undefined);
+    assert.equal(noRemoteFallback.suggestedCommand, null);
+    assert.equal(noRemoteFallback.activeToolFenced, true);
+
+    const protectedToolMissing = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '启动本地转经轮',
+        availableTools: ['offline.state.read'],
+      }),
+    }));
+    assert.equal(protectedToolMissing.execution, undefined);
+    assert.equal(protectedToolMissing.suggestedCommand, null);
+
+    const protectedTool = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: '启动本地转经轮',
+        availableTools: ['local.prayer-wheel.start'],
+      }),
+    }));
+    assert.equal(protectedTool.command.tool, 'local.prayer-wheel.start');
+    assert.equal(protectedTool.requiresApproval, true);
+
+    // Legacy callers without the active page fence keep the existing remote contract.
+    const legacy = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ input: '/global-dharma:status' }),
+    }));
+    assert.equal(legacy.command.name, 'status');
+    assert.equal(legacy.execution.kind, 'mcp-http');
   });
 });
 
@@ -211,4 +285,76 @@ test('BotFather creates a Mahayana workflow and review gates global discovery', 
     const visible = await json(await fetch(`${baseUrl}/v1/marketplace/plugins?q=Review%20Demo`, { headers: deviceHeaders }));
     assert.equal(visible.plugins[0].pluginId, 'review-demo');
   });
+});
+
+
+test('reviewer fabapp signer is authorized, native-compatible and never returns private material', async () => {
+  const previous = {
+    review: process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN,
+    key: process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY,
+    keyId: process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID,
+    epoch: process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH,
+  };
+  const privateKey = crypto.generateKeyPairSync('ed25519').privateKey.export({
+    type: 'pkcs8',
+    format: 'pem',
+  });
+  process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN = 'fabapp-review-token-0123456789012345';
+  process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY = privateKey;
+  process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID = 'fabapp-test-key';
+  process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH = '9';
+
+  const manifest = {
+    manifestVersion: 1,
+    packageClass: 'catalog',
+    appId: 'global-dharma',
+    publisherId: 'fabushi-official',
+    version: '1.1.0',
+    displayName: '全球法布施',
+    entrypoint: 'index.html',
+    runtime: 'web',
+    minHostApi: 1,
+    offlineCore: true,
+    requestedCapabilities: ['offline.state.read'],
+    networkPolicy: { mode: 'deny', allowedOrigins: [] },
+    files: {
+      'index.html': { sha256: 'a'.repeat(64), bytes: 42, mime: 'text/html' },
+    },
+  };
+
+  try {
+    await withServer(async (baseUrl) => {
+      const unauthorized = await fetch(baseUrl + '/v1/extensions/review/fabapp/sign', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ manifest }),
+      });
+      assert.equal(unauthorized.status, 403);
+
+      const authorized = await fetch(baseUrl + '/v1/extensions/review/fabapp/sign', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-fabushi-marketplace-review-token': process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN,
+        },
+        body: JSON.stringify({ manifest }),
+      });
+      const payload = await authorized.json();
+      assert.equal(authorized.status, 200, JSON.stringify(payload));
+      assert.equal(payload.manifest.signature.algorithm, 'Ed25519');
+      assert.equal(payload.manifest.signature.keyId, 'fabapp-test-key');
+      assert.equal(payload.trust.trustEpoch, 9);
+      assert.equal(Buffer.from(payload.trust.rawPublicKeyBase64URL, 'base64url').length, 32);
+      assert.doesNotMatch(JSON.stringify(payload), /PRIVATE KEY/);
+    });
+  } finally {
+    if (previous.review === undefined) delete process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN;
+    else process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN = previous.review;
+    if (previous.key === undefined) delete process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY;
+    else process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY = previous.key;
+    if (previous.keyId === undefined) delete process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID;
+    else process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID = previous.keyId;
+    if (previous.epoch === undefined) delete process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH;
+    else process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH = previous.epoch;
+  }
 });
