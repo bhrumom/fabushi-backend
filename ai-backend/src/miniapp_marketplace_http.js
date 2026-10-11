@@ -402,6 +402,10 @@ export function createMiniAppMarketplaceRouter({
 
   function moderationErrorStatus(error) {
     if (error instanceof ExtensionPublisherStoreError) return publisherErrorStatus(error);
+    const upstreamStatus = Number(error?.statusCode);
+    if (Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 500) {
+      return upstreamStatus;
+    }
     if (!(error instanceof ExtensionModerationStoreError)) return 500;
     if (error.code === 'CASE_NOT_FOUND' || error.code === 'MODERATION_RELEASE_NOT_FOUND') return 404;
     if (error.code === 'DUPLICATE_OPEN_REPORT'
