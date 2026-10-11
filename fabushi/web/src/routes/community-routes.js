@@ -37,6 +37,7 @@ import {
   handleSubscribeHumanCallMedia,
   handleAnswerHumanCallMediaSubscription,
   handleCloseHumanCallMediaSession,
+  handleUpdateHumanCallMediaSubscriptionLayer,
   handleGetHumanCall,
   handleGetHumanCallIceServers,
   handleGetHumanCallMembers,
@@ -107,6 +108,12 @@ export async function routeCommunityRequest({ pathname, method, request, env, db
       callMediaSubscriptionAnswerMatch[1],
       callMediaSubscriptionAnswerMatch[2],
       callMediaSubscriptionAnswerMatch[3],
+    );
+  }
+  const callMediaLayerMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/subscriptions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/layer$/);
+  if (callMediaLayerMatch && method === 'POST') {
+    return handleUpdateHumanCallMediaSubscriptionLayer(
+      request, env, db, callMediaLayerMatch[1], callMediaLayerMatch[2], callMediaLayerMatch[3],
     );
   }
   const callMediaCloseMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/close$/);
