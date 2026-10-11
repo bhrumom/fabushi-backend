@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "docs/specs/unified-extension-registry-v1.md"
+      - "docs/specs/extension-release-signing-v1.md"
+      - "docs/specs/extension-trust-feed-v1.md"
       - "ai-backend/src/extension_registry.js"
       - "ai-backend/src/extension_publisher_store.js"
       - "ai-backend/src/extension_release_store.js"
