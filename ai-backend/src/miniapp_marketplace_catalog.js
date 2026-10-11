@@ -13,6 +13,73 @@ export const ALL_PLATFORMS = ['desktop', 'mobile', 'web', 'cli', 'ios', 'android
 const USER_SCRIPT_ARCHIVE_FORMATS = new Set(['user-js', 'userscript']);
 
 
+const GLOBAL_DHARMA_FABAPP_VERSION = '1.1.0';
+const GLOBAL_DHARMA_FABAPP_ENV = Object.freeze({
+  sourceRef: 'FABUSHI_GLOBAL_DHARMA_FABAPP_SOURCE_REF',
+  url: 'FABUSHI_GLOBAL_DHARMA_FABAPP_URL',
+  sha256: 'FABUSHI_GLOBAL_DHARMA_FABAPP_SHA256',
+  sizeBytes: 'FABUSHI_GLOBAL_DHARMA_FABAPP_SIZE_BYTES',
+});
+
+function configuredGlobalDharmaFabappRelease(environment = process.env) {
+  const raw = Object.fromEntries(
+    Object.entries(GLOBAL_DHARMA_FABAPP_ENV)
+      .map(([key, name]) => [key, String(environment[name] ?? '').trim()]),
+  );
+  const configuredCount = Object.values(raw).filter(Boolean).length;
+  if (configuredCount === 0) return null;
+  if (configuredCount !== Object.keys(GLOBAL_DHARMA_FABAPP_ENV).length) {
+    throw new MiniAppMarketplaceError(
+      'INVALID_GLOBAL_DHARMA_FABAPP_RELEASE',
+      'Global Dharma .fabapp release metadata must be configured atomically',
+    );
+  }
+  if (!/^[a-f0-9]{40}$/i.test(raw.sourceRef)) {
+    throw new MiniAppMarketplaceError(
+      'INVALID_GLOBAL_DHARMA_FABAPP_RELEASE',
+      'Global Dharma .fabapp sourceRef must be an immutable 40-character Git commit',
+    );
+  }
+  if (!/^[a-f0-9]{64}$/i.test(raw.sha256)) {
+    throw new MiniAppMarketplaceError(
+      'INVALID_GLOBAL_DHARMA_FABAPP_RELEASE',
+      'Global Dharma .fabapp sha256 must be 64 hexadecimal characters',
+    );
+  }
+  const sizeBytes = Number(raw.sizeBytes);
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
+    throw new MiniAppMarketplaceError(
+      'INVALID_GLOBAL_DHARMA_FABAPP_RELEASE',
+      'Global Dharma .fabapp size must be a positive safe integer',
+    );
+  }
+  let artifactUrl;
+  try {
+    artifactUrl = new URL(raw.url);
+  } catch {
+    artifactUrl = null;
+  }
+  const pathname = artifactUrl?.pathname ?? '';
+  if (artifactUrl?.protocol !== 'https:'
+      || !['github.com', 'raw.githubusercontent.com'].includes(artifactUrl.hostname.toLocaleLowerCase())
+      || artifactUrl.username
+      || artifactUrl.password
+      || artifactUrl.port
+      || !pathname.endsWith('/global-dharma-1.1.0.fabapp')) {
+    throw new MiniAppMarketplaceError(
+      'INVALID_GLOBAL_DHARMA_FABAPP_RELEASE',
+      'Global Dharma .fabapp must use the canonical HTTPS GitHub artifact filename',
+    );
+  }
+  return Object.freeze({
+    sourceRef: raw.sourceRef.toLocaleLowerCase(),
+    url: artifactUrl.toString(),
+    sha256: raw.sha256.toLocaleLowerCase(),
+    sizeBytes,
+  });
+}
+
+
 // Compatibility guard for the original v2 domain ranker: popularity is a
 // ranking signal, never a search match. Keep discovery filtering at the
 // catalog boundary so REST, MCP and direct marketplace consumers share the
@@ -146,8 +213,31 @@ const packageCatalog = {
   },
 };
 
-export function officialMiniAppPackageSeeds() {
+export function officialMiniAppPackageSeeds(environment = process.env) {
+  const globalDharmaFabapp = configuredGlobalDharmaFabappRelease(environment);
   return officialMiniAppManifests().map((manifest) => {
+    if (manifest.id === 'global-dharma' && manifest.version === GLOBAL_DHARMA_FABAPP_VERSION) {
+      if (!globalDharmaFabapp) return manifest;
+      return {
+        ...manifest,
+        distribution: {
+          ...manifest.distribution,
+          installMode: 'package',
+          sourceRef: globalDharmaFabapp.sourceRef,
+          artifacts: [
+            {
+              id: 'global-dharma-ios-fabapp',
+              platform: 'ios',
+              architecture: 'any',
+              archiveFormat: 'zip',
+              url: globalDharmaFabapp.url,
+              sha256: globalDharmaFabapp.sha256,
+              sizeBytes: globalDharmaFabapp.sizeBytes,
+            },
+          ],
+        },
+      };
+    }
     const artifact = packageCatalog[manifest.id];
     if (!artifact || artifact.version !== manifest.version) return manifest;
     return {
@@ -187,6 +277,15 @@ export function marketplaceRuntimeForm(manifest) {
 
 function manifestSupportsPlatform(manifest, platform) {
   if (!platform) return marketplaceRuntimeForm(manifest) !== USER_SCRIPT_RUNTIME_FORM;
+  if (manifest?.id === 'global-dharma' && platform === 'ios') {
+    const artifact = manifest?.distribution?.artifacts?.find((entry) => entry.platform === 'ios');
+    if (manifest?.version !== GLOBAL_DHARMA_FABAPP_VERSION
+        || manifest?.distribution?.installMode !== 'package'
+        || artifact?.archiveFormat !== 'zip'
+        || !String(artifact?.url ?? '').endsWith('/global-dharma-1.1.0.fabapp')) {
+      return false;
+    }
+  }
   const runtimeForm = marketplaceRuntimeForm(manifest);
   if (runtimeForm === USER_SCRIPT_RUNTIME_FORM) {
     return platform === CHROME_EXTENSION_PLATFORM
