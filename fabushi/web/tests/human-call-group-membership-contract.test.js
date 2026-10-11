@@ -9,6 +9,7 @@ import {
   handleSubscribeHumanCallMedia,
   handleAnswerHumanCallMediaSubscription,
   handleCloseHumanCallMediaSession,
+  handleUpdateHumanCallMediaSubscriptionLayer,
   handleGetHumanCallMembers,
   handleMutateHumanCallMember,
 } from '../src/handlers/call-signaling.js';
@@ -21,6 +22,7 @@ const publicationMigration = fs.readFileSync(new URL('../migrations/20261013_hum
 const subscriptionMigration = fs.readFileSync(new URL('../migrations/20261014_human_call_sfu_subscriptions.sql', import.meta.url), 'utf8');
 const teardownMigration = fs.readFileSync(new URL('../migrations/20261015_human_call_sfu_teardowns.sql', import.meta.url), 'utf8');
 const simulcastMigration = fs.readFileSync(new URL('../migrations/20261016_human_call_sfu_simulcast.sql', import.meta.url), 'utf8');
+const layerMutationMigration = fs.readFileSync(new URL('../migrations/20261017_human_call_sfu_layer_mutations.sql', import.meta.url), 'utf8');
 const spec = fs.readFileSync(new URL('../../../docs/specs/human-call-signaling.md', import.meta.url), 'utf8');
 
 test('group membership handlers are executable exports and stay on canonical call owner', () => {
@@ -200,6 +202,32 @@ test('SFU simulcast publication and subscription layer policy stays application-
   assert.match(simulcastMigration, /'none', 'asciibetical'/);
   assert.match(spec, /available RIDs/);
   assert.match(spec, /preferredRid/);
+  assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
+  assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
+});
+
+
+test('SFU dynamic simulcast layer switching is durable and unknown-outcome fenced', () => {
+  assert.equal(typeof handleUpdateHumanCallMediaSubscriptionLayer, 'function');
+  assert.match(routes, /subscriptions\\\/.*layer/);
+  assert.match(handler, /human_call_media_layer_mutations/);
+  assert.match(handler, /clientMutationId/);
+  assert.match(handler, /requestFingerprint/);
+  assert.match(handler, /\/tracks\/update/);
+  assert.match(handler, /location: 'remote'/);
+  assert.match(handler, /mid: subscription\.receive_mid/);
+  assert.match(handler, /sessionId: subscription\.publisher_provider_session_id/);
+  assert.match(handler, /trackName: subscription\.track_name/);
+  assert.match(handler, /requiresImmediateRenegotiation/);
+  assert.match(handler, /layer_update_network_outcome_unknown/);
+  assert.match(handler, /layer_update_result_identity_mismatch/);
+  assert.match(handler, /layer_update_unexpected_renegotiation/);
+  assert.match(handler, /status = 'uncertain', mutation_state = 'retired'/);
+  assert.match(layerMutationMigration, /CREATE TABLE IF NOT EXISTS human_call_media_layer_mutations/);
+  assert.match(layerMutationMigration, /UNIQUE \(media_session_id, client_mutation_id\)/);
+  assert.match(layerMutationMigration, /'pending', 'applied', 'uncertain', 'failed'/);
+  assert.match(spec, /tracks\/update/);
+  assert.match(spec, /layer mutation/);
   assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
   assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
 });
