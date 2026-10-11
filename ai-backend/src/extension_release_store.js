@@ -221,9 +221,9 @@ export class ExtensionReleaseStore {
           updated_at_ms = @updatedAtMs
         WHERE kind = @kind AND namespace = @namespace AND name = @name AND version = @version
       `),
-      listPublisher: this.db.prepare(`${select}
-        WHERE publisher_account_id = ?
-        ORDER BY updated_at_ms DESC, namespace ASC, name ASC, version DESC
+      listNamespace: this.db.prepare(`${select}
+        WHERE namespace = ?
+        ORDER BY updated_at_ms DESC, name ASC, kind ASC, version DESC
       `),
       listApproved: this.db.prepare(`${select}
         WHERE state = 'approved'
@@ -258,9 +258,6 @@ export class ExtensionReleaseStore {
 
   #requirePublisher(row, actorAccountId) {
     this.publisherStore.assertOwned(row.namespace, actorAccountId);
-    if (row.publisherAccountId !== String(actorAccountId)) {
-      throw new ExtensionReleaseStoreError('RELEASE_PUBLISHER_MISMATCH', 'release belongs to the previous namespace owner');
-    }
   }
 
   #audit(key, action, actor, payload, occurredAtMs) {
@@ -401,7 +398,14 @@ export class ExtensionReleaseStore {
   }
 
   listPublisher(actorAccountId) {
-    return this.s.listPublisher.all(String(actorAccountId)).map((row) => publicRelease(row));
+    const namespaces = this.publisherStore.listOwned(actorAccountId).map((item) => item.namespace);
+    return namespaces
+      .flatMap((namespace) => this.s.listNamespace.all(namespace))
+      .sort((left, right) => Number(right.updatedAtMs) - Number(left.updatedAtMs)
+        || left.namespace.localeCompare(right.namespace)
+        || left.name.localeCompare(right.name)
+        || left.version.localeCompare(right.version))
+      .map((row) => publicRelease(row));
   }
 
   listApprovedLatest() {
