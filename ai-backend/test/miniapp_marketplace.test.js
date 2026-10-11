@@ -148,6 +148,8 @@ test('Global Dharma iOS publishes only the pinned 1.1.0 fabapp release', () => {
       FABUSHI_GLOBAL_DHARMA_FABAPP_URL: artifactUrl,
       FABUSHI_GLOBAL_DHARMA_FABAPP_SHA256: sha256,
       FABUSHI_GLOBAL_DHARMA_FABAPP_SIZE_BYTES: String(sizeBytes),
+      FABUSHI_MARKETPLACE_SIGNING_KEY_ID: 'fabushi-marketplace-prod-v1',
+      FABUSHI_MARKETPLACE_SIGNING_PUBLIC_KEY_RAW: 'A'.repeat(43),
     },
   });
   try {
@@ -162,11 +164,26 @@ test('Global Dharma iOS publishes only the pinned 1.1.0 fabapp release', () => {
     assert.equal(manifest.distribution.artifacts[0].url, artifactUrl);
     assert.equal(manifest.distribution.artifacts[0].sha256, sha256);
     assert.equal(manifest.distribution.artifacts[0].sizeBytes, sizeBytes);
+    assert.deepEqual(manifest.permissions, [
+      'offline.capabilities',
+      'offline.state.read',
+      'offline.practice.record',
+      'local.prayer-wheel.start',
+    ]);
+    assert.deepEqual(manifest.distribution.fabappTrust, {
+      publisherId: 'fabushi-official',
+      appId: 'global-dharma',
+      artifactId: 'global-dharma-ios-fabapp',
+      keyId: 'fabushi-marketplace-prod-v1',
+      rawPublicKeyBase64Url: 'A'.repeat(43),
+    });
 
     const release = marketplaceReleaseResponse(manifest, 'ios');
     assert.equal(release.releaseManifest.artifacts.length, 1);
     assert.equal(release.releaseManifest.artifacts[0].format, 'zip');
     assert.equal(release.releaseManifest.artifacts[0].entry, 'index.html');
+    assert.deepEqual(release.releaseManifest.permissions, manifest.permissions);
+    assert.deepEqual(release.releaseManifest.fabappTrust, manifest.distribution.fabappTrust);
     assert.equal(release.install.source.sourceRef, sourceRef);
     assert.equal(release.install.artifacts[0].sha256, sha256);
     assert.deepEqual(release.install.artifacts[0].platforms, ['ios']);
