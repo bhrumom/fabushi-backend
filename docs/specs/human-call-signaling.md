@@ -181,6 +181,10 @@ Membership mutations and media route lifecycle participate in the existing order
 
 Leave/hangup tears down durable active membership and provider publications/subscriptions. Temporary provider/network failure may renew a current-generation lease and routes, but cannot duplicate members or fall back to a standalone signaling implementation.
 
+Session-local track teardown uses `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/close` with `{ clientTeardownId, generation }`. The authenticated account/device must own the application media session. Teardown is durable and idempotent by `(mediaSessionId, clientTeardownId)`; the request fingerprint binds the reconnect generation. The backend first retires the session from further mutation, then closes each currently ready publication/subscription mid through the provider `/tracks/close` operation with `force: true`. A successful item is marked closed immediately, so partial close results survive a later failure and are never replayed as a batch.
+
+Unknown network/HTTP/provider response outcomes mark the teardown and media session `uncertain`; deterministic per-track rejection marks the teardown failed while preserving already-closed items. Neither state is automatically retried. Recovery requires an explicit resync and a new client teardown id, while the retired session remains unavailable for new publication/subscription mutation. A fully applied teardown marks the application session `closed` and leaves no ready session-local publication/subscription rows.
+
 ### 12.4 Verification and acceptance
 
 GitHub Actions only. Required executable coverage:
