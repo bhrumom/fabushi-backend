@@ -43,13 +43,25 @@ test('REST catalog supports search, release install metadata, add and command ro
     const catalog = await json(await fetch(`${baseUrl}/v1/marketplace/plugins?q=global&platform=desktop`, { headers }));
     assert.equal(catalog.plugins[0].pluginId, 'global-dharma');
 
-    const release = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/releases/1.0.0?platform=desktop`, { headers }));
+    const release = await json(await fetch(
+      `${baseUrl}/v1/marketplace/plugins/global-dharma/releases/${catalog.plugins[0].latestVersion}?platform=desktop`,
+      { headers },
+    ));
+    assert.equal(release.pluginId, 'global-dharma');
+    assert.equal(release.version, '1.1.0');
     assert.equal(release.releaseManifest.protocol, 'mahayana.external-release.v1');
-    assert.equal(release.releaseManifest.artifacts.length, 1);
+    assert.equal(release.releaseManifest.artifacts.length, 0);
     assert.equal(release.install.protocol, 'fabushi.marketplace.install.v1');
     assert.equal(release.install.source.marketplaceHostsPackage, false);
-    assert.equal(release.install.update.comparison, 'version-then-artifact-sha256');
     assert.equal(release.bot.username, 'global_dharma_bot');
+
+    const unavailableIos = await fetch(
+      `${baseUrl}/v1/marketplace/plugins/global-dharma/releases/1.1.0?platform=ios`,
+      { headers },
+    );
+    assert.equal(unavailableIos.ok, false);
+    const unavailableIosPayload = await unavailableIos.json();
+    assert.match(unavailableIosPayload.error.message, /not available on ios/);
 
     const added = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/add`, {
       method: 'POST', headers, body: JSON.stringify({ platform: 'desktop' }),
