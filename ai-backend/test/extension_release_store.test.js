@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import {
   ExtensionReleaseStoreError,
 } from '../src/extension_release_store.js';
 import { createMiniAppMarketplaceRouter } from '../src/miniapp_marketplace_http.js';
+import { verifyReleaseSignatureEnvelope } from '../src/extension_signing_store.js';
 
 function descriptor(version = '1.0.0') {
   return {
@@ -286,7 +288,15 @@ test('release audit records state transitions in order without reviewer credenti
 async function withServer(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabushi-release-http-'));
   const previousReviewToken = process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN;
+  const previousSigningKey = process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY;
+  const previousSigningKeyId = process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID;
+  const previousTrustEpoch = process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH;
   process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN = 'r'.repeat(48);
+  const testSigningKey = crypto.generateKeyPairSync('ed25519').privateKey
+    .export({ type: 'pkcs8', format: 'pem' });
+  process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY = testSigningKey;
+  process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID = 'test-marketplace-key';
+  process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH = '1';
   const users = new Map([
     ['owner-token', { userId: 'user:owner', username: 'owner', isAuthenticated: true }],
     ['attacker-token', { userId: 'user:attacker', username: 'attacker', isAuthenticated: true }],
@@ -315,6 +325,12 @@ async function withServer(run) {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     if (previousReviewToken === undefined) delete process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN;
     else process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN = previousReviewToken;
+    if (previousSigningKey === undefined) delete process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY;
+    else process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY = previousSigningKey;
+    if (previousSigningKeyId === undefined) delete process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID;
+    else process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID = previousSigningKeyId;
+    if (previousTrustEpoch === undefined) delete process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH;
+    else process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH = previousTrustEpoch;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -412,7 +428,17 @@ test('HTTP workflow gates public discovery on authenticated publisher and review
 
     const afterApproval = await fetch(`${baseUrl}/v1/extensions?q=offline%20notes`);
     const afterPayload = await afterApproval.json();
-    assert.equal(afterPayload.entries.filter((item) => item.id === 'acme-labs/offline-notes:web-miniapp').length, 1);
+    const approvedEntry = afterPayload.entries.find(
+      (item) => item.id === 'acme-labs/offline-notes:web-miniapp',
+    );
+    assert.ok(approvedEntry);
+    assert.equal(verifyReleaseSignatureEnvelope(approvedEntry.release.signature), true);
+    const signedPayload = JSON.parse(approvedEntry.release.signature.payload);
+    assert.equal(signedPayload.descriptorDigest, approvedEntry.release.descriptorDigest);
+    assert.deepEqual(
+      signedPayload.artifacts.map((artifact) => artifact.digest),
+      approvedEntry.release.artifacts.map((artifact) => artifact.digest),
+    );
 
     const yanked = await fetch(
       `${baseUrl}/v1/extensions/publisher/releases/web-miniapp/acme-labs/offline-notes/1.0.0/yank`,

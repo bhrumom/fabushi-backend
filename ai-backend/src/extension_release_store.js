@@ -124,6 +124,7 @@ export class ExtensionReleaseStore {
     this.publisherStore = publisherStore;
     this.now = now;
     this.artifactStore = null;
+    this.signingStore = null;
     this.#ensureSchema();
     this.#prepare();
   }
@@ -252,6 +253,11 @@ export class ExtensionReleaseStore {
     return this;
   }
 
+  setSigningStore(signingStore) {
+    this.signingStore = signingStore;
+    return this;
+  }
+
   getRelease(rawKey) {
     const key = releaseKey(rawKey);
     return publicRelease(this.#row(key));
@@ -360,7 +366,16 @@ export class ExtensionReleaseStore {
     const reviewerName = String(reviewer ?? 'marketplace-reviewer').trim().slice(0, 160) || 'marketplace-reviewer';
     const reviewNotes = String(notes ?? '').trim().slice(0, 4000);
     const now = this.now();
+    let signature = null;
     const transaction = this.db.transaction(() => {
+      if (approved === true && this.signingStore) {
+        const descriptor = parseJson(row.descriptorJson, null);
+        signature = this.signingStore.signRelease({
+          descriptor,
+          descriptorDigest: row.descriptorDigest,
+          artifacts: approvedArtifacts ?? [],
+        });
+      }
       this.s.review.run({
         ...key,
         state,
@@ -376,6 +391,13 @@ export class ExtensionReleaseStore {
             artifactId: artifact.artifactId,
             digest: artifact.digest,
           })),
+        } : {}),
+        ...(signature ? {
+          signature: {
+            keyId: signature.keyId,
+            trustEpoch: signature.trustEpoch,
+            publicKeyFingerprint: signature.publicKeyFingerprint,
+          },
         } : {}),
       }, now);
     });
@@ -445,20 +467,25 @@ export class ExtensionReleaseStore {
     }
     return [...byIdentity.values()]
       .map(({ descriptor, digest, ...value }) => {
+        const releaseKeyValue = {
+          kind: descriptor.identity.kind,
+          namespace: descriptor.identity.namespace,
+          name: descriptor.identity.name,
+          version: value.version,
+        };
         const artifacts = this.artifactStore
-          ? this.artifactStore.listForRelease({
-              kind: descriptor.identity.kind,
-              namespace: descriptor.identity.namespace,
-              name: descriptor.identity.name,
-              version: value.version,
-            })
+          ? this.artifactStore.listForRelease(releaseKeyValue)
           : [];
+        const signature = this.signingStore
+          ? this.signingStore.getSignature(releaseKeyValue)
+          : null;
         return {
           ...descriptor,
           release: {
             ...descriptor.release,
             descriptorDigest: digest,
             ...(artifacts.length ? { artifacts } : {}),
+            ...(signature ? { signature } : {}),
           },
         };
       })
