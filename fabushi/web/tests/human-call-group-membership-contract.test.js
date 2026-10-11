@@ -19,6 +19,7 @@ test('group membership handlers are executable exports and stay on canonical cal
   assert.match(handler, /human_call_members/);
   assert.match(handler, /human_call_member_mutations/);
   assert.match(handler, /membership_revision/);
+  assert.ok((handler.match(/membership_revision/g) || []).length >= 8, 'canonical call reads must project membership revision');
   assert.match(handler, /expectedMembershipRevision/);
   assert.match(handler, /generation !== Number\(call\.generation\)/);
   assert.match(handler, /creator_device_id/);
