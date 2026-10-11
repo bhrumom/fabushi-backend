@@ -172,9 +172,11 @@ Full Group/SFU acceptance additionally requires a real shipping backend/SFU comp
 
 ### 12.5 Compliance status
 
+Verified implementation scope at `f8e6a4faccccfbdc9361f1a635a524abaea00347`: D1 member backfill, `membership_revision` CAS, creator/device/generation authorization, idempotent add/remove mutation record, member read route, legacy signaling regressions, and production-worker delivery. Real SFU session/media routing is intentionally not claimed.
+
 | Requirement | Status | Evidence |
 | --- | --- | --- |
-| Durable membership/revision contract | implemented-pending-verification | Production migration/handler/routes/contracts are implemented on the Phase 2 work branch; exact-head GitHub Actions still required. |
+| Durable membership/revision contract | passed | Exact-head `f8e6a4faccccfbdc9361f1a635a524abaea00347`: Human Messaging CI `38176377368` executed the group-membership contract with 22/22 tests passing; Production Worker Delivery CI `38176377341` also passed. The following spec-only descendant must preserve those gates. |
 | Real SFU join/media routing | blocked | No production SFU session/provider composition has yet been verified in this repository. Do not substitute TURN or test SFU. |
 | >=3 participant production E2E | blocked | Requires real SFU service composition and deployed acceptance environment. |
 
