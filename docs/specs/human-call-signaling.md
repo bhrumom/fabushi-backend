@@ -174,7 +174,7 @@ Full Group/SFU acceptance additionally requires a real shipping backend/SFU comp
 
 | Requirement | Status | Evidence |
 | --- | --- | --- |
-| Durable membership/revision contract | planned | This spec update; implementation and exact-head CI required. |
+| Durable membership/revision contract | implemented-pending-verification | Production migration/handler/routes/contracts are implemented on the Phase 2 work branch; exact-head GitHub Actions still required. |
 | Real SFU join/media routing | blocked | No production SFU session/provider composition has yet been verified in this repository. Do not substitute TURN or test SFU. |
 | >=3 participant production E2E | blocked | Requires real SFU service composition and deployed acceptance environment. |
 

@@ -5,6 +5,7 @@ const CALL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const EVENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{3,127}$/;
 const EVENT_KINDS = new Set(['transition', 'signal', 'media', 'participant']);
 const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
+const MEMBER_ACTIONS = new Set(['add', 'remove']);
 
 async function requireCallAuth(request, env, db) {
   const auth = await requireAuthIdentity(request, env, db);
@@ -27,6 +28,11 @@ function validOpaqueId(value, regex) {
 function parseGeneration(value) {
   const generation = Number(value);
   return Number.isSafeInteger(generation) && generation >= 0 ? generation : null;
+}
+
+function parseRevision(value) {
+  const revision = Number(value);
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
 }
 
 function clampLimit(value) {
@@ -87,6 +93,7 @@ function mapChannel(row) {
     state: row.state,
     generation: Number(row.generation),
     eventSeq: Number(row.event_seq),
+    membershipRevision: Number(row.membership_revision ?? 0),
     terminalState: row.terminal_state ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -455,3 +462,220 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
     call: mapChannel(refreshed),
   }, 201);
 }
+
+function mapCallMember(row) {
+  return {
+    callId: row.call_id,
+    userId: Number(row.user_id),
+    role: row.role,
+    state: row.state,
+    deviceId: row.device_id ?? null,
+    joinedGeneration: Number(row.joined_generation),
+    leftGeneration: row.left_generation == null ? null : Number(row.left_generation),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function readCallChannelById(db, callId) {
+  return await db.prepare(`
+    SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
+      state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
+    FROM human_call_channels
+    WHERE id = ?
+    LIMIT 1
+  `).bind(callId).first();
+}
+
+async function readCallMember(db, callId, userId) {
+  return await db.prepare(`
+    SELECT call_id, user_id, role, state, device_id, joined_generation,
+      left_generation, created_at, updated_at
+    FROM human_call_members
+    WHERE call_id = ? AND user_id = ?
+    LIMIT 1
+  `).bind(callId, userId).first();
+}
+
+async function readCallMembers(db, callId) {
+  const rows = await db.prepare(`
+    SELECT call_id, user_id, role, state, device_id, joined_generation,
+      left_generation, created_at, updated_at
+    FROM human_call_members
+    WHERE call_id = ?
+    ORDER BY CASE role WHEN 'creator' THEN 0 ELSE 1 END, created_at ASC, user_id ASC
+  `).bind(callId).all();
+  return (rows.results || []).map(mapCallMember);
+}
+
+async function readMembershipAuthorizedChannel(db, callId, userId) {
+  const call = await readCallChannelById(db, callId);
+  if (!call) return null;
+  if (Number(call.creator_user_id) === userId || Number(call.peer_user_id) === userId) return call;
+  const member = await readCallMember(db, callId, userId);
+  return member?.state === 'active' ? call : null;
+}
+
+export async function handleGetHumanCallMembers(request, env, db, rawCallId) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const callId = validOpaqueId(rawCallId, CALL_ID_RE);
+  if (!callId) return jsonResponse({ success: false, error: '通话编号无效' }, 400);
+  const call = await readMembershipAuthorizedChannel(db, callId, auth.userId);
+  if (!call) return jsonResponse({ success: false, error: '通话不存在或无权访问' }, 404);
+  return jsonResponse({
+    success: true,
+    call: mapChannel(call),
+    membershipRevision: Number(call.membership_revision ?? 0),
+    members: await readCallMembers(db, callId),
+  });
+}
+
+export async function handleMutateHumanCallMember(request, env, db, rawCallId) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const callId = validOpaqueId(rawCallId, CALL_ID_RE);
+  if (!callId) return jsonResponse({ success: false, error: '通话编号无效' }, 400);
+  const call = await readCallChannelById(db, callId);
+  if (!call || Number(call.creator_user_id) !== auth.userId) {
+    return jsonResponse({ success: false, error: '通话不存在或无权管理成员' }, 404);
+  }
+  if (call.terminal_state) {
+    return jsonResponse({ success: false, error: '通话已结束，不能修改成员' }, 409);
+  }
+  if (call.creator_device_id != null && call.creator_device_id !== auth.deviceId) {
+    return jsonResponse({ success: false, error: '当前设备不是该通话的成员管理设备' }, 409);
+  }
+
+  let body;
+  try { body = await request.json(); } catch {
+    return jsonResponse({ success: false, error: '成员变更请求格式无效' }, 400);
+  }
+  const clientMutationId = validOpaqueId(body.clientMutationId, EVENT_ID_RE);
+  const generation = parseGeneration(body.generation);
+  const expectedRevision = parseRevision(body.expectedMembershipRevision);
+  const action = String(body.action || '').trim();
+  if (!clientMutationId) return jsonResponse({ success: false, error: '成员变更编号无效' }, 400);
+  if (generation == null || generation !== Number(call.generation)) {
+    return jsonResponse({ success: false, error: '成员变更通话代际已过期' }, 409);
+  }
+  if (expectedRevision == null) return jsonResponse({ success: false, error: '成员版本无效' }, 400);
+  if (!MEMBER_ACTIONS.has(action)) return jsonResponse({ success: false, error: '成员变更动作无效' }, 400);
+  const target = await findUser(db, body.targetUserId ?? body.targetUsername);
+  if (!target) return jsonResponse({ success: false, error: '未找到通话成员' }, 404);
+  if (Number(target.id) === auth.userId) {
+    return jsonResponse({ success: false, error: '不能通过成员接口移除或重复添加通话创建者' }, 400);
+  }
+
+  const duplicate = await db.prepare(`
+    SELECT call_id, actor_user_id, actor_device_id, client_mutation_id,
+      generation, previous_revision, new_revision, action, target_user_id, created_at
+    FROM human_call_member_mutations
+    WHERE call_id = ? AND actor_user_id = ? AND actor_device_id = ? AND client_mutation_id = ?
+    LIMIT 1
+  `).bind(callId, auth.userId, auth.deviceId, clientMutationId).first();
+  if (duplicate) {
+    if (
+      Number(duplicate.generation) !== generation ||
+      Number(duplicate.previous_revision) !== expectedRevision ||
+      duplicate.action !== action ||
+      Number(duplicate.target_user_id) !== Number(target.id)
+    ) {
+      return jsonResponse({ success: false, error: '重复成员变更与已接受载荷冲突' }, 409);
+    }
+    const refreshed = await readCallChannelById(db, callId);
+    return jsonResponse({
+      success: true,
+      deduplicated: true,
+      call: mapChannel(refreshed),
+      membershipRevision: Number(duplicate.new_revision),
+      members: await readCallMembers(db, callId),
+    });
+  }
+
+  if (Number(call.membership_revision ?? 0) !== expectedRevision) {
+    return jsonResponse({ success: false, error: '成员版本已过期，请同步后重试' }, 409);
+  }
+  if (action === 'add' && !(await areFriends(db, auth.userId, target.id))) {
+    return jsonResponse({ success: false, error: '只能邀请已添加的好友加入通话' }, 403);
+  }
+  const currentMember = await readCallMember(db, callId, target.id);
+  if (action === 'add' && currentMember?.state === 'active') {
+    return jsonResponse({ success: false, error: '该用户已在通话中' }, 409);
+  }
+  if (action === 'remove' && currentMember?.state !== 'active') {
+    return jsonResponse({ success: false, error: '该用户当前不在通话中' }, 409);
+  }
+
+  const nextRevision = expectedRevision + 1;
+  const now = new Date().toISOString();
+  const membershipPredicate = action === 'add'
+    ? `NOT EXISTS (
+        SELECT 1 FROM human_call_members
+        WHERE call_id = ? AND user_id = ? AND state = 'active'
+      )`
+    : `EXISTS (
+        SELECT 1 FROM human_call_members
+        WHERE call_id = ? AND user_id = ? AND state = 'active'
+      )`;
+  const updateChannel = db.prepare(`
+    UPDATE human_call_channels
+    SET membership_revision = ?, updated_at = ?
+    WHERE id = ? AND generation = ? AND membership_revision = ? AND terminal_state IS NULL
+      AND ${membershipPredicate}
+  `).bind(nextRevision, now, callId, generation, expectedRevision, callId, target.id);
+
+  const mutateMember = action === 'add'
+    ? db.prepare(`
+        INSERT INTO human_call_members (
+          call_id, user_id, role, state, device_id, joined_generation,
+          left_generation, created_at, updated_at
+        )
+        SELECT ?, ?, 'member', 'active', NULL, ?, NULL, ?, ?
+        WHERE changes() = 1
+        ON CONFLICT(call_id, user_id) DO UPDATE SET
+          role = 'member',
+          state = 'active',
+          device_id = NULL,
+          joined_generation = excluded.joined_generation,
+          left_generation = NULL,
+          updated_at = excluded.updated_at
+        WHERE human_call_members.state <> 'active'
+      `).bind(callId, target.id, generation, now, now)
+    : db.prepare(`
+        UPDATE human_call_members
+        SET state = 'left', device_id = NULL, left_generation = ?, updated_at = ?
+        WHERE call_id = ? AND user_id = ? AND state = 'active' AND changes() = 1
+      `).bind(generation, now, callId, target.id);
+
+  const recordMutation = db.prepare(`
+    INSERT INTO human_call_member_mutations (
+      call_id, actor_user_id, actor_device_id, client_mutation_id,
+      generation, previous_revision, new_revision, action, target_user_id, created_at
+    )
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    WHERE changes() = 1
+  `).bind(
+    callId, auth.userId, auth.deviceId, clientMutationId,
+    generation, expectedRevision, nextRevision, action, target.id, now,
+  );
+
+  let results;
+  try {
+    results = await db.batch([updateChannel, mutateMember, recordMutation]);
+  } catch {
+    return jsonResponse({ success: false, error: '成员变更保存失败，请同步后重试' }, 409);
+  }
+  if (results.some((result) => Number(result?.meta?.changes || 0) !== 1)) {
+    return jsonResponse({ success: false, error: '成员变更并发冲突，请同步后重试' }, 409);
+  }
+  const refreshed = await readCallChannelById(db, callId);
+  return jsonResponse({
+    success: true,
+    deduplicated: false,
+    call: mapChannel(refreshed),
+    membershipRevision: nextRevision,
+    members: await readCallMembers(db, callId),
+  }, 201);
+}
+
