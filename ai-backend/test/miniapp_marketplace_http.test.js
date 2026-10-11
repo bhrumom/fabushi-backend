@@ -85,6 +85,7 @@ test('Global Dharma route planning is fenced to active local WebMCP tools', asyn
     assert.equal(state.execution.kind, 'web');
     assert.equal(state.surface.id, 'local-webmcp');
     assert.equal(state.requiresApproval, false);
+    assert.deepEqual(state.arguments, {});
 
     const freeMutation = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
       method: 'POST',
@@ -96,6 +97,9 @@ test('Global Dharma route planning is fenced to active local WebMCP tools', asyn
     }));
     assert.equal(freeMutation.command.tool, 'offline.practice.record');
     assert.equal(freeMutation.requiresApproval, true);
+    assert.deepEqual(freeMutation.arguments, {
+      label: '执行一项免费的本地操作',
+    });
 
     const noRemoteFallback = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {
       method: 'POST',
@@ -130,6 +134,7 @@ test('Global Dharma route planning is fenced to active local WebMCP tools', asyn
     }));
     assert.equal(protectedTool.command.tool, 'local.prayer-wheel.start');
     assert.equal(protectedTool.requiresApproval, true);
+    assert.deepEqual(protectedTool.arguments, {});
 
     // Legacy callers without the active page fence keep the existing remote contract.
     const legacy = await json(await fetch(`${baseUrl}/v1/marketplace/plugins/global-dharma/route`, {

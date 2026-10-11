@@ -899,10 +899,25 @@ export function createMiniAppMarketplaceRouter({
       && !manifest.surfaces.some((surface) => surface.id === routed.surface.id)
       ? { ...manifest, surfaces: [routed.surface, ...manifest.surfaces] }
       : manifest;
+    const localWebMcpArguments = (command, fallbackArguments) => {
+      if (routed.surface?.id !== 'local-webmcp') return fallbackArguments;
+      if (command?.naturalLanguageArgument === 'label') {
+        return { label: String(req.body?.input ?? '').trim().slice(0, 80) };
+      }
+      return {};
+    };
     const payload = routed.kind === 'command'
-      ? commandDispatch(dispatchManifest, routed.command, routed.arguments)
+      ? commandDispatch(
+          dispatchManifest,
+          routed.command,
+          localWebMcpArguments(routed.command, routed.arguments),
+        )
       : routed.suggestedCommand
-        ? commandDispatch(dispatchManifest, routed.suggestedCommand, { input: req.body?.input })
+        ? commandDispatch(
+            dispatchManifest,
+            routed.suggestedCommand,
+            localWebMcpArguments(routed.suggestedCommand, { input: req.body?.input }),
+          )
         : routed;
     res.json(payload);
   }));
