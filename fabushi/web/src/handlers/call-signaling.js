@@ -14,6 +14,9 @@ const SFU_MID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const SFU_MEDIA_KINDS = new Set(['audio', 'video']);
 const MAX_SFU_PUBLICATIONS = 16;
 const MAX_SFU_SUBSCRIPTIONS = 16;
+const SFU_RID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,15}$/;
+const SFU_SIMULCAST_POLICY_VALUES = new Set(['none', 'asciibetical']);
+const MAX_SFU_SIMULCAST_RIDS = 8;
 const MAX_SFU_SDP_BYTES = 512 * 1024;
 const SFU_PUBLIC_ERROR_CODE_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
 
@@ -939,6 +942,28 @@ function validSfuSessionDescription(value, expectedType) {
   return { type, sdp };
 }
 
+function normalizeSimulcastRids(value, mediaKind) {
+  if (value == null) return [];
+  if (mediaKind !== 'video' || !Array.isArray(value) || value.length < 1
+      || value.length > MAX_SFU_SIMULCAST_RIDS) return null;
+  const seen = new Set();
+  const rids = [];
+  for (const raw of value) {
+    const rid = String(raw || '').trim();
+    if (!SFU_RID_RE.test(rid) || seen.has(rid)) return null;
+    seen.add(rid);
+    rids.push(rid);
+  }
+  return rids;
+}
+
+function sdpAdvertisesSimulcastRids(sdp, rids) {
+  if (!rids.length) return true;
+  if (!/a=simulcast:send\s+[^\r\n]+/m.test(sdp)) return false;
+  return rids.every((rid) => new RegExp(`^a=rid:${rid.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\function normalizePublicationIntents(value) {
+')} send(?:\\s|$)`, 'm').test(sdp));
+}
+
 function normalizePublicationIntents(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_SFU_PUBLICATIONS) return null;
   const seenClientIds = new Set();
@@ -951,13 +976,15 @@ function normalizePublicationIntents(value) {
     const trackName = String(raw.trackName || '').trim();
     const mid = String(raw.mid || '').trim();
     const mediaKind = String(raw.mediaKind || '').trim();
+    const simulcastRids = normalizeSimulcastRids(raw.simulcastRids, mediaKind);
     if (!clientPublicationId || !SFU_TRACK_NAME_RE.test(trackName)
-        || !SFU_MID_RE.test(mid) || !SFU_MEDIA_KINDS.has(mediaKind)) return null;
+        || !SFU_MID_RE.test(mid) || !SFU_MEDIA_KINDS.has(mediaKind)
+        || simulcastRids == null) return null;
     if (seenClientIds.has(clientPublicationId) || seenTrackNames.has(trackName) || seenMids.has(mid)) return null;
     seenClientIds.add(clientPublicationId);
     seenTrackNames.add(trackName);
     seenMids.add(mid);
-    normalized.push({ clientPublicationId, trackName, mid, mediaKind });
+    normalized.push({ clientPublicationId, trackName, mid, mediaKind, simulcastRids });
   }
   return normalized;
 }
@@ -1083,6 +1110,9 @@ export async function handlePublishHumanCallMedia(
   }
   if (!sessionDescription) return jsonResponse({ success: false, error: '媒体发布 SDP offer 无效' }, 400);
   if (!publications) return jsonResponse({ success: false, error: '媒体发布轨道列表无效' }, 400);
+  if (publications.some((item) => !sdpAdvertisesSimulcastRids(sessionDescription.sdp, item.simulcastRids))) {
+    return jsonResponse({ success: false, error: '媒体发布声明的 simulcast RIDs 与 SDP 不一致' }, 400);
+  }
 
   const requestFingerprint = await sha256Hex(JSON.stringify({
     generation, sessionDescription, publications,
@@ -1215,6 +1245,7 @@ export async function handlePublishHumanCallMedia(
       trackName: intent.trackName,
       mid: intent.mid,
       mediaKind: intent.mediaKind,
+      simulcastRids: intent.simulcastRids,
       status: 'ready',
     });
     successfulRows.push({ publicationId, ...intent });
@@ -1263,11 +1294,13 @@ export async function handlePublishHumanCallMedia(
   const publicationStatements = successfulRows.map((row) => db.prepare(`
     INSERT INTO human_call_media_publications (
       id, media_session_id, operation_id, call_id, user_id, device_id, generation,
-      client_publication_id, track_name, mid, media_kind, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)
+      client_publication_id, track_name, mid, media_kind, simulcast_rids_json,
+      status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)
   `).bind(
     row.publicationId, mediaSessionId, operationId, callId, auth.userId, auth.deviceId,
-    generation, row.clientPublicationId, row.trackName, row.mid, row.mediaKind, updatedAt, updatedAt,
+    generation, row.clientPublicationId, row.trackName, row.mid, row.mediaKind,
+    JSON.stringify(row.simulcastRids || []), updatedAt, updatedAt,
   ));
   let persisted;
   try {
