@@ -550,9 +550,25 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
     clientEventId, kind, payloadJson, now,
   );
 
+  const lifecycleRetirement = kind === 'transition' && (
+    String(body.payload.action || '').trim() === 'reconnect' || terminalState != null
+  )
+    ? retireMediaSessionsForLifecycleStatement(db, {
+        callId,
+        generation: Number(call.generation),
+        reason: terminalState != null
+          ? 'call_terminal_cleanup_required'
+          : 'generation_retired_cleanup_required',
+        now,
+      })
+    : null;
   let batchResults;
   try {
-    batchResults = await db.batch([updateStatement, insertStatement]);
+    batchResults = await db.batch([
+      updateStatement,
+      insertStatement,
+      ...(lifecycleRetirement ? [lifecycleRetirement] : []),
+    ]);
   } catch {
     return jsonResponse({ success: false, error: '通话事件保存失败，请重试' }, 409);
   }
@@ -561,6 +577,9 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
   if (updatedChanges !== 1 || insertedChanges !== 1) {
     return jsonResponse({ success: false, error: '通话事件并发冲突，请同步后重试' }, 409);
   }
+  const retiredMediaSessionCount = lifecycleRetirement
+    ? Number(batchResults?.[2]?.meta?.changes || 0)
+    : 0;
 
   const event = await db.prepare(`
     SELECT call_id, seq, generation, user_id, device_id, client_event_id,
@@ -575,6 +594,12 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
     deduplicated: false,
     event: mapEvent(event),
     call: mapChannel(refreshed),
+    ...(lifecycleRetirement ? {
+      mediaCleanup: {
+        required: retiredMediaSessionCount > 0,
+        retiredSessionCount: retiredMediaSessionCount,
+      },
+    } : {}),
   }, 201);
 }
 
@@ -610,6 +635,23 @@ async function readCallMember(db, callId, userId) {
     WHERE call_id = ? AND user_id = ?
     LIMIT 1
   `).bind(callId, userId).first();
+}
+
+function retireMediaSessionsForLifecycleStatement(
+  db, { callId, generation, reason, now, userId = null },
+) {
+  const userPredicate = userId == null ? '' : ' AND user_id = ?';
+  const statement = db.prepare(`
+    UPDATE human_call_media_sessions
+    SET status = 'uncertain', mutation_state = 'retired', last_error_code = ?, updated_at = ?
+    WHERE call_id = ? AND generation = ?
+      AND status IN ('pending', 'ready', 'uncertain')
+      AND mutation_state <> 'retired'
+      ${userPredicate}
+  `);
+  return userId == null
+    ? statement.bind(reason, now, callId, generation)
+    : statement.bind(reason, now, callId, generation, userId);
 }
 
 async function readCallMembers(db, callId) {
@@ -773,15 +815,32 @@ export async function handleMutateHumanCallMember(request, env, db, rawCallId) {
     generation, expectedRevision, nextRevision, action, target.id, now,
   );
 
+  const memberMediaRetirement = action === 'remove'
+    ? retireMediaSessionsForLifecycleStatement(db, {
+        callId,
+        generation,
+        userId: Number(target.id),
+        reason: 'member_removed_cleanup_required',
+        now,
+      })
+    : null;
   let results;
   try {
-    results = await db.batch([updateChannel, mutateMember, recordMutation]);
+    results = await db.batch([
+      updateChannel,
+      mutateMember,
+      recordMutation,
+      ...(memberMediaRetirement ? [memberMediaRetirement] : []),
+    ]);
   } catch {
     return jsonResponse({ success: false, error: '成员变更保存失败，请同步后重试' }, 409);
   }
-  if (results.some((result) => Number(result?.meta?.changes || 0) !== 1)) {
+  if (results.slice(0, 3).some((result) => Number(result?.meta?.changes || 0) !== 1)) {
     return jsonResponse({ success: false, error: '成员变更并发冲突，请同步后重试' }, 409);
   }
+  const retiredMediaSessionCount = memberMediaRetirement
+    ? Number(results?.[3]?.meta?.changes || 0)
+    : 0;
   const refreshed = await readCallChannelById(db, callId);
   return jsonResponse({
     success: true,
@@ -789,6 +848,12 @@ export async function handleMutateHumanCallMember(request, env, db, rawCallId) {
     call: mapChannel(refreshed),
     membershipRevision: nextRevision,
     members: await readCallMembers(db, callId),
+    ...(memberMediaRetirement ? {
+      mediaCleanup: {
+        required: retiredMediaSessionCount > 0,
+        retiredSessionCount: retiredMediaSessionCount,
+      },
+    } : {}),
   }, 201);
 }
 

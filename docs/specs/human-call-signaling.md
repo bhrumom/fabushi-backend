@@ -217,3 +217,8 @@ Verified predecessor scope includes durable roster plus exact-head Realtime SFU 
 
 
 Provider identity note (2026-10-12): Cloudflare Realtime Connection API resource identity is session + trackName + per-connection mid; it does not expose SSRC as an application control-plane resource identifier. Fabushi therefore keeps participant identity in canonical human_call_members/media-session ownership and RTP SSRC lifecycle in the endpoint WebRTC/media layer rather than introducing a second backend participant/SSRC store.
+
+
+Generation/reconnect retirement is durable and uses the existing media-session owner. When a reconnect transition advances the canonical call generation, the same D1 batch that writes the call/event retires every old-generation `pending`, `ready`, or `uncertain` media session as `uncertain` with `mutation_state=retired` and `generation_retired_cleanup_required`. Terminal call transitions use the same rule with `call_terminal_cleanup_required`. This is a fencing action, not a claim that provider resources are closed: session-local tracks remain subject to the existing explicit, idempotent `tracks/close` teardown owner, including unknown-outcome fencing and per-track reconciliation.
+
+Member removal retirement is equally canonical: the roster mutation batch retires that member's current-generation media sessions with `member_removed_cleanup_required` while updating `human_call_members` and the membership mutation record. The response exposes only a cleanup-required count, never provider session ids or app credentials. Zero matching media sessions is a valid mutation outcome; the roster mutation still commits. No second call/member/media store is introduced.

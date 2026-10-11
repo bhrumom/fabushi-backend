@@ -233,3 +233,21 @@ test('SFU dynamic simulcast layer switching is durable and unknown-outcome fence
   assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
   assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
 });
+
+
+test('reconnect, terminal transitions, and member removal durably retire stale media generations', () => {
+  assert.match(handler, /retireMediaSessionsForLifecycleStatement/);
+  assert.match(handler, /generation_retired_cleanup_required/);
+  assert.match(handler, /call_terminal_cleanup_required/);
+  assert.match(handler, /member_removed_cleanup_required/);
+  assert.match(handler, /status = 'uncertain', mutation_state = 'retired'/);
+  assert.match(handler, /status IN \('pending', 'ready', 'uncertain'\)/);
+  assert.match(handler, /generation: Number\(call\.generation\)/);
+  assert.match(handler, /userId: Number\(target\.id\)/);
+  assert.match(handler, /mediaCleanup/);
+  assert.match(handler, /retiredSessionCount/);
+  assert.match(handler, /results\.slice\(0, 3\)/);
+  assert.match(spec, /generation\/reconnect retirement/);
+  assert.match(spec, /member removal retirement/);
+  assert.match(spec, /provider resources are not claimed closed/);
+});
