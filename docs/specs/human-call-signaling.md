@@ -160,6 +160,14 @@ Session allocation is explicitly outcome-aware. The durable state is `pending | 
 
 Subsequent publication/subscription endpoints MUST accept application publication/media-session ids rather than arbitrary provider session ids. The backend resolves provider locators only after membership/ownership authorization. Per-provider-session mutations are serialized through one logical queue, and an operation requiring immediate renegotiation must complete its answer before the next mutation.
 
+Publishing uses `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/publications` with a current-generation `clientOperationId`, a local SDP offer, and a bounded list of application publication intents `{ clientPublicationId, trackName, mid, mediaKind }`. The target media session must be a `ready` `publish` session owned by the authenticated active member/device. The backend acquires the session's mutation fence before calling Cloudflare `tracks/new`; overlapping operations fail with conflict rather than racing SDP.
+
+The backend persists an operation record before the provider request. Exact retries of the same `clientOperationId` replay the stored sanitized result; conflicting retries fail. A lost/unknown `tracks/new` outcome marks both operation and media session `uncertain` and retires that connection from further mutation. A top-level provider error is also treated conservatively because it does not prove zero allocation.
+
+For an HTTP response, every returned track result is inspected. Successful items are persisted individually as application-owned publication records and failed items retain only sanitized public error codes. A partially successful batch is never replayed as a whole. Provider `sessionId` values remain private; discovery later exposes only application publication ids, member identity, media kind, track name and permitted simulcast metadata.
+
+A successful publication response that contains the SFU SDP answer moves the session mutation state to `awaiting_endpoint_apply`. The endpoint must apply that answer to its PeerConnection, then call `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/operations/:clientOperationId/applied`. Only that authenticated owner acknowledgement transitions the durable operation to `applied` and releases the session to `idle`. If endpoint application fails or its outcome is unknown, the session is retired/replaced instead of accepting another mutation.
+
 ### 12.3 Ordering, recovery and teardown
 
 Membership mutations and media route lifecycle participate in the existing ordered/idempotent call event stream. A restarted client can replay channel state plus membership revision and rebuild only the current reconnect generation. Old member/device claims, leases, publications and subscriptions cannot resurrect after a newer generation or terminal call state.
