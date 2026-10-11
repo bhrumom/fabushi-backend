@@ -249,5 +249,5 @@ test('reconnect, terminal transitions, and member removal durably retire stale m
   assert.match(handler, /results\.slice\(0, 3\)/);
   assert.match(spec, /generation\/reconnect retirement/);
   assert.match(spec, /member removal retirement/);
-  assert.match(spec, /provider resources are not claimed closed/);
+  assert.match(spec, /not a claim that provider resources are closed/);
 });
