@@ -98,3 +98,19 @@ GitHub Actions only. Tests must cover:
 - FAS-04 raw public-key representation is derived and bound to the managed signer.
 - FAS-05 package signature does not replace Registry artifact scan/release signature.
 - FAS-06 exact-head backend CI passes.
+
+
+## Production Cloudflare Worker adapter
+
+The canonical public production API at `api.ombhrum.com` is the Cloudflare Worker in `fabushi/web`, not the Node test/runtime in `ai-backend`. Therefore production signing must expose the same contract from that Worker rather than assuming Node Express routes are deployed.
+
+The Worker adapter is deliberately narrow:
+
+- `GET /v1/extensions/trust` returns only public signer metadata for the currently configured managed key.
+- `POST /v1/extensions/review/fabapp/sign` requires the reviewer token and signs only the strict manifest-v1 payload defined above.
+- it never serves generic release approval, artifact upload, entitlement, or private key material.
+- it uses the same `FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY`, `FABUSHI_MARKETPLACE_SIGNING_KEY_ID`, `FABUSHI_MARKETPLACE_TRUST_EPOCH` and reviewer token contract as the Node implementation.
+- because WebCrypto cannot portably derive an Ed25519 public key from a PKCS#8 private key, production additionally configures `FABUSHI_MARKETPLACE_SIGNING_PUBLIC_KEY_RAW` as the base64url 32-byte public key corresponding to the managed private key. Startup/signing must self-check each produced signature against this public key.
+- production delivery security preflight fails closed unless all signing/reviewer secrets are present.
+
+This adapter exists only to make the already-reviewed signing contract reachable from the actual production control plane; it is not a second signer or a second trust root.
