@@ -13,7 +13,7 @@ const handler = fs.readFileSync(new URL('../src/handlers/call-signaling.js', imp
 const routes = fs.readFileSync(new URL('../src/routes/community-routes.js', import.meta.url), 'utf8');
 const migration = fs.readFileSync(new URL('../migrations/20261012_human_call_group_membership.sql', import.meta.url), 'utf8');
 const mediaMigration = fs.readFileSync(new URL('../migrations/20261012_human_call_sfu_sessions.sql', import.meta.url), 'utf8');
-const publicationMigration = fs.readFileSync(new URL('../migrations/20261012_human_call_sfu_publications.sql', import.meta.url), 'utf8');
+const publicationMigration = fs.readFileSync(new URL('../migrations/20261013_human_call_sfu_publications.sql', import.meta.url), 'utf8');
 const spec = fs.readFileSync(new URL('../../../docs/specs/human-call-signaling.md', import.meta.url), 'utf8');
 
 test('group membership handlers are executable exports and stay on canonical call owner', () => {
@@ -79,7 +79,7 @@ test('SFU publication mutations are durable, serialized, partial-result aware, a
   assert.equal(typeof handlePublishHumanCallMedia, 'function');
   assert.equal(typeof handleAcknowledgeHumanCallMediaOperationApplied, 'function');
   assert.ok(routes.includes('/publications'));
-  assert.ok(routes.includes('/operations/'));
+  assert.match(routes, /operations\\\//);
   assert.ok(routes.includes('/applied'));
   assert.match(handler, /human_call_media_operations/);
   assert.match(handler, /human_call_media_publications/);

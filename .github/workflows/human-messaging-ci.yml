@@ -14,7 +14,7 @@ on:
       - "fabushi/web/migrations/20261005_human_call_device_claim.sql"
       - "fabushi/web/migrations/20261012_human_call_group_membership.sql"
       - "fabushi/web/migrations/20261012_human_call_sfu_sessions.sql"
-      - "fabushi/web/migrations/20261012_human_call_sfu_publications.sql"
+      - "fabushi/web/migrations/20261013_human_call_sfu_publications.sql"
       - "fabushi/web/tests/friends-and-messages-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
