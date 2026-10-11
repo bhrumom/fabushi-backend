@@ -101,3 +101,60 @@ export function globalDharmaMarketplaceCommands() {
       ...(entry.usage ? { usage: entry.usage } : {}),
     }));
 }
+
+
+export const GLOBAL_DHARMA_LOCAL_WEBMCP_COMMANDS = Object.freeze([
+  Object.freeze({
+    name: 'offline_capabilities',
+    description: '查看全球法布施当前实际可用的离线与受保护能力。',
+    surfaceId: 'local-webmcp',
+    tool: 'offline.capabilities',
+    approval: 'none',
+    aliases: Object.freeze(['离线能力']),
+    naturalLanguageHints: Object.freeze(['哪些功能可以离线使用', '查看离线能力', '离线可以做什么']),
+  }),
+  Object.freeze({
+    name: 'offline_state',
+    description: '读取当前全球法布施页面真实本地状态与 revision。',
+    surfaceId: 'local-webmcp',
+    tool: 'offline.state.read',
+    approval: 'none',
+    aliases: Object.freeze(['本地状态']),
+    naturalLanguageHints: Object.freeze(['读取状态', '刚才操作后的状态', '当前本地状态', '现在的状态']),
+  }),
+  Object.freeze({
+    name: 'offline_practice',
+    description: '执行一项免费的本地操作并更新当前页面与持久状态。',
+    surfaceId: 'local-webmcp',
+    tool: 'offline.practice.record',
+    approval: 'required',
+    aliases: Object.freeze(['免费本地操作']),
+    naturalLanguageHints: Object.freeze(['执行一项免费的本地操作', '记录本地修持', '免费本地修持']),
+    naturalLanguageArgument: 'label',
+  }),
+  Object.freeze({
+    name: 'prayer_wheel',
+    description: '请求启动受保护的本地转经轮；Host 必须额外核验 entitlement。',
+    surfaceId: 'local-webmcp',
+    tool: 'local.prayer-wheel.start',
+    approval: 'required',
+    aliases: Object.freeze(['本地转经轮']),
+    naturalLanguageHints: Object.freeze(['启动本地转经轮', '开始本地转经轮', '转经轮']),
+  }),
+]);
+
+export function globalDharmaLocalMarketplaceCommands(availableTools = []) {
+  const allowed = new Set(
+    (Array.isArray(availableTools) ? availableTools : [])
+      .map((value) => String(value ?? '').trim())
+      .filter((value) => /^[A-Za-z0-9_.-]{1,128}$/.test(value))
+      .slice(0, 128),
+  );
+  return GLOBAL_DHARMA_LOCAL_WEBMCP_COMMANDS
+    .filter((entry) => allowed.has(entry.tool))
+    .map((entry) => ({
+      ...entry,
+      aliases: [...entry.aliases],
+      naturalLanguageHints: [...entry.naturalLanguageHints],
+    }));
+}
