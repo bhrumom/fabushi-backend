@@ -24,6 +24,8 @@ test('group membership handlers are executable exports and stay on canonical cal
   assert.match(handler, /generation !== Number\(call\.generation\)/);
   assert.match(handler, /creator_device_id/);
   assert.match(handler, /MEMBER_ACTIONS/);
+  assert.match(handler, /Number\(target\.id\) === Number\(call\.peer_user_id\)/);
+  assert.match(spec, /legacy `peer_user_id` participant cannot be removed/);
   assert.doesNotMatch(handler, /InsecureSkipVerify|go_sfu|raw-TCP/i);
 });
 
