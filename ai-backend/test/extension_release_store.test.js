@@ -341,6 +341,23 @@ test('HTTP workflow gates public discovery on authenticated publisher and review
     const draftPayload = await draft.json();
     assert.equal(draftPayload.release.state, 'draft');
 
+    const upload = await fetch(`${baseUrl}/v1/extensions/publisher/artifacts`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer owner-token',
+        'content-type': 'application/octet-stream',
+        'x-fabushi-extension-kind': 'web-miniapp',
+        'x-fabushi-extension-namespace': 'acme-labs',
+        'x-fabushi-extension-name': 'offline-notes',
+        'x-fabushi-extension-version': '1.0.0',
+        'x-fabushi-artifact-id': 'universal-ui',
+        'x-fabushi-artifact-platform': 'all',
+        'x-fabushi-artifact-format': 'fabapp',
+      },
+      body: Buffer.from('release workflow package'),
+    });
+    assert.equal(upload.status, 201);
+
     const submit = await fetch(
       `${baseUrl}/v1/extensions/publisher/releases/web-miniapp/acme-labs/offline-notes/1.0.0/submit`,
       { method: 'POST', headers: ownerHeaders },
@@ -360,6 +377,24 @@ test('HTTP workflow gates public discovery on authenticated publisher and review
       },
     );
     assert.equal(unauthorizedReview.status, 403);
+
+    const scan = await fetch(
+      `${baseUrl}/v1/extensions/review/artifacts/web-miniapp/acme-labs/offline-notes/1.0.0/universal-ui/scan`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-fabushi-marketplace-review-token': 'r'.repeat(48),
+        },
+        body: JSON.stringify({
+          state: 'passed',
+          scanner: 'fabushi-static-scan',
+          scannerVersion: '1.0.0',
+          reviewer: 'security-reviewer',
+        }),
+      },
+    );
+    assert.equal(scan.status, 200);
 
     const approved = await fetch(
       `${baseUrl}/v1/extensions/review/releases/web-miniapp/acme-labs/offline-notes/1.0.0`,
