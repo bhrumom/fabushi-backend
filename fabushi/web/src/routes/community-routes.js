@@ -31,6 +31,7 @@ import {
   handleAppendHumanCallEvent,
   handleCreateHumanCall,
   handleCreateHumanCallMediaSession,
+  handleListHumanCallMediaSessionsForRecovery,
   handlePublishHumanCallMedia,
   handleAcknowledgeHumanCallMediaOperationApplied,
   handleDiscoverHumanCallMediaPublications,
@@ -88,6 +89,9 @@ export async function routeCommunityRequest({ pathname, method, request, env, db
   if (pathname === '/api/social/calls' && method === 'GET') return handleListHumanCalls(request, env, db);
   if (pathname === '/api/social/calls/ice' && method === 'GET') return handleGetHumanCallIceServers(request, env, db);
   const callMediaSessionMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions$/);
+  if (callMediaSessionMatch && method === 'GET') {
+    return handleListHumanCallMediaSessionsForRecovery(request, env, db, callMediaSessionMatch[1]);
+  }
   if (callMediaSessionMatch && method === 'POST') {
     return handleCreateHumanCallMediaSession(request, env, db, callMediaSessionMatch[1]);
   }
