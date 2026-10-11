@@ -103,7 +103,7 @@ test('different device tokens for one account share Mini Apps, Bot membership, s
 
     const difference = await json(await fetch(`${baseUrl}/v1/account/sync?cursor=${encodeURIComponent(initial.cursor)}`, { headers: deviceB }));
     assert.equal(difference.mode, 'difference');
-    assert.deepEqual(difference.events.map((event) => event.type), ['miniapp.installed', 'bot.added']);
+    assert.deepEqual(difference.events.map((event) => event.type), ['miniapp.installed', 'bot.added', 'agent.created']);
 
     await json(await fetch(`${baseUrl}/v1/miniapps/global-dharma/cloud-storage`, {
       method: 'PUT', headers: deviceA, body: JSON.stringify({ values: { language: 'zh-CN', mode: 'local' } }),
