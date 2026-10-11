@@ -1339,6 +1339,27 @@ export async function handlePublishHumanCallMedia(
 }
 
 
+function normalizeSimulcastSelection(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const preferredRid = String(value.preferredRid || '').trim();
+  const priorityOrdering = String(value.priorityOrdering || 'none').trim();
+  const ridNotAvailable = String(value.ridNotAvailable || 'none').trim();
+  if (!SFU_RID_RE.test(preferredRid)
+      || !SFU_SIMULCAST_POLICY_VALUES.has(priorityOrdering)
+      || !SFU_SIMULCAST_POLICY_VALUES.has(ridNotAvailable)) return undefined;
+  return { preferredRid, priorityOrdering, ridNotAvailable };
+}
+
+function parseStoredSimulcastRids(value) {
+  try {
+    const parsed = value ? JSON.parse(value) : [];
+    return Array.isArray(parsed) && parsed.every((rid) => SFU_RID_RE.test(String(rid))) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function normalizeSubscriptionIntents(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_SFU_SUBSCRIPTIONS) return null;
   const clientIds = new Set();
@@ -1348,11 +1369,13 @@ function normalizeSubscriptionIntents(value) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const clientSubscriptionId = validOpaqueId(raw.clientSubscriptionId, EVENT_ID_RE);
     const publicationId = validOpaqueId(raw.publicationId, CALL_ID_RE);
+    const simulcast = normalizeSimulcastSelection(raw.simulcast);
     if (!clientSubscriptionId || !publicationId
+        || simulcast === undefined
         || clientIds.has(clientSubscriptionId) || publicationIds.has(publicationId)) return null;
     clientIds.add(clientSubscriptionId);
     publicationIds.add(publicationId);
-    normalized.push({ clientSubscriptionId, publicationId });
+    normalized.push({ clientSubscriptionId, publicationId, simulcast });
   }
   return normalized;
 }
@@ -1360,7 +1383,7 @@ function normalizeSubscriptionIntents(value) {
 async function readAvailableMediaPublication(db, callId, publicationId, generation) {
   return await db.prepare(`
     SELECT p.id, p.call_id, p.user_id, p.generation, p.track_name, p.media_kind,
-      s.provider_session_id
+      p.simulcast_rids_json, s.provider_session_id
     FROM human_call_media_publications p
     JOIN human_call_media_sessions s ON s.id = p.media_session_id
     JOIN human_call_members m ON m.call_id = p.call_id AND m.user_id = p.user_id
@@ -1380,7 +1403,7 @@ export async function handleDiscoverHumanCallMediaPublications(request, env, db,
   if (call.terminal_state) return jsonResponse({ success: false, error: '通话已结束，不能发现媒体' }, 409);
 
   const rows = await db.prepare(`
-    SELECT p.id, p.user_id, p.track_name, p.media_kind
+    SELECT p.id, p.user_id, p.track_name, p.media_kind, p.simulcast_rids_json
     FROM human_call_media_publications p
     JOIN human_call_media_sessions s ON s.id = p.media_session_id
     JOIN human_call_members m ON m.call_id = p.call_id AND m.user_id = p.user_id
@@ -1397,6 +1420,7 @@ export async function handleDiscoverHumanCallMediaPublications(request, env, db,
       memberUserId: Number(row.user_id),
       trackName: row.track_name,
       mediaKind: row.media_kind,
+      simulcastRids: parseStoredSimulcastRids(row.simulcast_rids_json),
     })),
   });
   response.headers.set('cache-control', 'private, no-store');
@@ -1476,13 +1500,20 @@ export async function handleSubscribeHumanCallMedia(
       return jsonResponse({ success: false, error: '同批媒体订阅的轨道名称重复，请拆分请求' }, 400);
     }
     trackNames.add(publication.track_name);
-    resolved.push({ ...intent, publication });
+    const simulcastRids = parseStoredSimulcastRids(publication.simulcast_rids_json);
+    if (intent.simulcast && !simulcastRids.includes(intent.simulcast.preferredRid)) {
+      return jsonResponse({ success: false, error: '请求的 simulcast layer 未由该发布广告' }, 409);
+    }
+    if (intent.simulcast && publication.media_kind !== 'video') {
+      return jsonResponse({ success: false, error: '音频发布不支持 simulcast layer 选择' }, 400);
+    }
+    resolved.push({ ...intent, publication, simulcastRids });
   }
 
   const requestFingerprint = await sha256Hex(JSON.stringify({
     generation,
-    subscriptions: resolved.map(({ clientSubscriptionId, publicationId }) => ({
-      clientSubscriptionId, publicationId,
+    subscriptions: resolved.map(({ clientSubscriptionId, publicationId, simulcast }) => ({
+      clientSubscriptionId, publicationId, ...(simulcast ? { simulcast } : {}),
     })),
   }));
   const duplicate = await readMediaOperation(db, mediaSessionId, clientOperationId);
@@ -1549,10 +1580,11 @@ export async function handleSubscribeHumanCallMedia(
           'content-type': 'application/json',
         },
         body: JSON.stringify({
-          tracks: resolved.map(({ publication }) => ({
+          tracks: resolved.map(({ publication, simulcast }) => ({
             location: 'remote',
             sessionId: publication.provider_session_id,
             trackName: publication.track_name,
+            ...(simulcast ? { simulcast } : {}),
           })),
         }),
       },
@@ -1613,6 +1645,8 @@ export async function handleSubscribeHumanCallMedia(
       memberUserId: Number(intent.publication.user_id),
       trackName: intent.publication.track_name,
       mediaKind: intent.publication.media_kind,
+      simulcastRids: intent.simulcastRids,
+      ...(intent.simulcast ? { simulcast: intent.simulcast } : {}),
       receiveMid,
       status: 'ready',
     };
@@ -1644,11 +1678,14 @@ export async function handleSubscribeHumanCallMedia(
   const subscriptionStatements = successfulRows.map((row) => db.prepare(`
     INSERT INTO human_call_media_subscriptions (
       id, media_session_id, operation_id, call_id, user_id, device_id, generation,
-      client_subscription_id, publication_id, receive_mid, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)
+      client_subscription_id, publication_id, receive_mid, preferred_rid,
+      priority_ordering, rid_not_available, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)
   `).bind(
     row.subscriptionId, mediaSessionId, operationId, callId, auth.userId, auth.deviceId,
-    generation, row.clientSubscriptionId, row.publicationId, row.receiveMid, updatedAt, updatedAt,
+    generation, row.clientSubscriptionId, row.publicationId, row.receiveMid,
+    row.simulcast?.preferredRid || null, row.simulcast?.priorityOrdering || null,
+    row.simulcast?.ridNotAvailable || null, updatedAt, updatedAt,
   ));
 
   let persisted;
