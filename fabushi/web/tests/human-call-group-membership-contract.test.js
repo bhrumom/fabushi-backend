@@ -29,8 +29,12 @@ test('group membership handlers are executable exports and stay on canonical cal
   assert.match(handler, /generation !== Number\(call\.generation\)/);
   assert.match(handler, /creator_device_id/);
   assert.match(handler, /MEMBER_ACTIONS/);
-  assert.match(handler, /Number\(target\.id\) === Number\(call\.peer_user_id\)/);
-  assert.match(spec, /legacy `peer_user_id` participant cannot be removed/);
+  assert.match(handler, /JOIN human_call_members m/);
+  assert.match(handler, /m\.state = 'active'/);
+  assert.doesNotMatch(handler, /Number\(target\.id\) === Number\(call\.peer_user_id\)/);
+  assert.match(handler, /'creator', 'active'/);
+  assert.match(handler, /'member', 'active'/);
+  assert.match(spec, /creator\/peer columns remain compatibility metadata, not authorization bypasses/);
   assert.doesNotMatch(handler, /InsecureSkipVerify|go_sfu|raw-TCP/i);
 });
 
@@ -106,4 +110,14 @@ test('SFU publication mutations are durable, serialized, partial-result aware, a
   assert.match(spec, /awaiting_endpoint_apply/);
   assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
   assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
+});
+
+
+test('new calls create active canonical roster and group members use roster-owned device authorization', () => {
+  assert.match(handler, /INSERT INTO human_call_channels[\s\S]*'invited', 0, 0, 0, NULL/);
+  assert.match(handler, /INSERT INTO human_call_members[\s\S]*'creator', 'active'/);
+  assert.match(handler, /INSERT INTO human_call_members[\s\S]*'member', 'active'/);
+  assert.match(handler, /rosterMember = await readCallMember/);
+  assert.match(handler, /rosterMember\.device_id/);
+  assert.match(handler, /JOIN human_call_members m[\s\S]*m\.user_id = \?[\s\S]*m\.state = 'active'/);
 });

@@ -125,12 +125,15 @@ function mapEvent(row) {
 
 async function readAuthorizedChannel(db, callId, authUserId) {
   return await db.prepare(`
-    SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
-      state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
-    FROM human_call_channels
-    WHERE id = ? AND (creator_user_id = ? OR peer_user_id = ?)
+    SELECT c.id, c.creator_user_id, c.peer_user_id, c.creator_device_id, c.peer_device_id,
+      c.state, c.generation, c.event_seq, c.membership_revision, c.terminal_state,
+      c.created_at, c.updated_at
+    FROM human_call_channels c
+    JOIN human_call_members m
+      ON m.call_id = c.id AND m.user_id = ? AND m.state = 'active'
+    WHERE c.id = ?
     LIMIT 1
-  `).bind(callId, authUserId, authUserId).first();
+  `).bind(authUserId, callId).first();
 }
 
 function readTurnConfiguration(env) {
@@ -304,12 +307,33 @@ export async function handleCreateHumanCall(request, env, db) {
 
   const now = new Date().toISOString();
   try {
-    await db.prepare(`
-      INSERT INTO human_call_channels (
-        id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
-        state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, NULL, 'invited', 0, 0, NULL, ?, ?)
-    `).bind(callId, auth.userId, target.id, auth.deviceId, now, now).run();
+    const created = await db.batch([
+      db.prepare(`
+        INSERT INTO human_call_channels (
+          id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
+          state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, NULL, 'invited', 0, 0, 0, NULL, ?, ?)
+      `).bind(callId, auth.userId, target.id, auth.deviceId, now, now),
+      db.prepare(`
+        INSERT INTO human_call_members (
+          call_id, user_id, role, state, device_id, joined_generation,
+          left_generation, created_at, updated_at
+        )
+        SELECT ?, ?, 'creator', 'active', ?, 0, NULL, ?, ?
+        WHERE changes() = 1
+      `).bind(callId, auth.userId, auth.deviceId, now, now),
+      db.prepare(`
+        INSERT INTO human_call_members (
+          call_id, user_id, role, state, device_id, joined_generation,
+          left_generation, created_at, updated_at
+        )
+        SELECT ?, ?, 'member', 'active', NULL, 0, NULL, ?, ?
+        WHERE changes() = 1
+      `).bind(callId, target.id, now, now),
+    ]);
+    if (created.some((result) => Number(result?.meta?.changes || 0) !== 1)) {
+      throw new Error('call roster create conflict');
+    }
   } catch {
     const raced = await db.prepare(`
       SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
@@ -332,13 +356,15 @@ export async function handleListHumanCalls(request, env, db) {
   const url = new URL(request.url);
   const limit = clampLimit(url.searchParams.get('limit'));
   const rows = await db.prepare(`
-    SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
-      state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
-    FROM human_call_channels
-    WHERE creator_user_id = ? OR peer_user_id = ?
-    ORDER BY updated_at DESC, id DESC
+    SELECT c.id, c.creator_user_id, c.peer_user_id, c.creator_device_id, c.peer_device_id,
+      c.state, c.generation, c.event_seq, c.membership_revision, c.terminal_state,
+      c.created_at, c.updated_at
+    FROM human_call_channels c
+    JOIN human_call_members m
+      ON m.call_id = c.id AND m.user_id = ? AND m.state = 'active'
+    ORDER BY c.updated_at DESC, c.id DESC
     LIMIT ?
-  `).bind(auth.userId, auth.userId, limit).all();
+  `).bind(auth.userId, limit).all();
   return jsonResponse({
     success: true,
     calls: (rows.results || []).map(mapChannel),
@@ -430,7 +456,15 @@ export async function handleAppendHumanCallEvent(request, env, db, rawCallId) {
 
   const isCreator = Number(call.creator_user_id) === auth.userId;
   const isPeer = Number(call.peer_user_id) === auth.userId;
-  const claimedDeviceId = isCreator ? call.creator_device_id : call.peer_device_id;
+  const rosterMember = await readCallMember(db, callId, auth.userId);
+  if (rosterMember?.state !== 'active') {
+    return jsonResponse({ success: false, error: '当前账号不是活跃通话成员' }, 403);
+  }
+  const claimedDeviceId = isCreator
+    ? call.creator_device_id
+    : isPeer
+      ? call.peer_device_id
+      : rosterMember.device_id;
   let nextCreatorDeviceId = call.creator_device_id ?? null;
   let nextPeerDeviceId = call.peer_device_id ?? null;
   let nextGeneration = Number(call.generation);
@@ -588,7 +622,6 @@ async function readCallMembers(db, callId) {
 async function readMembershipAuthorizedChannel(db, callId, userId) {
   const call = await readCallChannelById(db, callId);
   if (!call) return null;
-  if (Number(call.creator_user_id) === userId || Number(call.peer_user_id) === userId) return call;
   const member = await readCallMember(db, callId, userId);
   return member?.state === 'active' ? call : null;
 }
@@ -683,10 +716,6 @@ export async function handleMutateHumanCallMember(request, env, db, rawCallId) {
   if (action === 'remove' && currentMember?.state !== 'active') {
     return jsonResponse({ success: false, error: '该用户当前不在通话中' }, 409);
   }
-  if (action === 'remove' && Number(target.id) === Number(call.peer_user_id)) {
-    return jsonResponse({ success: false, error: '被叫方仍由兼容通话授权链管理，完成成员授权迁移前不能移除' }, 409);
-  }
-
   const nextRevision = expectedRevision + 1;
   const now = new Date().toISOString();
   const membershipPredicate = action === 'add'

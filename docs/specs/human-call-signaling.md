@@ -141,7 +141,7 @@ This phase extends the same canonical `human_call_channels` / `human_call_events
 - Only an active authorized participant may read membership.
 - Participant mutation is generation-fenced and compare-and-swap fenced by `membership_revision`.
 - The creator/admin role may add or remove members. Adding a member requires the existing account relationship authorization policy; removing a member cannot silently rewrite historical events.
-- During the durable-roster increment, the legacy `peer_user_id` participant cannot be removed through the roster mutation endpoint because the existing event/read authorization path still treats creator/peer as the one-to-one compatibility pair. Such a removal MUST fail closed until canonical call/event authorization is migrated to active roster membership in the Group/SFU integration descendant; otherwise a logically removed peer would retain legacy access.
+- Canonical call read/list/event/media authorization uses active `human_call_members` rows. The creator/peer columns remain compatibility metadata, not authorization bypasses. Removing the legacy peer through the roster contract removes its access exactly like any other member; re-entry requires an explicit authorized add.
 - Stale generation, stale membership revision, foreign account, conflicting replay or terminal call mutation fails closed.
 
 ### 12.2 Join/media lease boundary
@@ -189,7 +189,7 @@ Full Group/SFU acceptance additionally requires a real shipping backend/SFU comp
 
 ### 12.5 Compliance status
 
-Verified predecessor scope includes durable roster plus exact-head Realtime SFU session allocation. The publication-mutation descendant implements a durable per-session mutation fence, request fingerprints, partial-result persistence, fail-closed uncertain retirement, application-owned publication ids and endpoint-applied acknowledgement. This text does not claim full Group/SFU acceptance until the descendant receives exact-head CI and deployed >=3-participant evidence.
+Verified predecessor scope includes durable roster plus exact-head Realtime SFU session allocation. The current descendant migrates legacy creator/peer read/list/event authorization onto the active canonical roster and atomically creates roster rows for newly created calls; creator/peer columns remain compatibility metadata only. The publication-mutation descendant implements a durable per-session mutation fence, request fingerprints, partial-result persistence, fail-closed uncertain retirement, application-owned publication ids and endpoint-applied acknowledgement. This text does not claim full Group/SFU acceptance until the descendant receives exact-head CI and deployed >=3-participant evidence.
 
 | Requirement | Status | Evidence |
 | --- | --- | --- |
