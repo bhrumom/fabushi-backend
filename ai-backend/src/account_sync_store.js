@@ -585,12 +585,25 @@ export class AccountSyncStore {
     const previous = this.s.getAgent.get(accountId, agentId);
     const normalizedProfile = normalizeAgentProfile({ ...(parseJson(previous?.profileJson, {}) ?? {}), ...profile, agentId }, agentId);
     const normalizedMetadata = normalizeAgentMetadata({ ...(parseJson(previous?.metadataJson, {}) ?? {}), ...metadata, agentId }, agentId);
+    const profileJson = json(normalizedProfile);
+    const metadataJson = json(normalizedMetadata);
+    const unchanged = previous
+      && previous.profileJson === profileJson
+      && previous.metadataJson === metadataJson;
+    if (unchanged) {
+      return {
+        agentId,
+        profile: normalizedProfile,
+        metadata: normalizedMetadata,
+        updatedAtMs: Number(previous.updatedAtMs),
+      };
+    }
     const now = this.now();
     this.s.upsertAgent.run({
       accountId,
       agentId,
-      profileJson: json(normalizedProfile),
-      metadataJson: json(normalizedMetadata),
+      profileJson,
+      metadataJson,
       createdAtMs: Number(previous?.createdAtMs ?? normalizedMetadata.createdAt ?? now),
       updatedAtMs: now,
     });
