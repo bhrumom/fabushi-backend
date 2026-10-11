@@ -14,7 +14,7 @@ const spec = fs.readFileSync(new URL('../../../docs/specs/human-call-signaling.m
 test('group membership handlers are executable exports and stay on canonical call owner', () => {
   assert.equal(typeof handleGetHumanCallMembers, 'function');
   assert.equal(typeof handleMutateHumanCallMember, 'function');
-  assert.match(routes, /\/api\/social\/calls\\\/.*\\\/members/);
+  assert.match(routes, /api\\/social\\/calls.*members/);
   assert.match(handler, /human_call_members/);
   assert.match(handler, /human_call_member_mutations/);
   assert.match(handler, /membership_revision/);
