@@ -6,6 +6,9 @@ const EVENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{3,127}$/;
 const EVENT_KINDS = new Set(['transition', 'signal', 'media', 'participant']);
 const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
 const MEMBER_ACTIONS = new Set(['add', 'remove']);
+const SFU_SESSION_PURPOSES = new Set(['publish', 'subscribe']);
+const SFU_APP_ID_RE = /^[A-Fa-f0-9]{32}$/;
+const SFU_PROVIDER_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,256}$/;
 
 async function requireCallAuth(request, env, db) {
   const auth = await requireAuthIdentity(request, env, db);
@@ -148,6 +151,74 @@ function validIceServers(value) {
     if (entry.credential != null && (typeof entry.credential !== 'string' || entry.credential.length > 2048)) return false;
     return true;
   });
+}
+
+function readSfuConfiguration(env) {
+  const appId = String(env?.FABUSHI_REALTIME_SFU_APP_ID || '').trim();
+  const appSecret = String(env?.FABUSHI_REALTIME_SFU_APP_SECRET || '').trim();
+  if (!SFU_APP_ID_RE.test(appId) || appSecret.length < 16 || appSecret.length > 512) return null;
+  return { appId, appSecret };
+}
+
+function mapMediaSession(row) {
+  return {
+    mediaSessionId: row.id,
+    callId: row.call_id,
+    userId: Number(row.user_id),
+    deviceId: row.device_id,
+    generation: Number(row.generation),
+    purpose: row.purpose,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function readMediaSessionByClientRequest(db, callId, userId, deviceId, clientSessionId) {
+  return await db.prepare(`
+    SELECT id, call_id, user_id, device_id, generation, purpose, client_session_id,
+      provider_session_id, status, last_error_code, created_at, updated_at
+    FROM human_call_media_sessions
+    WHERE call_id = ? AND user_id = ? AND device_id = ? AND client_session_id = ?
+    LIMIT 1
+  `).bind(callId, userId, deviceId, clientSessionId).first();
+}
+
+async function setMediaSessionStatus(db, mediaSessionId, expectedStatus, status, {
+  providerSessionId = null,
+  errorCode = null,
+} = {}) {
+  const now = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE human_call_media_sessions
+    SET status = ?, provider_session_id = COALESCE(?, provider_session_id),
+      last_error_code = ?, updated_at = ?
+    WHERE id = ? AND status = ?
+  `).bind(status, providerSessionId, errorCode, now, mediaSessionId, expectedStatus).run();
+  return Number(result?.meta?.changes || 0) === 1;
+}
+
+async function claimMediaDeviceIfNeeded(db, call, member, auth) {
+  const isCreator = Number(call.creator_user_id) === auth.userId;
+  const isPeer = Number(call.peer_user_id) === auth.userId;
+  if (isCreator || isPeer) {
+    const claimed = isCreator ? call.creator_device_id : call.peer_device_id;
+    if (claimed == null || claimed !== auth.deviceId) return false;
+    return true;
+  }
+  if (member?.state !== 'active') return false;
+  if (member.device_id != null) return member.device_id === auth.deviceId;
+  const now = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE human_call_members
+    SET device_id = ?, joined_generation = ?, updated_at = ?
+    WHERE call_id = ? AND user_id = ? AND state = 'active'
+      AND device_id IS NULL AND joined_generation <= ?
+  `).bind(
+    auth.deviceId, Number(call.generation), now,
+    call.id, auth.userId, Number(call.generation),
+  ).run();
+  return Number(result?.meta?.changes || 0) === 1;
 }
 
 export async function handleGetHumanCallIceServers(request, env, db, fetchImpl = fetch) {
@@ -682,3 +753,142 @@ export async function handleMutateHumanCallMember(request, env, db, rawCallId) {
   }, 201);
 }
 
+export async function handleCreateHumanCallMediaSession(request, env, db, rawCallId, fetchImpl = fetch) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const config = readSfuConfiguration(env);
+  if (!config) {
+    return jsonResponse({ success: false, error: '群组通话媒体服务尚未配置' }, 503);
+  }
+  const callId = validOpaqueId(rawCallId, CALL_ID_RE);
+  if (!callId) return jsonResponse({ success: false, error: '通话编号无效' }, 400);
+  const call = await readMembershipAuthorizedChannel(db, callId, auth.userId);
+  if (!call) return jsonResponse({ success: false, error: '通话不存在或无权访问' }, 404);
+  if (call.terminal_state) {
+    return jsonResponse({ success: false, error: '通话已结束，不能创建媒体会话' }, 409);
+  }
+  const member = await readCallMember(db, callId, auth.userId);
+  if (member?.state !== 'active') {
+    return jsonResponse({ success: false, error: '当前账号不是活跃通话成员' }, 403);
+  }
+
+  let body;
+  try { body = await request.json(); } catch {
+    return jsonResponse({ success: false, error: '媒体会话请求格式无效' }, 400);
+  }
+  const clientSessionId = validOpaqueId(body.clientSessionId, EVENT_ID_RE);
+  const generation = parseGeneration(body.generation);
+  const purpose = String(body.purpose || '').trim();
+  if (!clientSessionId) return jsonResponse({ success: false, error: '媒体会话请求编号无效' }, 400);
+  if (generation == null || generation !== Number(call.generation)) {
+    return jsonResponse({ success: false, error: '媒体会话通话代际已过期' }, 409);
+  }
+  if (!SFU_SESSION_PURPOSES.has(purpose)) {
+    return jsonResponse({ success: false, error: '媒体会话用途无效' }, 400);
+  }
+
+  if (!(await claimMediaDeviceIfNeeded(db, call, member, auth))) {
+    return jsonResponse({ success: false, error: '当前设备未持有该成员的媒体会话所有权' }, 409);
+  }
+
+  const existing = await readMediaSessionByClientRequest(
+    db, callId, auth.userId, auth.deviceId, clientSessionId,
+  );
+  if (existing) {
+    if (Number(existing.generation) !== generation || existing.purpose !== purpose) {
+      return jsonResponse({ success: false, error: '重复媒体会话请求与已保存参数冲突' }, 409);
+    }
+    if (existing.status === 'ready') {
+      const response = jsonResponse({ success: true, deduplicated: true, mediaSession: mapMediaSession(existing) });
+      response.headers.set('cache-control', 'private, no-store');
+      return response;
+    }
+    if (existing.status === 'pending' || existing.status === 'uncertain') {
+      return jsonResponse({
+        success: false,
+        error: '媒体会话分配结果尚不确定，禁止自动重试',
+        mediaSession: mapMediaSession(existing),
+      }, 409);
+    }
+    return jsonResponse({
+      success: false,
+      error: '该媒体会话请求已失败或关闭，请使用新的请求编号',
+      mediaSession: mapMediaSession(existing),
+    }, 409);
+  }
+
+  const mediaSessionId = `media_${crypto.randomUUID().replaceAll('-', '')}`;
+  const now = new Date().toISOString();
+  try {
+    await db.prepare(`
+      INSERT INTO human_call_media_sessions (
+        id, call_id, user_id, device_id, generation, purpose, client_session_id,
+        provider_session_id, status, last_error_code, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, ?, ?)
+    `).bind(
+      mediaSessionId, callId, auth.userId, auth.deviceId, generation, purpose,
+      clientSessionId, now, now,
+    ).run();
+  } catch {
+    const raced = await readMediaSessionByClientRequest(
+      db, callId, auth.userId, auth.deviceId, clientSessionId,
+    );
+    if (raced?.status === 'ready') {
+      const response = jsonResponse({ success: true, deduplicated: true, mediaSession: mapMediaSession(raced) });
+      response.headers.set('cache-control', 'private, no-store');
+      return response;
+    }
+    return jsonResponse({
+      success: false,
+      error: '媒体会话分配发生并发冲突，请先同步状态',
+      ...(raced ? { mediaSession: mapMediaSession(raced) } : {}),
+    }, 409);
+  }
+
+  let upstream;
+  try {
+    upstream = await fetchImpl(
+      `https://rtc.live.cloudflare.com/v1/apps/${encodeURIComponent(config.appId)}/sessions/new?correlationId=${encodeURIComponent(mediaSessionId)}`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${config.appSecret}` },
+      },
+    );
+  } catch {
+    await setMediaSessionStatus(db, mediaSessionId, 'pending', 'uncertain', { errorCode: 'network_outcome_unknown' });
+    return jsonResponse({
+      success: false,
+      error: '媒体会话分配结果未知，禁止自动重试',
+      mediaSession: {
+        mediaSessionId, callId, userId: auth.userId, deviceId: auth.deviceId,
+        generation, purpose, status: 'uncertain', createdAt: now, updatedAt: now,
+      },
+    }, 502);
+  }
+
+  let payload;
+  try { payload = await upstream.json(); } catch { payload = null; }
+  const providerSessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : '';
+  if (!upstream.ok || !SFU_PROVIDER_SESSION_ID_RE.test(providerSessionId)) {
+    await setMediaSessionStatus(db, mediaSessionId, 'pending', 'failed', {
+      errorCode: `provider_http_${upstream.status}`,
+    });
+    return jsonResponse({ success: false, error: '媒体会话服务拒绝了分配请求' }, 502);
+  }
+
+  if (!(await setMediaSessionStatus(db, mediaSessionId, 'pending', 'ready', { providerSessionId }))) {
+    return jsonResponse({
+      success: false,
+      error: '媒体会话已由并发状态变更接管，请同步后继续',
+    }, 409);
+  }
+  const ready = await readMediaSessionByClientRequest(
+    db, callId, auth.userId, auth.deviceId, clientSessionId,
+  );
+  if (!ready || ready.status !== 'ready') {
+    return jsonResponse({ success: false, error: '媒体会话保存后无法读取' }, 500);
+  }
+  const response = jsonResponse({ success: true, deduplicated: false, mediaSession: mapMediaSession(ready) }, 201);
+  response.headers.set('cache-control', 'private, no-store');
+  return response;
+}

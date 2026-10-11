@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
+  handleCreateHumanCallMediaSession,
   handleGetHumanCallMembers,
   handleMutateHumanCallMember,
 } from '../src/handlers/call-signaling.js';
@@ -9,6 +10,7 @@ import {
 const handler = fs.readFileSync(new URL('../src/handlers/call-signaling.js', import.meta.url), 'utf8');
 const routes = fs.readFileSync(new URL('../src/routes/community-routes.js', import.meta.url), 'utf8');
 const migration = fs.readFileSync(new URL('../migrations/20261012_human_call_group_membership.sql', import.meta.url), 'utf8');
+const mediaMigration = fs.readFileSync(new URL('../migrations/20261012_human_call_sfu_sessions.sql', import.meta.url), 'utf8');
 const spec = fs.readFileSync(new URL('../../../docs/specs/human-call-signaling.md', import.meta.url), 'utf8');
 
 test('group membership handlers are executable exports and stay on canonical call owner', () => {
@@ -47,3 +49,24 @@ test('spec keeps real SFU media routing fail-closed and outside this roster incr
   assert.match(spec, /MUST fail closed rather than returning fake routes/);
   assert.match(spec, />=3 participant production E2E/);
 });
+
+test('SFU session allocation is backend-owned, durable, and fail-closed on uncertain outcomes', () => {
+  assert.equal(typeof handleCreateHumanCallMediaSession, 'function');
+  assert.ok(routes.includes('/media'));
+  assert.ok(routes.includes('/sessions'));
+  assert.match(handler, /FABUSHI_REALTIME_SFU_APP_ID/);
+  assert.match(handler, /FABUSHI_REALTIME_SFU_APP_SECRET/);
+  assert.match(handler, /human_call_media_sessions/);
+  assert.match(handler, /status === 'pending' \|\| existing\.status === 'uncertain'/);
+  assert.match(handler, /network_outcome_unknown/);
+  assert.match(handler, /禁止自动重试/);
+  assert.match(handler, /\/sessions\/new\?correlationId=/);
+  assert.match(handler, /Authorization: `Bearer \$\{config\.appSecret\}`/);
+  assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
+  assert.match(mediaMigration, /UNIQUE \(call_id, user_id, device_id, client_session_id\)/);
+  assert.match(mediaMigration, /provider_session_id TEXT UNIQUE/);
+  assert.match(mediaMigration, /'pending', 'ready', 'uncertain', 'failed', 'closed'/);
+  assert.match(spec, /provider `sessionId` is backend-private/);
+  assert.match(spec, /MUST NOT issue another provider allocation/);
+});
+

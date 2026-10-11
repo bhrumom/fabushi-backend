@@ -30,6 +30,7 @@ import {
 import {
   handleAppendHumanCallEvent,
   handleCreateHumanCall,
+  handleCreateHumanCallMediaSession,
   handleGetHumanCall,
   handleGetHumanCallIceServers,
   handleGetHumanCallMembers,
@@ -79,6 +80,10 @@ export async function routeCommunityRequest({ pathname, method, request, env, db
   if (pathname === '/api/social/calls' && method === 'POST') return handleCreateHumanCall(request, env, db);
   if (pathname === '/api/social/calls' && method === 'GET') return handleListHumanCalls(request, env, db);
   if (pathname === '/api/social/calls/ice' && method === 'GET') return handleGetHumanCallIceServers(request, env, db);
+  const callMediaSessionMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions$/);
+  if (callMediaSessionMatch && method === 'POST') {
+    return handleCreateHumanCallMediaSession(request, env, db, callMediaSessionMatch[1]);
+  }
   const callMembersMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/members$/);
   if (callMembersMatch && method === 'GET') return handleGetHumanCallMembers(request, env, db, callMembersMatch[1]);
   if (callMembersMatch && method === 'POST') return handleMutateHumanCallMember(request, env, db, callMembersMatch[1]);
