@@ -28,12 +28,13 @@ function configuredGlobalDharmaFabappRelease(environment = process.env) {
     Object.entries(GLOBAL_DHARMA_FABAPP_ENV)
       .map(([key, name]) => [key, String(environment[name] ?? '').trim()]),
   );
-  const configuredCount = Object.values(raw).filter(Boolean).length;
-  if (configuredCount === 0) return null;
-  if (configuredCount !== Object.keys(GLOBAL_DHARMA_FABAPP_ENV).length) {
+  const artifactKeys = ['sourceRef', 'url', 'sha256', 'sizeBytes'];
+  const artifactConfiguredCount = artifactKeys.filter((key) => Boolean(raw[key])).length;
+  if (artifactConfiguredCount === 0) return null;
+  if (artifactConfiguredCount !== artifactKeys.length || !raw.keyId || !raw.rawPublicKeyBase64Url) {
     throw new MiniAppMarketplaceError(
       'INVALID_GLOBAL_DHARMA_FABAPP_RELEASE',
-      'Global Dharma .fabapp release metadata must be configured atomically',
+      'Global Dharma .fabapp artifact metadata and signer trust must be configured atomically',
     );
   }
   if (!/^[a-f0-9]{40}$/i.test(raw.sourceRef)) {
@@ -393,6 +394,9 @@ export function marketplaceReleaseResponse(manifest, platform = 'desktop') {
       runtimeForm,
       permissions: manifest.permissions,
       artifacts,
+      ...(manifest.distribution.fabappTrust
+        ? { fabappTrust: manifest.distribution.fabappTrust }
+        : {}),
       install,
     },
     source: {
