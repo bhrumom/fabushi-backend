@@ -171,6 +171,12 @@ function createDb({ failNextEventInsert = false } = {}) {
           }
           return { meta: { changes: 0 } };
         }
+        if (q.startsWith('UPDATE human_call_media_sessions')
+            && q.includes("mutation_state = 'retired'")) {
+          // Phase-1 signaling behavior fixtures intentionally contain no SFU media rows.
+          // Lifecycle retirement is therefore a valid no-op, matching D1 UPDATE semantics.
+          return { meta: { changes: 0 } };
+        }
         if (q.startsWith('INSERT INTO human_call_events')) {
           if (q.includes('WHERE changes() = 1') && state.lastChanges !== 1) {
             return { meta: { changes: 0 } };
