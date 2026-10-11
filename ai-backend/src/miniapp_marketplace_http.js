@@ -608,6 +608,17 @@ export function createMiniAppMarketplaceRouter({
     res.json({ appeal });
   }));
 
+  router.post('/v1/extensions/review/fabapp/sign', releaseRoute(async (req, res) => {
+    if (!reviewAuthorized(req)) {
+      throw new ExtensionReleaseStoreError(
+        'REVIEW_AUTH_REQUIRED',
+        'marketplace reviewer authorization is required',
+      );
+    }
+    const signed = extensionSigningStore.signFabAppManifest(req.body?.manifest);
+    res.json(signed);
+  }));
+
   router.get('/v1/extensions/trust', releaseRoute(async (_req, res) => {
     res.json({ trust: extensionSigningStore.trustFeed() });
   }));
