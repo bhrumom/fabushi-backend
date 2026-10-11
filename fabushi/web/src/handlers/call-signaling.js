@@ -606,6 +606,9 @@ export async function handleMutateHumanCallMember(request, env, db, rawCallId) {
   if (action === 'remove' && currentMember?.state !== 'active') {
     return jsonResponse({ success: false, error: '该用户当前不在通话中' }, 409);
   }
+  if (action === 'remove' && Number(target.id) === Number(call.peer_user_id)) {
+    return jsonResponse({ success: false, error: '被叫方仍由兼容通话授权链管理，完成成员授权迁移前不能移除' }, 409);
+  }
 
   const nextRevision = expectedRevision + 1;
   const now = new Date().toISOString();
