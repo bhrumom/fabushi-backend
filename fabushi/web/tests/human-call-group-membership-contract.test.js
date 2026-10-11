@@ -172,6 +172,8 @@ test('SFU teardown is durable, idempotent, partial-result aware, and generation-
   assert.match(handler, /force: true/);
   assert.match(handler, /track_close_network_outcome_unknown/);
   assert.match(handler, /track_close_persist_conflict/);
+  assert.match(handler, /errorCode !== 'close_track_error'/);
+  assert.match(handler, /reconciliation: 'already_absent'/);
   assert.match(handler, /mutation_state = 'retired'/);
   assert.match(handler, /status === 'closed'/);
   assert.match(handler, /\['ready', 'uncertain'\]\.includes\(mediaSession\.status\)/);

@@ -2414,16 +2414,18 @@ export async function handleCloseHumanCallMediaSession(
 
     if (item.errorCode) {
       const errorCode = sanitizeProviderErrorCode(item.errorCode);
-      results.push({ mid: track.mid, kind: track.kind, status: 'failed', errorCode });
-      if (!(await finalizeMediaTeardown(db, mediaSessionId, teardownId, 'failed', results, errorCode))) {
-        return jsonResponse({ success: false, error: '媒体关闭失败状态保存冲突，请重新同步' }, 409);
+      if (errorCode !== 'close_track_error') {
+        results.push({ mid: track.mid, kind: track.kind, status: 'failed', errorCode });
+        if (!(await finalizeMediaTeardown(db, mediaSessionId, teardownId, 'failed', results, errorCode))) {
+          return jsonResponse({ success: false, error: '媒体关闭失败状态保存冲突，请重新同步' }, 409);
+        }
+        return jsonResponse({
+          success: false,
+          error: '媒体服务拒绝关闭至少一个轨道；已保留部分关闭结果并要求显式恢复',
+          teardown: { clientTeardownId, generation, status: 'failed' },
+          results,
+        }, 502);
       }
-      return jsonResponse({
-        success: false,
-        error: '媒体服务拒绝关闭至少一个轨道；已保留部分关闭结果并要求显式恢复',
-        teardown: { clientTeardownId, generation, status: 'failed' },
-        results,
-      }, 502);
     }
 
     if (!(await persistClosedMediaTrack(db, track, new Date().toISOString()))) {
@@ -2438,7 +2440,12 @@ export async function handleCloseHumanCallMediaSession(
         results,
       }, 502);
     }
-    results.push({ mid: track.mid, kind: track.kind, status: 'closed' });
+    results.push({
+      mid: track.mid,
+      kind: track.kind,
+      status: 'closed',
+      ...(item.errorCode ? { reconciliation: 'already_absent' } : {}),
+    });
   }
 
   if (!(await finalizeMediaTeardown(db, mediaSessionId, teardownId, 'applied', results))) {
