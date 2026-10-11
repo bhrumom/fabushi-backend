@@ -6,9 +6,11 @@ on:
     paths:
       - "docs/specs/unified-extension-registry-v1.md"
       - "ai-backend/src/extension_registry.js"
+      - "ai-backend/src/extension_publisher_store.js"
       - "ai-backend/src/account_sync_store.js"
       - "ai-backend/src/miniapp_marketplace_http.js"
       - "ai-backend/test/extension_registry.test.js"
+      - "ai-backend/test/extension_publisher_store.test.js"
       - "ai-backend/test/account_sync_store.test.js"
       - "ai-backend/test/miniapp_marketplace.test.js"
       - "ai-backend/test/miniapp_marketplace_http.test.js"
@@ -39,6 +41,6 @@ jobs:
       - name: Validate backend syntax
         run: npm run check
       - name: Verify unified registry and existing marketplace contracts
-        run: node --test test/extension_registry.test.js test/account_sync_store.test.js test/miniapp_marketplace.test.js test/miniapp_marketplace_http.test.js
+        run: node --test test/extension_registry.test.js test/extension_publisher_store.test.js test/account_sync_store.test.js test/miniapp_marketplace.test.js test/miniapp_marketplace_http.test.js
       - name: Bind evidence to exact source
         run: git rev-parse HEAD >> "$GITHUB_STEP_SUMMARY"

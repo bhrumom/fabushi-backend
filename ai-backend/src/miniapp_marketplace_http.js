@@ -8,6 +8,10 @@ import {
   ExtensionRegistryError,
   readExtension,
 } from './extension_registry.js';
+import {
+  ExtensionPublisherStore,
+  ExtensionPublisherStoreError,
+} from './extension_publisher_store.js';
 import { AccountSyncStore } from './account_sync_store.js';
 import { readGlobalDharmaEntitlement } from './global_dharma_entitlement.js';
 import { GlobalDharmaRuntimeStore } from './global_dharma_runtime_store.js';
@@ -76,6 +80,7 @@ export function createMiniAppMarketplaceRouter({
     seed: officialMiniAppPackageSeeds(),
   });
   const syncStore = accountSyncStore ?? new AccountSyncStore({ dataDir: resolvedDataDir });
+  const extensionPublisherStore = new ExtensionPublisherStore({ db: syncStore.db });
   const globalDharmaRuntimeStore = new GlobalDharmaRuntimeStore({ accountSyncStore: syncStore });
   const router = express.Router();
   router.use(express.json({ limit: MAX_JSON_BYTES }));
@@ -184,6 +189,93 @@ export function createMiniAppMarketplaceRouter({
       }
     };
   }
+
+  function publisherErrorStatus(error) {
+    if (!(error instanceof ExtensionPublisherStoreError)) return 500;
+    if (error.code === 'NAMESPACE_NOT_FOUND') return 404;
+    if (error.code === 'NAMESPACE_CONFLICT' || error.code === 'TRANSFER_NOT_PENDING') return 409;
+    if (error.code === 'NAMESPACE_FORBIDDEN' || error.code === 'TRANSFER_FORBIDDEN') return 403;
+    return 400;
+  }
+
+  function publisherRoute(handler) {
+    return async (req, res) => {
+      try {
+        await handler(req, res);
+      } catch (error) {
+        const status = publisherErrorStatus(error);
+        res.status(status).json({
+          success: false,
+          error: {
+            code: error?.code ?? 'EXTENSION_PUBLISHER_ERROR',
+            message: status >= 500 ? 'Extension publisher operation failed' : String(error?.message ?? error),
+          },
+        });
+      }
+    };
+  }
+
+  router.get('/v1/extensions/namespaces/:namespace', publisherRoute(async (req, res) => {
+    const namespace = extensionPublisherStore.getPublic(req.params.namespace);
+    if (!namespace) {
+      throw new ExtensionPublisherStoreError('NAMESPACE_NOT_FOUND', 'namespace was not found');
+    }
+    res.json({ namespace });
+  }));
+
+  router.get('/v1/extensions/publisher/namespaces', publisherRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    res.json({ namespaces: extensionPublisherStore.listOwned(identity.accountId) });
+  }));
+
+  router.post('/v1/extensions/publisher/namespaces', publisherRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const namespace = extensionPublisherStore.create({
+      namespace: req.body?.namespace,
+      displayName: req.body?.displayName,
+      ownerAccountId: identity.accountId,
+    });
+    res.status(201).json({ namespace });
+  }));
+
+  router.patch('/v1/extensions/publisher/namespaces/:namespace', publisherRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const namespace = extensionPublisherStore.update({
+      namespace: req.params.namespace,
+      actorAccountId: identity.accountId,
+      displayName: req.body?.displayName,
+    });
+    res.json({ namespace });
+  }));
+
+  router.post('/v1/extensions/publisher/namespaces/:namespace/transfer', publisherRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const transfer = extensionPublisherStore.proposeTransfer({
+      namespace: req.params.namespace,
+      actorAccountId: identity.accountId,
+      targetAccountId: req.body?.targetAccountId,
+    });
+    res.status(201).json({ transfer });
+  }));
+
+  router.post('/v1/extensions/publisher/namespaces/:namespace/transfer/accept', publisherRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const namespace = extensionPublisherStore.acceptTransfer({
+      namespace: req.params.namespace,
+      actorAccountId: identity.accountId,
+      transferId: req.body?.transferId,
+    });
+    res.json({ namespace });
+  }));
+
+  router.delete('/v1/extensions/publisher/namespaces/:namespace/transfer', publisherRoute(async (req, res) => {
+    const identity = await identityFor(req, { accountRequired: true });
+    const namespace = extensionPublisherStore.cancelTransfer({
+      namespace: req.params.namespace,
+      actorAccountId: identity.accountId,
+    });
+    res.json({ namespace });
+  }));
 
   router.get('/v1/extensions', extensionRoute(async (req, res) => {
     const payload = browseExtensions(marketplace, {
@@ -540,7 +632,7 @@ export function createMiniAppMarketplaceRouter({
     });
   }));
 
-  return { router, marketplace, accountSyncStore: syncStore, globalDharmaRuntimeStore };
+  return { router, marketplace, accountSyncStore: syncStore, extensionPublisherStore, globalDharmaRuntimeStore };
 }
 
 export function registerMiniAppMarketplaceRoutes(app, options = {}) {
