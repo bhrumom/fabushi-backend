@@ -152,6 +152,14 @@ The service contract represents media identities source-neutrally: member/partic
 
 Until a real production SFU provider/session API is configured and exercised, join/media-route endpoints remain blocked and MUST fail closed rather than returning fake routes, TURN-only success, local in-memory peers or the tgcalls Go test SFU.
 
+The production provider contract is Cloudflare Realtime SFU Connection API. Deployment binds `FABUSHI_REALTIME_SFU_APP_ID` as a non-secret application identifier and `FABUSHI_REALTIME_SFU_APP_SECRET` as a Worker secret. The App Secret MUST never appear in renderer responses, logs, URLs returned to clients, or persisted call event payloads.
+
+The first control-plane endpoint is `POST /api/social/calls/:callId/media/sessions` with `{ clientSessionId, generation, purpose }`, where purpose is `publish` or `subscribe`. It authenticates the account/device, requires active durable membership and the current reconnect generation, then persists an application-owned opaque media-session id before calling Cloudflare `POST /v1/apps/{appId}/sessions/new`. The provider `sessionId` is backend-private; clients receive only the application media-session id.
+
+Session allocation is explicitly outcome-aware. The durable state is `pending | ready | uncertain | failed | closed`. A repeated `clientSessionId` returns the existing `ready` application session, but a `pending` or `uncertain` allocation MUST fail closed and MUST NOT issue another provider allocation because Cloudflare cannot recover a lost `sessions/new` result by correlation id. A known provider rejection may become `failed` and requires a new client request id.
+
+Subsequent publication/subscription endpoints MUST accept application publication/media-session ids rather than arbitrary provider session ids. The backend resolves provider locators only after membership/ownership authorization. Per-provider-session mutations are serialized through one logical queue, and an operation requiring immediate renegotiation must complete its answer before the next mutation.
+
 ### 12.3 Ordering, recovery and teardown
 
 Membership mutations and media route lifecycle participate in the existing ordered/idempotent call event stream. A restarted client can replay channel state plus membership revision and rebuild only the current reconnect generation. Old member/device claims, leases, publications and subscriptions cannot resurrect after a newer generation or terminal call state.
