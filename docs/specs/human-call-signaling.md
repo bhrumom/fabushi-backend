@@ -141,6 +141,7 @@ This phase extends the same canonical `human_call_channels` / `human_call_events
 - Only an active authorized participant may read membership.
 - Participant mutation is generation-fenced and compare-and-swap fenced by `membership_revision`.
 - The creator/admin role may add or remove members. Adding a member requires the existing account relationship authorization policy; removing a member cannot silently rewrite historical events.
+- During the durable-roster increment, the legacy `peer_user_id` participant cannot be removed through the roster mutation endpoint because the existing event/read authorization path still treats creator/peer as the one-to-one compatibility pair. Such a removal MUST fail closed until canonical call/event authorization is migrated to active roster membership in the Group/SFU integration descendant; otherwise a logically removed peer would retain legacy access.
 - Stale generation, stale membership revision, foreign account, conflicting replay or terminal call mutation fails closed.
 
 ### 12.2 Join/media lease boundary
