@@ -182,6 +182,10 @@ function mapMediaSession(row) {
     generation: Number(row.generation),
     purpose: row.purpose,
     status: row.status,
+    ...(row.mutation_state != null ? { mutationState: row.mutation_state } : {}),
+    ...(row.mutation_state === 'retired' && row.status !== 'closed'
+      ? { cleanupRequired: true }
+      : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -855,6 +859,35 @@ export async function handleMutateHumanCallMember(request, env, db, rawCallId) {
       },
     } : {}),
   }, 201);
+}
+
+export async function handleListHumanCallMediaSessionsForRecovery(request, env, db, rawCallId) {
+  const auth = await requireCallAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const callId = validOpaqueId(rawCallId, CALL_ID_RE);
+  if (!callId) return jsonResponse({ success: false, error: '通话编号无效' }, 400);
+
+  let rows;
+  try {
+    rows = await db.prepare(`
+      SELECT id, call_id, user_id, device_id, generation, purpose,
+        status, mutation_state, created_at, updated_at
+      FROM human_call_media_sessions
+      WHERE call_id = ? AND user_id = ? AND device_id = ?
+        AND status IN ('pending', 'ready', 'uncertain')
+      ORDER BY generation DESC, created_at DESC, id DESC
+      LIMIT 64
+    `).bind(callId, auth.userId, auth.deviceId).all();
+  } catch {
+    return jsonResponse({ success: false, error: '媒体会话恢复状态读取失败' }, 503);
+  }
+
+  const response = jsonResponse({
+    success: true,
+    mediaSessions: (rows.results || []).map(mapMediaSession),
+  });
+  response.headers.set('cache-control', 'private, no-store');
+  return response;
 }
 
 export async function handleCreateHumanCallMediaSession(request, env, db, rawCallId, fetchImpl = fetch) {
