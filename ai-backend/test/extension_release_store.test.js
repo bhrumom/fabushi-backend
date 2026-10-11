@@ -14,7 +14,10 @@ import {
   ExtensionReleaseStoreError,
 } from '../src/extension_release_store.js';
 import { createMiniAppMarketplaceRouter } from '../src/miniapp_marketplace_http.js';
-import { verifyReleaseSignatureEnvelope } from '../src/extension_signing_store.js';
+import {
+  verifyReleaseSignatureEnvelope,
+  verifyTrustFeedEnvelope,
+} from '../src/extension_signing_store.js';
 
 function descriptor(version = '1.0.0') {
   return {
@@ -452,5 +455,43 @@ test('HTTP workflow gates public discovery on authenticated publisher and review
 
     const afterYank = await fetch(`${baseUrl}/v1/extensions?q=offline%20notes`);
     assert.deepEqual((await afterYank.json()).entries.filter((item) => item.id.startsWith('acme-labs/')), []);
+  });
+});
+
+
+test('HTTP trust feed is signed and current signer revocation requires rotation', async () => {
+  await withServer(async (baseUrl) => {
+    const feedResponse = await fetch(`${baseUrl}/v1/extensions/trust`);
+    assert.equal(feedResponse.status, 200);
+    const feed = (await feedResponse.json()).trust;
+    assert.equal(feed.protocol, 'fabushi.extension-trust-feed.v1');
+    assert.equal(verifyTrustFeedEnvelope(feed, { nowMs: Date.now() }), true);
+
+    const unauthorized = await fetch(
+      `${baseUrl}/v1/extensions/review/trust/${encodeURIComponent(feed.keyId)}/${feed.trustEpoch}/revoke`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'attempt without review authority' }),
+      },
+    );
+    assert.equal(unauthorized.status, 403);
+
+    const selfRevoke = await fetch(
+      `${baseUrl}/v1/extensions/review/trust/${encodeURIComponent(feed.keyId)}/${feed.trustEpoch}/revoke`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-fabushi-marketplace-review-token': 'r'.repeat(48),
+        },
+        body: JSON.stringify({ reason: 'compromise' }),
+      },
+    );
+    assert.equal(selfRevoke.status, 409);
+    assert.equal((await selfRevoke.json()).error.code, 'ACTIVE_SIGNER_REVOCATION_REQUIRES_ROTATION');
+
+    const stillValid = (await (await fetch(`${baseUrl}/v1/extensions/trust`)).json()).trust;
+    assert.equal(verifyTrustFeedEnvelope(stillValid, { nowMs: Date.now() }), true);
   });
 });

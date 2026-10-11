@@ -89,6 +89,7 @@ export class ExtensionArtifactStore {
     this.db = db;
     this.publisherStore = publisherStore;
     this.releaseStore = releaseStore;
+    this.signingStore = null;
     this.now = now;
     this.maxArtifactBytes = Math.max(1, Number(maxArtifactBytes) || MAX_ARTIFACT_BYTES);
     this.casRoot = path.resolve(dataDir ?? process.cwd(), 'extensions', 'artifacts', 'sha256');
@@ -176,7 +177,8 @@ export class ExtensionArtifactStore {
           AND version = @version AND artifact_id = @artifactId
       `),
       approvedDigest: this.db.prepare(`
-        SELECT a.digest, a.size_bytes AS sizeBytes
+        SELECT a.digest, a.size_bytes AS sizeBytes,
+          a.kind, a.namespace, a.name, a.version
         FROM extension_release_artifacts a
         INNER JOIN extension_releases r
           ON r.kind = a.kind
@@ -184,7 +186,7 @@ export class ExtensionArtifactStore {
           AND r.name = a.name
           AND r.version = a.version
         WHERE a.digest = ? AND a.scan_state = 'passed' AND r.state = 'approved'
-        LIMIT 1
+        ORDER BY a.kind, a.namespace, a.name, a.version
       `),
       auditInsert: this.db.prepare(`
         INSERT INTO extension_artifact_audit (
@@ -192,6 +194,11 @@ export class ExtensionArtifactStore {
         ) VALUES (@digest, @action, @actor, @payloadJson, @occurredAtMs)
       `),
     };
+  }
+
+  setSigningStore(signingStore) {
+    this.signingStore = signingStore;
+    return this;
   }
 
   #casPath(digest) {
@@ -360,7 +367,16 @@ export class ExtensionArtifactStore {
     if (!DIGEST_PATTERN.test(normalized)) {
       throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_DIGEST', 'artifact digest is invalid');
     }
-    const row = this.s.approvedDigest.get(normalized);
+    const rows = this.s.approvedDigest.all(normalized);
+    if (rows.length === 0) return null;
+    const row = this.signingStore
+      ? rows.find((candidate) => this.signingStore.getTrustedSignature({
+          kind: candidate.kind,
+          namespace: candidate.namespace,
+          name: candidate.name,
+          version: candidate.version,
+        }) != null)
+      : rows[0];
     if (!row) return null;
     return {
       digest: normalized,

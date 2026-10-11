@@ -12,6 +12,7 @@ import {
   ExtensionSigningStoreError,
   loadConfiguredMarketplaceSigner,
   verifyReleaseSignatureEnvelope,
+  verifyTrustFeedEnvelope,
 } from '../src/extension_signing_store.js';
 
 function signer(keyId = 'marketplace-test-1', trustEpoch = 1) {
@@ -190,6 +191,144 @@ test('missing managed signer fails closed instead of generating a trust key', ()
       }),
       (error) => error instanceof ExtensionSigningStoreError
         && error.code === 'SIGNING_KEY_REQUIRED',
+    );
+  } finally {
+    scope.close();
+  }
+});
+
+
+test('signed trust feed verifies, rejects tampering, and fails closed after expiry', () => {
+  const scope = dbFixture();
+  try {
+    let nowMs = 10_000;
+    const activeSigner = signer('feed-key', 3);
+    const store = new ExtensionSigningStore({
+      db: scope.accountStore.db,
+      signer: activeSigner,
+      now: () => nowMs,
+    });
+    const envelope = store.trustFeed({ ttlMs: 60_000 });
+    assert.equal(envelope.protocol, 'fabushi.extension-trust-feed.v1');
+    assert.equal(envelope.keyId, 'feed-key');
+    assert.equal(envelope.trustEpoch, 3);
+    assert.equal(verifyTrustFeedEnvelope(envelope, { nowMs }), true);
+
+    const payload = JSON.parse(envelope.payload);
+    assert.equal(payload.signer.keyId, 'feed-key');
+    assert.equal(payload.keys.length, 1);
+    assert.equal(payload.keys[0].status, 'active');
+    assert.equal(payload.keys[0].publicKey, activeSigner.publicKey);
+    assert.doesNotMatch(JSON.stringify(envelope), /PRIVATE KEY|review-token|oauth/i);
+
+    assert.equal(verifyTrustFeedEnvelope({
+      ...envelope,
+      payload: envelope.payload.replace('"active"', '"revoked"'),
+    }, { nowMs }), false);
+
+    nowMs = envelope.expiresAtMs + 1;
+    assert.equal(verifyTrustFeedEnvelope(envelope, { nowMs }), false);
+    assert.equal(verifyTrustFeedEnvelope(envelope, { nowMs, allowExpired: true }), true);
+  } finally {
+    scope.close();
+  }
+});
+
+test('rotation permits revoking an old key while current signer self-revocation fails closed', () => {
+  const scope = dbFixture();
+  try {
+    const firstSigner = signer('marketplace-key-1', 1);
+    const first = new ExtensionSigningStore({
+      db: scope.accountStore.db,
+      signer: firstSigner,
+      now: () => 1_000,
+    });
+    assert.throws(
+      () => first.revokeTrustKey({
+        keyId: firstSigner.keyId,
+        trustEpoch: firstSigner.trustEpoch,
+        reason: 'compromised',
+      }),
+      (error) => error instanceof ExtensionSigningStoreError
+        && error.code === 'ACTIVE_SIGNER_REVOCATION_REQUIRES_ROTATION',
+    );
+
+    const rotatedSigner = signer('marketplace-key-2', 2);
+    const rotated = new ExtensionSigningStore({
+      db: scope.accountStore.db,
+      signer: rotatedSigner,
+      now: () => 2_000,
+    });
+    const revoked = rotated.revokeTrustKey({
+      keyId: firstSigner.keyId,
+      trustEpoch: firstSigner.trustEpoch,
+      reason: 'rotation after compromise',
+    });
+    assert.equal(revoked.status, 'revoked');
+    assert.equal(revoked.revocationReason, 'rotation after compromise');
+
+    assert.throws(
+      () => rotated.revokeTrustKey({
+        keyId: firstSigner.keyId,
+        trustEpoch: firstSigner.trustEpoch,
+      }),
+      (error) => error instanceof ExtensionSigningStoreError
+        && error.code === 'TRUST_KEY_ALREADY_REVOKED',
+    );
+
+    const feed = rotated.trustFeed({ ttlMs: 30_000 });
+    assert.equal(verifyTrustFeedEnvelope(feed, { nowMs: 2_000 }), true);
+    const feedPayload = JSON.parse(feed.payload);
+    assert.deepEqual(
+      feedPayload.keys.map((item) => [item.keyId, item.trustEpoch, item.status]),
+      [
+        ['marketplace-key-1', 1, 'revoked'],
+        ['marketplace-key-2', 2, 'active'],
+      ],
+    );
+  } finally {
+    scope.close();
+  }
+});
+
+test('reusing one key id and epoch with different public material fails closed', () => {
+  const scope = dbFixture();
+  try {
+    new ExtensionSigningStore({
+      db: scope.accountStore.db,
+      signer: signer('stable-key', 7),
+    });
+    assert.throws(
+      () => new ExtensionSigningStore({
+        db: scope.accountStore.db,
+        signer: signer('stable-key', 7),
+      }),
+      (error) => error instanceof ExtensionSigningStoreError
+        && error.code === 'TRUST_KEY_MATERIAL_CONFLICT',
+    );
+  } finally {
+    scope.close();
+  }
+});
+
+test('trust feed rejects excessive TTL and unreasonable future timestamps', () => {
+  const scope = dbFixture();
+  try {
+    const activeSigner = signer('ttl-key', 1);
+    const store = new ExtensionSigningStore({
+      db: scope.accountStore.db,
+      signer: activeSigner,
+      now: () => 500_000,
+    });
+    assert.throws(
+      () => store.trustFeed({ ttlMs: 8 * 24 * 60 * 60 * 1000 }),
+      (error) => error instanceof ExtensionSigningStoreError
+        && error.code === 'INVALID_TRUST_FEED_TTL',
+    );
+    const envelope = store.trustFeed({ ttlMs: 60_000 });
+    assert.equal(
+      verifyTrustFeedEnvelope(envelope, { nowMs: envelope.issuedAtMs - (6 * 60 * 1000) }),
+      false,
     );
   } finally {
     scope.close();

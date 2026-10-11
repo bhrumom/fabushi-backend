@@ -12,6 +12,7 @@ import { AccountSyncStore } from '../src/account_sync_store.js';
 import { ExtensionArtifactStore, ExtensionArtifactStoreError } from '../src/extension_artifact_store.js';
 import { ExtensionPublisherStore } from '../src/extension_publisher_store.js';
 import { ExtensionReleaseStore, ExtensionReleaseStoreError } from '../src/extension_release_store.js';
+import { ExtensionSigningStore } from '../src/extension_signing_store.js';
 import { createMiniAppMarketplaceRouter } from '../src/miniapp_marketplace_http.js';
 
 function descriptor(version = '1.0.0') {
@@ -69,6 +70,19 @@ function key() {
     namespace: 'acme-labs',
     name: 'offline-notes',
     version: '1.0.0',
+  };
+}
+
+function signer(keyId, trustEpoch) {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  const publicDer = publicKey.export({ type: 'spki', format: 'der' });
+  return {
+    privateKey,
+    publicKeyObject: publicKey,
+    publicKey: publicDer.toString('base64'),
+    publicKeyFingerprint: crypto.createHash('sha256').update(publicDer).digest('hex'),
+    keyId,
+    trustEpoch,
   };
 }
 
@@ -404,4 +418,68 @@ test('HTTP raw upload -> scan -> approve -> byte-for-byte immutable download wor
     assert.equal(download.headers.get('etag'), `"${uploaded.digest}"`);
     assert.deepEqual(Buffer.from(await download.arrayBuffer()), bytes);
   });
+});
+
+
+test('revoked signing key immediately quarantines approved artifact download', () => {
+  const scope = fixture();
+  try {
+    const bytes = Buffer.from('trusted then revoked bytes');
+    const artifact = scope.artifactStore.upload({
+      actorAccountId: 'user:owner',
+      ...key(),
+      artifactId: 'package',
+      platform: 'all',
+      format: 'fabapp',
+      bytes,
+    });
+    scope.artifactStore.recordScan({
+      reviewer: 'security-reviewer',
+      ...key(),
+      artifactId: 'package',
+      state: 'passed',
+      scanner: 'fabushi-static-scan',
+      scannerVersion: '1.0.0',
+    });
+    scope.releaseStore.submit({ actorAccountId: 'user:owner', ...key() });
+    scope.releaseStore.review({
+      ...key(),
+      approved: true,
+      reviewer: 'security-reviewer',
+    });
+
+    const firstSigner = signer('marketplace-key-1', 1);
+    const firstSigningStore = new ExtensionSigningStore({
+      db: scope.accountStore.db,
+      signer: firstSigner,
+      now: () => 1_000,
+    });
+    const release = scope.releaseStore.getRelease(key());
+    firstSigningStore.signRelease({
+      descriptor: release.descriptor,
+      descriptorDigest: release.descriptorDigest,
+      artifacts: scope.artifactStore.listForRelease(key()),
+    });
+    scope.releaseStore.setSigningStore(firstSigningStore);
+    scope.artifactStore.setSigningStore(firstSigningStore);
+    assert.equal(scope.artifactStore.approvedArtifact(artifact.digest)?.digest, artifact.digest);
+
+    const rotatedSigningStore = new ExtensionSigningStore({
+      db: scope.accountStore.db,
+      signer: signer('marketplace-key-2', 2),
+      now: () => 2_000,
+    });
+    rotatedSigningStore.revokeTrustKey({
+      keyId: firstSigner.keyId,
+      trustEpoch: firstSigner.trustEpoch,
+      reason: 'security incident',
+    });
+    scope.releaseStore.setSigningStore(rotatedSigningStore);
+    scope.artifactStore.setSigningStore(rotatedSigningStore);
+
+    assert.equal(scope.artifactStore.approvedArtifact(artifact.digest), null);
+    assert.equal(scope.releaseStore.listApprovedLatest().length, 0);
+  } finally {
+    scope.close();
+  }
 });
