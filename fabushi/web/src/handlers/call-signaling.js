@@ -117,7 +117,7 @@ function mapEvent(row) {
 async function readAuthorizedChannel(db, callId, authUserId) {
   return await db.prepare(`
     SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
-      state, generation, event_seq, terminal_state, created_at, updated_at
+      state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
     FROM human_call_channels
     WHERE id = ? AND (creator_user_id = ? OR peer_user_id = ?)
     LIMIT 1
@@ -213,7 +213,7 @@ export async function handleCreateHumanCall(request, env, db) {
 
   const existing = await db.prepare(`
     SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
-      state, generation, event_seq, terminal_state, created_at, updated_at
+      state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
     FROM human_call_channels WHERE id = ? LIMIT 1
   `).bind(callId).first();
   if (existing) {
@@ -230,13 +230,13 @@ export async function handleCreateHumanCall(request, env, db) {
     await db.prepare(`
       INSERT INTO human_call_channels (
         id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
-        state, generation, event_seq, terminal_state, created_at, updated_at
+        state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
       ) VALUES (?, ?, ?, ?, NULL, 'invited', 0, 0, NULL, ?, ?)
     `).bind(callId, auth.userId, target.id, auth.deviceId, now, now).run();
   } catch {
     const raced = await db.prepare(`
       SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
-        state, generation, event_seq, terminal_state, created_at, updated_at
+        state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
       FROM human_call_channels WHERE id = ? LIMIT 1
     `).bind(callId).first();
     if (raced && raced.creator_user_id === auth.userId && raced.peer_user_id === target.id) {
@@ -256,7 +256,7 @@ export async function handleListHumanCalls(request, env, db) {
   const limit = clampLimit(url.searchParams.get('limit'));
   const rows = await db.prepare(`
     SELECT id, creator_user_id, peer_user_id, creator_device_id, peer_device_id,
-      state, generation, event_seq, terminal_state, created_at, updated_at
+      state, generation, event_seq, membership_revision, terminal_state, created_at, updated_at
     FROM human_call_channels
     WHERE creator_user_id = ? OR peer_user_id = ?
     ORDER BY updated_at DESC, id DESC
