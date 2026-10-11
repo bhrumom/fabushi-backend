@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   handleCreateHumanCallMediaSession,
+  handleListHumanCallMediaSessionsForRecovery,
   handlePublishHumanCallMedia,
   handleAcknowledgeHumanCallMediaOperationApplied,
   handleDiscoverHumanCallMediaPublications,
@@ -64,6 +65,23 @@ test('spec keeps real SFU media routing fail-closed and outside this roster incr
   assert.match(spec, /real production SFU provider\/session API is configured/);
   assert.match(spec, /MUST fail closed rather than returning fake routes/);
   assert.match(spec, />=3 participant production E2E/);
+});
+
+test('media-session recovery discovery is restart-safe, device-scoped, and provider-private', () => {
+  assert.equal(typeof handleListHumanCallMediaSessionsForRecovery, 'function');
+  assert.match(routes, /callMediaSessionMatch && method === 'GET'/);
+  assert.match(handler, /handleListHumanCallMediaSessionsForRecovery/);
+  assert.match(handler, /WHERE call_id = \? AND user_id = \? AND device_id = \?/);
+  assert.match(handler, /status IN \('pending', 'ready', 'uncertain'\)/);
+  assert.match(handler, /ORDER BY generation DESC, created_at DESC, id DESC/);
+  assert.match(handler, /LIMIT 64/);
+  assert.match(handler, /cleanupRequired: true/);
+  assert.match(handler, /cache-control', 'private, no-store'/);
+  assert.match(spec, /Restart\/process recovery discovery/);
+  assert.match(spec, /does not require the member to remain active/);
+  assert.match(spec, /explicit close\/teardown request/);
+  assert.doesNotMatch(handler, /mediaSessions:[^\n]*provider_session_id/);
+  assert.doesNotMatch(handler, /mediaSessions:[^\n]*appSecret/);
 });
 
 test('SFU session allocation is backend-owned, durable, and fail-closed on uncertain outcomes', () => {
