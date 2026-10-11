@@ -29,6 +29,11 @@ function namespaceName(value) {
   if (!NAMESPACE_PATTERN.test(normalized)) {
     throw new ExtensionPublisherStoreError('INVALID_NAMESPACE', 'namespace is invalid');
   }
+  return normalized;
+}
+
+function claimableNamespace(value) {
+  const normalized = namespaceName(value);
   if (RESERVED_NAMESPACES.has(normalized)) {
     throw new ExtensionPublisherStoreError('RESERVED_NAMESPACE', 'namespace is reserved');
   }
@@ -202,7 +207,8 @@ export class ExtensionPublisherStore {
   }
 
   #owned(namespace, actorAccountId) {
-    const row = this.s.get.get(namespaceName(namespace));
+    const normalized = claimableNamespace(namespace);
+    const row = this.s.get.get(normalized);
     if (!row) throw new ExtensionPublisherStoreError('NAMESPACE_NOT_FOUND', 'namespace was not found');
     if (row.ownerAccountId !== accountId(actorAccountId)) {
       throw new ExtensionPublisherStoreError('NAMESPACE_FORBIDDEN', 'namespace is owned by another account');
@@ -233,7 +239,7 @@ export class ExtensionPublisherStore {
   }
 
   create({ namespace, displayName: requestedDisplayName, ownerAccountId }) {
-    const normalized = namespaceName(namespace);
+    const normalized = claimableNamespace(namespace);
     const owner = accountId(ownerAccountId);
     if (this.s.get.get(normalized)) {
       throw new ExtensionPublisherStoreError('NAMESPACE_CONFLICT', 'namespace is already claimed');
@@ -318,7 +324,7 @@ export class ExtensionPublisherStore {
   }
 
   acceptTransfer({ namespace, actorAccountId, transferId }) {
-    const normalized = namespaceName(namespace);
+    const normalized = claimableNamespace(namespace);
     const actor = accountId(actorAccountId);
     const current = this.s.get.get(normalized);
     if (!current) throw new ExtensionPublisherStoreError('NAMESPACE_NOT_FOUND', 'namespace was not found');
