@@ -599,7 +599,7 @@ test('call channel CAS and event append commit atomically in one D1 batch', asyn
   assert.equal(failed.status, 409);
   assert.deepEqual(db.state.calls.get(callId), before);
   assert.equal(db.state.events.length, 0);
-  assert.equal(db.state.batchCalls, 3);
+  assert.equal(db.state.batchCalls, 2);
   assert.equal(db.state.rollbackUpdateCalls, 0);
 
   const retried = await handleAppendHumanCallEvent(
@@ -615,6 +615,6 @@ test('call channel CAS and event append commit atomically in one D1 batch', asyn
   assert.equal(db.state.calls.get(callId).state, 'ringing');
   assert.equal(db.state.calls.get(callId).event_seq, 1);
   assert.equal(db.state.events.length, 1);
-  assert.equal(db.state.batchCalls, 2);
+  assert.equal(db.state.batchCalls, 3);
   assert.equal(db.state.rollbackUpdateCalls, 0);
 });
