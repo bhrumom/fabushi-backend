@@ -2,11 +2,26 @@ import crypto from 'node:crypto';
 import process from 'node:process';
 
 const SIGNATURE_PROTOCOL = 'fabushi.extension-release-signature.v1';
+const TRUST_FEED_PROTOCOL = 'fabushi.extension-trust-feed.v1';
+const DEFAULT_TRUST_FEED_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_TRUST_FEED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const TRUST_FEED_MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 function positiveEpoch(value) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new ExtensionSigningStoreError('INVALID_TRUST_EPOCH', 'trust epoch must be a positive integer');
+  }
+  return parsed;
+}
+
+function trustFeedTtlMs(value) {
+  const parsed = Number(value ?? DEFAULT_TRUST_FEED_TTL_MS);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_TRUST_FEED_TTL_MS) {
+    throw new ExtensionSigningStoreError(
+      'INVALID_TRUST_FEED_TTL',
+      'trust feed TTL must be a positive integer no greater than 7 days',
+    );
   }
   return parsed;
 }
@@ -132,6 +147,93 @@ export function canonicalReleaseSignaturePayload({
     descriptorDigest: String(descriptorDigest),
     artifacts: normalizedArtifacts,
   });
+}
+
+export function canonicalTrustFeedPayload({
+  signer,
+  keys,
+  issuedAtMs,
+  expiresAtMs,
+}) {
+  if (!signer) {
+    throw new ExtensionSigningStoreError('SIGNING_KEY_REQUIRED', 'managed Marketplace signing key is not configured');
+  }
+  if (!Number.isSafeInteger(issuedAtMs) || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= issuedAtMs) {
+    throw new ExtensionSigningStoreError('INVALID_TRUST_FEED_WINDOW', 'trust feed validity window is invalid');
+  }
+  const normalizedKeys = [...(keys ?? [])]
+    .map((item) => ({
+      algorithm: String(item.algorithm),
+      keyId: keyId(item.keyId),
+      trustEpoch: positiveEpoch(item.trustEpoch),
+      publicKey: String(item.publicKey),
+      publicKeyFingerprint: String(item.publicKeyFingerprint),
+      status: item.status === 'revoked' ? 'revoked' : 'active',
+      createdAtMs: Number(item.createdAtMs),
+      revokedAtMs: item.revokedAtMs == null ? null : Number(item.revokedAtMs),
+      revocationReason: String(item.revocationReason ?? ''),
+    }))
+    .sort((left, right) => (
+      left.trustEpoch - right.trustEpoch
+      || left.keyId.localeCompare(right.keyId)
+    ));
+  return JSON.stringify({
+    protocol: TRUST_FEED_PROTOCOL,
+    issuedAtMs,
+    expiresAtMs,
+    signer: {
+      algorithm: 'Ed25519',
+      keyId: signer.keyId,
+      trustEpoch: signer.trustEpoch,
+      publicKeyFingerprint: signer.publicKeyFingerprint,
+    },
+    keys: normalizedKeys,
+  });
+}
+
+export function verifyTrustFeedEnvelope(envelope, { nowMs = Date.now(), allowExpired = false } = {}) {
+  try {
+    if (envelope?.protocol !== TRUST_FEED_PROTOCOL || envelope?.algorithm !== 'Ed25519') return false;
+    if (!Number.isSafeInteger(nowMs)) return false;
+    const publicKeyDer = Buffer.from(String(envelope.publicKey ?? ''), 'base64');
+    const fingerprint = crypto.createHash('sha256').update(publicKeyDer).digest('hex');
+    if (fingerprint !== envelope.publicKeyFingerprint) return false;
+    const publicKey = crypto.createPublicKey({ key: publicKeyDer, type: 'spki', format: 'der' });
+    if (publicKey.asymmetricKeyType !== 'ed25519') return false;
+    const payloadBytes = Buffer.from(String(envelope.payload ?? ''), 'utf8');
+    if (!crypto.verify(null, payloadBytes, publicKey, Buffer.from(String(envelope.signature ?? ''), 'base64'))) {
+      return false;
+    }
+    const payload = JSON.parse(payloadBytes.toString('utf8'));
+    if (payload?.protocol !== TRUST_FEED_PROTOCOL) return false;
+    if (!Number.isSafeInteger(payload.issuedAtMs) || !Number.isSafeInteger(payload.expiresAtMs)) return false;
+    if (payload.expiresAtMs <= payload.issuedAtMs) return false;
+    if (payload.issuedAtMs !== envelope.issuedAtMs || payload.expiresAtMs !== envelope.expiresAtMs) return false;
+    if (payload.issuedAtMs > nowMs + TRUST_FEED_MAX_FUTURE_SKEW_MS) return false;
+    if (!allowExpired && nowMs > payload.expiresAtMs) return false;
+    if (
+      payload.signer?.algorithm !== 'Ed25519'
+      || payload.signer?.keyId !== envelope.keyId
+      || Number(payload.signer?.trustEpoch) !== Number(envelope.trustEpoch)
+      || payload.signer?.publicKeyFingerprint !== envelope.publicKeyFingerprint
+    ) return false;
+    const signerKey = Array.isArray(payload.keys)
+      ? payload.keys.find((item) => (
+        item.keyId === envelope.keyId
+        && Number(item.trustEpoch) === Number(envelope.trustEpoch)
+      ))
+      : null;
+    if (
+      !signerKey
+      || signerKey.status !== 'active'
+      || signerKey.algorithm !== 'Ed25519'
+      || signerKey.publicKey !== envelope.publicKey
+      || signerKey.publicKeyFingerprint !== envelope.publicKeyFingerprint
+    ) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function verifyReleaseSignatureEnvelope(envelope) {
@@ -303,6 +405,16 @@ export class ExtensionSigningStore {
   revokeTrustKey({ keyId: rawKeyId, trustEpoch: rawTrustEpoch, reason = '' }) {
     const normalizedKeyId = keyId(rawKeyId);
     const epoch = positiveEpoch(rawTrustEpoch);
+    if (
+      this.signer
+      && this.signer.keyId === normalizedKeyId
+      && this.signer.trustEpoch === epoch
+    ) {
+      throw new ExtensionSigningStoreError(
+        'ACTIVE_SIGNER_REVOCATION_REQUIRES_ROTATION',
+        'rotate to a new managed signer before revoking the currently configured trust key',
+      );
+    }
     const existing = this.s.trustGet.get(normalizedKeyId, epoch);
     if (!existing) {
       throw new ExtensionSigningStoreError('TRUST_KEY_NOT_FOUND', 'trust key was not found');
@@ -337,6 +449,44 @@ export class ExtensionSigningStore {
       return null;
     }
     return signature;
+  }
+
+  trustFeed({ ttlMs = undefined } = {}) {
+    if (!this.signer) {
+      throw new ExtensionSigningStoreError('SIGNING_KEY_REQUIRED', 'managed Marketplace signing key is not configured');
+    }
+    const issuedAtMs = this.now();
+    const configuredTtl = ttlMs
+      ?? process.env.FABUSHI_MARKETPLACE_TRUST_FEED_TTL_MS
+      ?? DEFAULT_TRUST_FEED_TTL_MS;
+    const expiresAtMs = issuedAtMs + trustFeedTtlMs(configuredTtl);
+    const payload = canonicalTrustFeedPayload({
+      signer: this.signer,
+      keys: this.listTrustKeys(),
+      issuedAtMs,
+      expiresAtMs,
+    });
+    const signature = crypto.sign(
+      null,
+      Buffer.from(payload, 'utf8'),
+      this.signer.privateKey,
+    ).toString('base64');
+    const envelope = {
+      protocol: TRUST_FEED_PROTOCOL,
+      algorithm: 'Ed25519',
+      keyId: this.signer.keyId,
+      trustEpoch: this.signer.trustEpoch,
+      publicKey: this.signer.publicKey,
+      publicKeyFingerprint: this.signer.publicKeyFingerprint,
+      issuedAtMs,
+      expiresAtMs,
+      payload,
+      signature,
+    };
+    if (!verifyTrustFeedEnvelope(envelope, { nowMs: issuedAtMs })) {
+      throw new ExtensionSigningStoreError('TRUST_FEED_SELF_CHECK_FAILED', 'trust feed signature self-verification failed');
+    }
+    return envelope;
   }
 
   currentTrust() {
