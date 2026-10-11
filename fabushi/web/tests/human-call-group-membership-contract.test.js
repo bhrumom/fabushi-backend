@@ -5,6 +5,9 @@ import {
   handleCreateHumanCallMediaSession,
   handlePublishHumanCallMedia,
   handleAcknowledgeHumanCallMediaOperationApplied,
+  handleDiscoverHumanCallMediaPublications,
+  handleSubscribeHumanCallMedia,
+  handleAnswerHumanCallMediaSubscription,
   handleGetHumanCallMembers,
   handleMutateHumanCallMember,
 } from '../src/handlers/call-signaling.js';
@@ -14,6 +17,7 @@ const routes = fs.readFileSync(new URL('../src/routes/community-routes.js', impo
 const migration = fs.readFileSync(new URL('../migrations/20261012_human_call_group_membership.sql', import.meta.url), 'utf8');
 const mediaMigration = fs.readFileSync(new URL('../migrations/20261012_human_call_sfu_sessions.sql', import.meta.url), 'utf8');
 const publicationMigration = fs.readFileSync(new URL('../migrations/20261013_human_call_sfu_publications.sql', import.meta.url), 'utf8');
+const subscriptionMigration = fs.readFileSync(new URL('../migrations/20261014_human_call_sfu_subscriptions.sql', import.meta.url), 'utf8');
 const spec = fs.readFileSync(new URL('../../../docs/specs/human-call-signaling.md', import.meta.url), 'utf8');
 
 test('group membership handlers are executable exports and stay on canonical call owner', () => {
@@ -120,4 +124,33 @@ test('new calls create active canonical roster and group members use roster-owne
   assert.match(handler, /rosterMember = await readCallMember/);
   assert.match(handler, /rosterMember\.device_id/);
   assert.match(handler, /JOIN human_call_members m[\s\S]*m\.user_id = \?[\s\S]*m\.state = 'active'/);
+});
+
+
+test('SFU publication discovery and remote subscription stay authorized and provider-private', () => {
+  assert.equal(typeof handleDiscoverHumanCallMediaPublications, 'function');
+  assert.equal(typeof handleSubscribeHumanCallMedia, 'function');
+  assert.equal(typeof handleAnswerHumanCallMediaSubscription, 'function');
+  assert.match(routes, /media\\\/publications/);
+  assert.match(routes, /subscriptions/);
+  assert.match(routes, /operations\\\/.*answer/);
+  assert.match(handler, /operation_kind/);
+  assert.match(handler, /human_call_media_subscriptions/);
+  assert.match(handler, /location: 'remote'/);
+  assert.match(handler, /sessionId: publication\.provider_session_id/);
+  assert.match(handler, /\/renegotiate/);
+  assert.match(handler, /subscription_network_outcome_unknown/);
+  assert.match(handler, /subscription_result_incomplete/);
+  assert.match(handler, /subscription_offer_missing/);
+  assert.match(handler, /renegotiate_outcome_unknown/);
+  assert.match(handler, /JOIN human_call_members m/);
+  assert.match(subscriptionMigration, /ADD COLUMN operation_kind/);
+  assert.match(subscriptionMigration, /CHECK \(operation_kind IN \('publish', 'subscribe'\)\)/);
+  assert.match(subscriptionMigration, /CREATE TABLE IF NOT EXISTS human_call_media_subscriptions/);
+  assert.match(subscriptionMigration, /UNIQUE \(media_session_id, publication_id\)/);
+  assert.match(spec, /Publication discovery/);
+  assert.match(spec, /Directed subscription/);
+  assert.match(spec, /\/renegotiate/);
+  assert.doesNotMatch(handler, /provider_session_id[^\n]*jsonResponse/);
+  assert.doesNotMatch(handler, /appSecret[^\n]*jsonResponse/);
 });

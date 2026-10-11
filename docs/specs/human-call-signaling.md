@@ -168,6 +168,13 @@ For an HTTP response, every returned track result is inspected. Successful items
 
 A successful publication response that contains the SFU SDP answer moves the session mutation state to `awaiting_endpoint_apply`. The endpoint must apply that answer to its PeerConnection, then call `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/operations/:clientOperationId/applied`. Only that authenticated owner acknowledgement transitions the durable operation to `applied` and releases the session to `idle`. If endpoint application fails or its outcome is unknown, the session is retired/replaced instead of accepting another mutation.
 
+Publication discovery is `GET /api/social/calls/:callId/media/publications`. It is authorized by active canonical roster membership and exposes only current-generation application publication ids, member ids, track names and media kinds. Provider session ids and `FABUSHI_REALTIME_SFU_APP_SECRET` remain backend-private.
+
+Directed subscription uses `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/subscriptions` on a ready account/device-owned `subscribe` session. The backend resolves each application publication id to the private publisher provider session id + track name and calls Cloudflare `/tracks/new` with `location: "remote"`. Successful receiving mids are persisted in `human_call_media_subscriptions`; partial item failures are returned without replaying successful items. The SFU offer is persisted before it is returned.
+
+The endpoint applies the returned SFU offer, creates an SDP answer, then calls `POST .../operations/:clientOperationId/answer`. The backend forwards that answer to the receiving provider session through `/renegotiate`. Lost or ambiguous `tracks/new` or `/renegotiate` outcomes retire the receiving session and are never automatically retried; the caller must allocate a replacement provider session. The existing publish `/applied` acknowledgement is type-fenced and cannot acknowledge a subscribe negotiation.
+
+
 ### 12.3 Ordering, recovery and teardown
 
 Membership mutations and media route lifecycle participate in the existing ordered/idempotent call event stream. A restarted client can replay channel state plus membership revision and rebuild only the current reconnect generation. Old member/device claims, leases, publications and subscriptions cannot resurrect after a newer generation or terminal call state.
