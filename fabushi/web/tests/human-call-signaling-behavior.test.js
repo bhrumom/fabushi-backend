@@ -192,9 +192,23 @@ function createDb({ failNextEventInsert = false } = {}) {
         }
         if (q.startsWith('UPDATE human_call_media_sessions')
             && q.includes("mutation_state = 'retired'")) {
-          // Phase-1 signaling behavior fixtures intentionally contain no SFU media rows.
-          // Lifecycle retirement is therefore a valid no-op, matching D1 UPDATE semantics.
-          return { meta: { changes: 0 } };
+          const [reason, updatedAt, callId, generation, maybeUserId] = params;
+          let changes = 0;
+          for (const session of state.mediaSessions) {
+            if (session.call_id !== String(callId)
+                || Number(session.generation) !== Number(generation)
+                || !['pending', 'ready', 'uncertain'].includes(session.status)
+                || session.mutation_state === 'retired'
+                || (maybeUserId != null && Number(session.user_id) !== Number(maybeUserId))) {
+              continue;
+            }
+            session.status = 'uncertain';
+            session.mutation_state = 'retired';
+            session.last_error_code = String(reason);
+            session.updated_at = updatedAt;
+            changes += 1;
+          }
+          return { meta: { changes } };
         }
         if (q.startsWith('INSERT INTO human_call_events')) {
           if (q.includes('WHERE changes() = 1') && state.lastChanges !== 1) {
@@ -571,6 +585,48 @@ test('ordered events converge across participant devices with generation and ide
   );
   assert.equal(conflict.status, 409);
 
+  db.state.mediaSessions.push(
+    {
+      id: 'media-old-publish-1001',
+      call_id: callId,
+      user_id: ALICE.id,
+      device_id: 'alice-laptop',
+      generation: 0,
+      purpose: 'publish',
+      provider_session_id: 'provider-private-old-publish',
+      status: 'ready',
+      mutation_state: 'idle',
+      created_at: '2026-10-12T00:00:00.000Z',
+      updated_at: '2026-10-12T00:00:00.000Z',
+    },
+    {
+      id: 'media-old-subscribe-1001',
+      call_id: callId,
+      user_id: BOB.id,
+      device_id: 'bob-phone',
+      generation: 0,
+      purpose: 'subscribe',
+      provider_session_id: 'provider-private-old-subscribe',
+      status: 'ready',
+      mutation_state: 'idle',
+      created_at: '2026-10-12T00:00:01.000Z',
+      updated_at: '2026-10-12T00:00:01.000Z',
+    },
+    {
+      id: 'media-other-call-1001',
+      call_id: 'call-other-generation-fence',
+      user_id: ALICE.id,
+      device_id: 'alice-laptop',
+      generation: 0,
+      purpose: 'publish',
+      provider_session_id: 'provider-private-other-call',
+      status: 'ready',
+      mutation_state: 'idle',
+      created_at: '2026-10-12T00:00:02.000Z',
+      updated_at: '2026-10-12T00:00:02.000Z',
+    },
+  );
+
   const reconnect = await handleAppendHumanCallEvent(
     await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-reconnect-1',
@@ -580,7 +636,35 @@ test('ordered events converge across participant devices with generation and ide
     }),
     ENV, db, callId,
   );
+  const reconnectPayload = await reconnect.json();
   assert.equal(reconnect.status, 201);
+  assert.deepEqual(reconnectPayload.mediaCleanup, { required: true, retiredSessionCount: 2 });
+  assert.deepEqual(
+    db.state.mediaSessions.filter((session) => session.call_id === callId).map((session) => ({
+      id: session.id,
+      status: session.status,
+      mutation_state: session.mutation_state,
+      last_error_code: session.last_error_code,
+    })),
+    [
+      {
+        id: 'media-old-publish-1001',
+        status: 'uncertain',
+        mutation_state: 'retired',
+        last_error_code: 'generation_retired_cleanup_required',
+      },
+      {
+        id: 'media-old-subscribe-1001',
+        status: 'uncertain',
+        mutation_state: 'retired',
+        last_error_code: 'generation_retired_cleanup_required',
+      },
+    ],
+  );
+  assert.equal(
+    db.state.mediaSessions.find((session) => session.id === 'media-other-call-1001').status,
+    'ready',
+  );
 
   const stale = await handleAppendHumanCallEvent(
     await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
