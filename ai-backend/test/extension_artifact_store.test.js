@@ -206,6 +206,18 @@ test('release approval is blocked until every bound artifact passes immutable sc
         && error.code === 'ARTIFACT_SCAN_REQUIRED',
     );
 
+    for (const binding of [
+      { expectedDigest: '0'.repeat(64) },
+      { expectedSizeBytes: 999 },
+      { expectedSizeBytes: '13' },
+    ]) {
+      assert.throws(() => scope.artifactStore.recordScan({
+        reviewer: 'security-reviewer', ...key(), artifactId: 'package',
+        state: 'passed', scanner: 'fabushi-static-scan', scannerVersion: '1.0.0',
+        ...binding,
+      }), (error) => error.code === 'ARTIFACT_BINDING_CONFLICT');
+      assert.equal(scope.artifactStore.listForRelease(key())[0].scan.state, 'pending');
+    }
     const passed = scope.artifactStore.recordScan({
       reviewer: 'security-reviewer',
       ...key(),
@@ -213,6 +225,8 @@ test('release approval is blocked until every bound artifact passes immutable sc
       state: 'passed',
       scanner: 'fabushi-static-scan',
       scannerVersion: '1.0.0',
+      expectedDigest: crypto.createHash('sha256').update('scanned bytes').digest('hex'),
+      expectedSizeBytes: Buffer.byteLength('scanned bytes'),
     });
     assert.equal(passed.scan.state, 'passed');
     assert.throws(

@@ -378,6 +378,8 @@ export function createMiniAppMarketplaceRouter({
         state: req.body?.state,
         scanner: req.body?.scanner,
         scannerVersion: req.body?.scannerVersion,
+        expectedDigest: req.body?.expectedDigest,
+        expectedSizeBytes: req.body?.expectedSizeBytes,
         notes: req.body?.notes,
       });
       res.json({ artifact });

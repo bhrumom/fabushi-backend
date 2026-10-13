@@ -303,6 +303,8 @@ export class ExtensionArtifactStore {
     state,
     scanner,
     scannerVersion,
+    expectedDigest,
+    expectedSizeBytes,
     notes = '',
   }) {
     const key = releaseKey({ kind, namespace, name, version });
@@ -313,6 +315,11 @@ export class ExtensionArtifactStore {
     }
     const existing = this.s.getBinding.get(key.kind, key.namespace, key.name, key.version, id);
     if (!existing) throw new ExtensionArtifactStoreError('ARTIFACT_NOT_FOUND', 'artifact was not found');
+    if ((expectedDigest !== undefined && expectedDigest !== existing.digest)
+      || (expectedSizeBytes !== undefined
+        && (!Number.isSafeInteger(expectedSizeBytes) || expectedSizeBytes !== Number(existing.sizeBytes)))) {
+      throw new ExtensionArtifactStoreError('ARTIFACT_BINDING_CONFLICT', 'scanned bytes do not match artifact binding');
+    }
     if (existing.scanState !== 'pending') {
       throw new ExtensionArtifactStoreError('SCAN_ALREADY_FINAL', 'artifact scan verdict is immutable');
     }

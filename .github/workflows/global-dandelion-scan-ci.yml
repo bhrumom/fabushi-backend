@@ -1,0 +1,30 @@
+name: Global Dandelion scanner contract
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/scripts/*dandelion*'
+      - '.github/workflows/global-dandelion*'
+      - 'docs/specs/global-dandelion-security-scan.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  candidate-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Download actual signed fixture, no reviewer authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/bhrumom/fabushi-backend/actions/artifacts/11797530939/zip > signed-delivery.zip
+      - run: python3 -m pip install cryptography==46.0.3
+      - name: Verify signed candidate and reject tampering
+        env:
+          FABUSHI_SIGNED_SCAN_FIXTURE: signed-delivery.zip
+        run: python3 .github/scripts/scan-dandelion-package.test.py
