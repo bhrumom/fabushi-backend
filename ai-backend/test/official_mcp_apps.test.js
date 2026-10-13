@@ -82,7 +82,8 @@ for (const app of officialMcpApps) {
 }
 
 test('official plugin packages declare exact per-system availability and one server per variant', () => {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  // Read-only pinned legacy package fixture, not alternate production source.
+  const root = process.env.FABUSHI_CONTRACT_PLUGIN_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const marketplacePath = path.join(root, '.agents/plugins/marketplace.json');
   const marketplaceRoot = path.dirname(marketplacePath);
   const marketplace = JSON.parse(fs.readFileSync(marketplacePath, 'utf8'));

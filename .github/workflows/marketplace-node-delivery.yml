@@ -22,6 +22,20 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
+      - name: Read-only canonical Core contract fixture
+        uses: actions/checkout@v5
+        with:
+          repository: bhrumom/fabushi-platform-core
+          ref: e23abe4e7a616b3f7184cb14d9e7c7904888e0ba
+          path: .contract-fixtures/core
+          persist-credentials: false
+      - name: Read-only legacy plugin compatibility fixture
+        uses: actions/checkout@v5
+        with:
+          repository: bhrumom/fabushi
+          ref: 7f2935500cec3a199caf7823557ce5d106e051f4
+          path: .contract-fixtures/plugins
+          persist-credentials: false
       - name: Verify receiver and gateway boundaries
         run: |
           python3 .github/scripts/test-node-delivery-receiver.py
@@ -29,6 +43,9 @@ jobs:
           node --check .github/scripts/initialize-node-delivery-identity.mjs
       - name: Verify and prepare canonical existing Node runtime
         working-directory: ai-backend
+        env:
+          FABUSHI_CONTRACT_CORE_ROOT: ${{ github.workspace }}/.contract-fixtures/core
+          FABUSHI_CONTRACT_PLUGIN_ROOT: ${{ github.workspace }}/.contract-fixtures/plugins
         run: |
           npm ci
           npm run check

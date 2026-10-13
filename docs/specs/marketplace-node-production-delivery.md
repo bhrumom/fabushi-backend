@@ -42,6 +42,14 @@ do not add a second Marketplace. Existing dataDir=/opt/dacheng-ai/data and
 
 ## Architecture, verification and acceptance
 
+Full backend tests retain split-repository source contracts: read-only exact
+Core fixture e23abe4e7a616b3f7184cb14d9e7c7904888e0ba and legacy plugin-compatibility
+fixture 7f2935500cec3a199caf7823557ce5d106e051f4 are checked out separately in Actions.
+Neither fixture is packaged/deployed or becomes an alternate backend owner.
+Current account install intentionally emits agent.created for the Bot's explicit
+Agent store; multidevice evidence must assert that event and cross-account denial,
+not suppress it to preserve a stale pre-Agent expectation. No tests are skipped.
+
 Prepared release is source/src + package metadata + Node22 production dependencies,
 not private .env or data. Runner verifies main, builds/tests once, transfers framed
 private configuration and hashed archive to forced helper. Helper has no arbitrary
