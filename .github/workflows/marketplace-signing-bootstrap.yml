@@ -1,0 +1,41 @@
+name: Initialize Managed Marketplace Signing
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: marketplace-signing-bootstrap
+  cancel-in-progress: false
+jobs:
+  initialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.WRANGLER_API_TOKEN || secrets.CLOUDFLARE_TOKEN || secrets.CF_TOKEN || vars.CLOUDFLARE_API_TOKEN || vars.CF_API_TOKEN || vars.WRANGLER_API_TOKEN || vars.CLOUDFLARE_TOKEN || vars.CF_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || secrets.CF_ACCOUNT_ID || secrets.CF_ACCOUNT || secrets.CLOUDFLARE_ACCOUNT || vars.CLOUDFLARE_ACCOUNT_ID || vars.CF_ACCOUNT_ID || vars.CF_ACCOUNT || vars.CLOUDFLARE_ACCOUNT }}
+      FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY: ${{ secrets.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY }}
+      FABUSHI_MARKETPLACE_SIGNING_PUBLIC_KEY_RAW: ${{ secrets.FABUSHI_MARKETPLACE_SIGNING_PUBLIC_KEY_RAW }}
+      FABUSHI_MARKETPLACE_SIGNING_KEY_ID: ${{ secrets.FABUSHI_MARKETPLACE_SIGNING_KEY_ID }}
+      FABUSHI_MARKETPLACE_TRUST_EPOCH: ${{ secrets.FABUSHI_MARKETPLACE_TRUST_EPOCH }}
+      FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
+    steps:
+      - name: Require canonical main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Initialize only absent remote identity
+        working-directory: fabushi/web
+        run: node ../../.github/scripts/bootstrap-marketplace-worker.mjs > marketplace-signing-public-audit.json
+      - name: Require full existing security preflight
+        working-directory: fabushi/web
+        run: bash ../../.github/scripts/assert-worker-security-secrets.sh production
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marketplace-signing-public-audit-${{ github.sha }}
+          path: fabushi/web/marketplace-signing-public-audit.json
