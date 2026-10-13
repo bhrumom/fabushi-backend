@@ -8,6 +8,7 @@ import test from 'node:test';
 import express from 'express';
 
 import { createMiniAppMarketplaceRouter } from '../src/miniapp_marketplace_http.js';
+import { verifyTrustFeedEnvelope } from '../src/extension_signing_store.js';
 
 async function withServer(run, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabushi-miniapp-http-'));
@@ -363,6 +364,14 @@ test('reviewer fabapp signer is authorized, native-compatible and never returns 
       assert.equal(payload.trust.trustEpoch, 9);
       assert.equal(Buffer.from(payload.trust.rawPublicKeyBase64URL, 'base64url').length, 32);
       assert.doesNotMatch(JSON.stringify(payload), /PRIVATE KEY/);
+      const refresh = await fetch(baseUrl + '/v1/extensions/install-trust');
+      assert.equal(refresh.status, 200);
+      assert.equal(refresh.headers.get('cache-control'), 'no-store');
+      const feed = await refresh.json();
+      assert.deepEqual(Object.keys(feed), ['trust']);
+      assert.equal(verifyTrustFeedEnvelope(feed.trust), true);
+      assert.equal(feed.trust.keyId, 'fabapp-test-key');
+      assert.doesNotMatch(JSON.stringify(feed), /PRIVATE KEY|review-token|publisherAccountId/);
     });
   } finally {
     if (previous.review === undefined) delete process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN;
