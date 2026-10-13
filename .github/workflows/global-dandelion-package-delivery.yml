@@ -20,8 +20,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/bhrumom/global-dandelion-rs/actions/runs/38360590921 --jq '.conclusion == "success" and .head_sha == "fce746baecc6bbd9f4b12d5862d886cf7f72eda5"' | grep -qx true
-          gh api repos/bhrumom/global-dandelion-rs/actions/artifacts/11794806976/zip > preparation.zip
+          set -euo pipefail
+          # Private source artifacts cannot be read by a different repo's job
+          # token. Admin transfers the exact hashed archive to an unpublished
+          # same-repository draft; no cross-repository personal token is stored.
+          gh release download dandelion-preparation-fce746b --repo bhrumom/fabushi-backend --pattern preparation.zip
       - name: Install signature verifier
         run: python3 -m pip install cryptography==46.0.3
       - name: Verify resources, sign through production, verify pinned public key
