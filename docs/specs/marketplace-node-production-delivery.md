@@ -44,7 +44,8 @@ do not add a second Marketplace. Existing dataDir=/opt/dacheng-ai/data and
 
 Full backend tests retain split-repository source contracts: read-only exact
 Core fixture e23abe4e7a616b3f7184cb14d9e7c7904888e0ba and legacy plugin-compatibility
-fixture 7f2935500cec3a199caf7823557ce5d106e051f4 are checked out separately in Actions.
+fixture cc23420c56c98f7857b731832281c212203ce60c (the existing catalog's immutable
+MINIAPP_PACKAGE_COMMIT) are checked out separately in Actions, not later legacy main.
 Neither fixture is packaged/deployed or becomes an alternate backend owner.
 Current account install intentionally emits agent.created for the Bot's explicit
 Agent store; multidevice evidence must assert that event and cross-account denial,
