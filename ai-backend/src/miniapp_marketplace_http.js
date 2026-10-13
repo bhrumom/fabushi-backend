@@ -621,6 +621,11 @@ export function createMiniAppMarketplaceRouter({
     res.json(signed);
   }));
 
+  router.get('/v1/extensions/install-trust', releaseRoute(async (_req, res) => {
+    res.set('cache-control', 'no-store');
+    res.json({ trust: extensionSigningStore.trustFeed() });
+  }));
+
   router.get('/v1/extensions/trust', releaseRoute(async (_req, res) => {
     res.json({ trust: extensionSigningStore.trustFeed() });
   }));

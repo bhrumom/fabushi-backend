@@ -25,6 +25,14 @@ is unchanged; the proof embeds the existing Node signed trust feed separately.
   verifies pinned feed/release signatures, freshness/revocation/platform/account,
   then downloads fixed approved CAS and verifies manifest/resources. Proof is not
   execution permission. Offline last-good policy remains platform-owned.
+- IP-05: GET /v1/extensions/install-trust returns `{trust}` using the existing
+  signed Node trust feed with no-store. This distinct name avoids the Worker's
+  manifest-pin route without changing that route. Native clients refresh and
+  verify this feed independently of approved proof availability, so a revoked
+  key cannot disappear behind a proof404 while cached code remains executable.
+  Only transport failure permits a previously accepted offline snapshot; malformed
+  or rejected online evidence fails closed. The response carries only existing
+  public key/status metadata, not reviewer credentials or release drafts.
 
 Verification exclusively Actions: actual Ed25519 fixture, public privacy, draft,
 revocation/missing signature, descriptor/artifact tamper and scan failure. Existing
