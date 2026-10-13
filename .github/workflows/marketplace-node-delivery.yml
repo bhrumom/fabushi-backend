@@ -1,0 +1,82 @@
+name: Existing Marketplace Node Delivery
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/scripts/*node-delivery*'
+      - '.github/workflows/marketplace-node-delivery.yml'
+      - 'docs/specs/marketplace-node-production-delivery.md'
+      - 'fabushi/web/src/routes/extension-registry-gateway.js'
+      - 'fabushi/web/tests/extension-registry-gateway.test.js'
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Verify receiver and gateway boundaries
+        run: |
+          python3 .github/scripts/test-node-delivery-receiver.py
+          node --test fabushi/web/tests/extension-registry-gateway.test.js fabushi/web/tests/extension-signing-routes.test.js
+          node --check .github/scripts/initialize-node-delivery-identity.mjs
+      - name: Verify and prepare canonical existing Node runtime
+        working-directory: ai-backend
+        run: |
+          npm ci
+          npm run check
+          npm test
+          npm prune --omit=dev
+          tar -czf ../node-runtime.tar.gz src node_modules package.json package-lock.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canonical-node-runtime
+          path: node-runtime.tar.gz
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: existing-marketplace-node-production
+      cancel-in-progress: false
+    steps:
+      - name: Require canonical repository/main
+        run: test "$GITHUB_REPOSITORY" = bhrumom/fabushi-backend && test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/download-artifact@v4
+        with:
+          name: canonical-node-runtime
+      - name: Transfer prepared runtime and protected managed configuration
+        env:
+          DEPLOY_KEY: ${{ secrets.FABUSHI_AI_DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ vars.FABUSHI_AI_DEPLOY_HOST }}
+          KNOWN_HOST: ${{ vars.FABUSHI_AI_DEPLOY_KNOWN_HOST }}
+          FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY: ${{ secrets.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY }}
+          FABUSHI_MARKETPLACE_SIGNING_PUBLIC_KEY_RAW: ${{ secrets.FABUSHI_MARKETPLACE_SIGNING_PUBLIC_KEY_RAW }}
+          FABUSHI_MARKETPLACE_SIGNING_KEY_ID: ${{ secrets.FABUSHI_MARKETPLACE_SIGNING_KEY_ID }}
+          FABUSHI_MARKETPLACE_TRUST_EPOCH: ${{ secrets.FABUSHI_MARKETPLACE_TRUST_EPOCH }}
+          FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_KEY" && test -n "$DEPLOY_HOST" && test -n "$KNOWN_HOST"
+          identity_dir="$(mktemp -d)"
+          trap 'rm -f "$identity_dir/identity" "$identity_dir/known_hosts"; rmdir "$identity_dir"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$identity_dir/identity"
+          printf '%s\n' "$KNOWN_HOST" > "$identity_dir/known_hosts"
+          chmod 600 "$identity_dir/identity" "$identity_dir/known_hosts"
+          archive_digest="$(sha256sum node-runtime.tar.gz | cut -d' ' -f1)"
+          python3 -c 'import json,os,sys,shutil; names=["FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY","FABUSHI_MARKETPLACE_SIGNING_PUBLIC_KEY_RAW","FABUSHI_MARKETPLACE_SIGNING_KEY_ID","FABUSHI_MARKETPLACE_TRUST_EPOCH","FABUSHI_MARKETPLACE_REVIEW_TOKEN"]; sys.stdout.buffer.write((json.dumps({n:os.environ[n] for n in names})+"\n").encode()); shutil.copyfileobj(open("node-runtime.tar.gz","rb"),sys.stdout.buffer)' | ssh -i "$identity_dir/identity" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$identity_dir/known_hosts" -o ConnectTimeout=15 "fabushi-ai-deploy@$DEPLOY_HOST" "deploy $GITHUB_SHA $archive_digest"
+      - name: Confirm real public existing Registry owner
+        run: curl --fail --silent --show-error 'https://ai.ombhrum.com/v1/extensions?limit=1' > registry-public-health.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: existing-node-registry-public-health-${{ github.sha }}
+          path: registry-public-health.json
