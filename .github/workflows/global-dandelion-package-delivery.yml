@@ -1,0 +1,34 @@
+name: Sign Reviewed Global Dandelion Package
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  signed-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Require canonical main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download exact successful reviewed preparation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/bhrumom/global-dandelion-rs/actions/runs/38360590921 --jq '.conclusion == "success" and .head_sha == "fce746baecc6bbd9f4b12d5862d886cf7f72eda5"' | grep -qx true
+          gh api repos/bhrumom/global-dandelion-rs/actions/artifacts/11794806976/zip > preparation.zip
+      - name: Install signature verifier
+        run: python3 -m pip install cryptography==46.0.3
+      - name: Verify resources, sign through production, verify pinned public key
+        env:
+          FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
+        run: python3 .github/scripts/deliver-dandelion-package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: global-dandelion-signed-delivery-${{ github.sha }}
+          path: signed-delivery

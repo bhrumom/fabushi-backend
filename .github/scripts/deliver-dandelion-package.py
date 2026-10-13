@@ -1,0 +1,146 @@
+"""Validate reviewed preparation and use the existing production manifest signer."""
+import base64
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import urllib.request
+import zipfile
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+SOURCE = 'fce746baecc6bbd9f4b12d5862d886cf7f72eda5'
+ARTIFACT = 11794806976
+ARCHIVE_DIGEST = '6089817d720da2697e4b3c3019c626a6978c3b11c4c2282865951066a53df018'
+KEY_ID = 'fabushi-marketplace-managed-20261013-1'
+PUBLIC_KEY = 'VbvgbVxNAeftFYB0l1-NzE2-Gx3d4NQ7hkKiQ0HMpu0'
+DOMAIN = b'fabushi.fabapp.manifest.v1\0'
+MAX_BYTES = 16 * 1024 * 1024
+
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(',', ':'), allow_nan=False).encode('utf-8')
+
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate JSON field')
+        result[key] = value
+    return result
+
+
+def parse(data):
+    return json.loads(data, object_pairs_hook=unique_object)
+
+
+def members(data):
+    if len(data) > MAX_BYTES:
+        raise ValueError('archive too large')
+    result = {}
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        if len(archive.infolist()) > 256:
+            raise ValueError('too many members')
+        total = 0
+        for item in archive.infolist():
+            name = item.filename
+            if (not name or not name.isascii() or '\\' in name or '\0' in name
+                    or any(part in ('', '.', '..') for part in name.split('/'))
+                    or name in result or item.flag_bits & 1
+                    or stat.S_ISLNK(item.external_attr >> 16)):
+                raise ValueError('unsafe archive member')
+            total += item.file_size
+            if total > MAX_BYTES:
+                raise ValueError('expanded archive too large')
+            result[name] = archive.read(item)
+    return result
+
+
+def preparation(data):
+    files = members(data)
+    manifest = parse(files.pop('manifest.json'))
+    if ('signature' in manifest or manifest['appId'] != 'org.fabushi.global-dandelion'
+            or manifest['publisherId'] != 'bhrumom' or manifest['version'] != '0.1.0'
+            or manifest['requestedCapabilities'] != [] or not manifest['offlineCore']
+            or manifest['networkPolicy'] != {'mode': 'deny', 'allowedOrigins': []}
+            or set(files) != set(manifest['files'])):
+        raise ValueError('unexpected package identity/policy/resources')
+    for name, item in manifest['files'].items():
+        payload = files[name]
+        if len(payload) != item['bytes'] or hashlib.sha256(payload).hexdigest() != item['sha256']:
+            raise ValueError('resource integrity mismatch')
+    if files['BUILD-INFO.txt'].decode().splitlines()[0] != 'source=' + SOURCE:
+        raise ValueError('source mismatch')
+    return manifest, files
+
+
+def verify_response(unsigned, response):
+    trust = response['trust']
+    if (trust['keyId'] != KEY_ID or trust['trustEpoch'] != 1
+            or trust['algorithm'] != 'Ed25519' or trust['rawPublicKeyBase64URL'] != PUBLIC_KEY):
+        raise ValueError('unreviewed signer identity')
+    signed = dict(response['manifest'])
+    signature = signed.pop('signature')
+    if signed != unsigned or signature['algorithm'] != 'Ed25519' or signature['keyId'] != KEY_ID:
+        raise ValueError('signed manifest changed')
+    key = Ed25519PublicKey.from_public_bytes(base64.urlsafe_b64decode(PUBLIC_KEY + '='))
+    key.verify(base64.urlsafe_b64decode(signature['value'] + '=='), DOMAIN + canonical(unsigned))
+    return response['manifest']
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        raise ValueError('signer redirect refused')
+
+
+def main():
+    if os.environ.get('GITHUB_REF') != 'refs/heads/main' or os.environ.get('GITHUB_REPOSITORY') != 'bhrumom/fabushi-backend':
+        raise ValueError('canonical main required')
+    raw = Path('preparation.zip').read_bytes()
+    if hashlib.sha256(raw).hexdigest() != ARCHIVE_DIGEST:
+        raise ValueError('Actions preparation digest mismatch')
+    outer = members(raw)
+    unsigned, files = preparation(outer['global-dandelion-UNSIGNED.zip'])
+    token = os.environ.get('FABUSHI_MARKETPLACE_REVIEW_TOKEN', '')
+    if not token:
+        raise ValueError('review authorization missing')
+    request = urllib.request.Request(
+        'https://api.ombhrum.com/v1/extensions/review/fabapp/sign',
+        data=canonical({'manifest': unsigned}), method='POST',
+        headers={'Content-Type': 'application/json', 'x-fabushi-marketplace-review-token': token})
+    with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+        body = response.read(1024 * 1024 + 1)
+    if len(body) > 1024 * 1024:
+        raise ValueError('signer response too large')
+    signed = verify_response(unsigned, parse(body))
+    output = Path('signed-delivery')
+    output.mkdir(exist_ok=False)
+    target = output / 'global-dandelion-0.1.0.fabapp'
+    with zipfile.ZipFile(target, 'x', compression=zipfile.ZIP_STORED) as bundle:
+        for name, payload in [('manifest.json', canonical(signed))] + sorted(files.items()):
+            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.external_attr = 0o100644 << 16
+            info.create_system = 3
+            bundle.writestr(info, payload)
+    provenance = {'sourceRepository': 'bhrumom/global-dandelion-rs', 'sourceCommit': SOURCE,
+                  'preparationArtifactId': ARTIFACT, 'preparationArchiveSha256': ARCHIVE_DIGEST,
+                  'backendCommit': os.environ['GITHUB_SHA'], 'deliveryRun': os.environ['GITHUB_RUN_ID'],
+                  'packageSha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+                  'signerKeyId': KEY_ID, 'trustEpoch': 1, 'status': 'integrity-signed-not-published',
+                  'license': 'LicenseRef-Proprietary', 'nativeFeaturesAvailable': False}
+    (output / 'provenance.json').write_bytes(canonical(provenance))
+    print(json.dumps(provenance))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        # Never echo HTTP error bodies, request headers, credentials or traceback.
+        print('Protected package delivery failed; no release published.', file=sys.stderr)
+        sys.exit(1)
