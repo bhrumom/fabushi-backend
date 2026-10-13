@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import posixpath
+import platform
 import re
 import shutil
 import sqlite3
@@ -71,6 +72,12 @@ def configuration(values):
     return ('\n'.join(result) + '\n').encode()
 
 
+def verify_native_machine(header):
+    if (len(header) < 20 or header[:4] != b'\x7fELF' or header[4:6] != b'\x02\x01'
+            or int.from_bytes(header[18:20], 'little') != 183):
+        raise ValueError('ARM64 ELF runtime required')
+
+
 def run(args, **kwargs):
     result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=60, **kwargs)
     if result.returncode:
@@ -97,6 +104,8 @@ def main():
     if os.geteuid() != 0 or len(sys.argv) != 2:
         raise ValueError('restricted root receiver required')
     sha, expected = command(sys.argv[1])
+    if platform.machine() != 'aarch64':
+        raise ValueError('canonical delivery server must be ARM64')
     request = urllib.request.Request('https://api.github.com/repos/bhrumom/fabushi-backend/commits/main',
                                      headers={'User-Agent': 'Fabushi-Node-Delivery/1'})
     with urllib.request.urlopen(request, timeout=15) as r:
@@ -132,6 +141,8 @@ def main():
             raise ValueError('immutable release exists; do not overwrite')
         with tarfile.open(archive_path) as archive:
             expanded = validate_members(archive.getmembers())
+            with archive.extractfile('node_modules/better-sqlite3/build/Release/better_sqlite3.node') as addon:
+                verify_native_machine(addon.read(20))
             database = ROOT / 'data' / 'dacheng-ai.sqlite'
             db_bytes = database.stat().st_size if database.exists() else 0
             usage = shutil.disk_usage(ROOT)

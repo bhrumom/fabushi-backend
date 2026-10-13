@@ -49,4 +49,13 @@ class ReceiverTests(unittest.TestCase):
         self.assertNotIn('print(config)', source)
         self.assertNotIn('print(str(error))', source)
 
+    def test_native_architecture(self):
+        header = bytearray(20)
+        header[:6] = b'\x7fELF\x02\x01'
+        header[18:20] = (183).to_bytes(2, 'little')
+        receiver.verify_native_machine(header)
+        header[18:20] = (62).to_bytes(2, 'little')
+        with self.assertRaises(ValueError): receiver.verify_native_machine(header)
+        with self.assertRaises(ValueError): receiver.verify_native_machine(b'invalid')
+
 if __name__ == '__main__': unittest.main()

@@ -12,7 +12,7 @@ permissions:
   contents: read
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -48,10 +48,12 @@ jobs:
           FABUSHI_CONTRACT_CORE_ROOT: ${{ github.workspace }}/.contract-fixtures/core
           FABUSHI_CONTRACT_PLUGIN_ROOT: ${{ github.workspace }}/.contract-fixtures/plugins
         run: |
+          test "$(uname -m)" = aarch64
           npm ci
           npm run check
           npm test
           npm prune --omit=dev
+          npm test
           tar -czf ../node-runtime.tar.gz src node_modules package.json package-lock.json
       - uses: actions/upload-artifact@v4
         with:
