@@ -14,7 +14,9 @@ produces an integrity-signed package, NOT a Registry approval or public listing.
   source SHA, successful Actions artifact ID and archive digest in reviewed code.
   The private source artifact is administratively copied unchanged into an
   unpublished same-repository draft transport. The runner's existing token reads
-  only that draft; no personal/cross-repository credential is introduced. The
+  only that draft; GitHub requires maintainer-level contents access to see draft
+  releases, so that permission is limited to this protected main delivery job.
+  No personal/cross-repository credential is introduced. The
   original archive digest remains mandatory and the draft must remain unpublished.
 - GD-02: validate ZIP members without extraction: bounded sizes/count, no duplicate,
   absolute, traversal, symlink, encrypted or undeclared members. Verify every
