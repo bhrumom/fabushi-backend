@@ -115,7 +115,8 @@ def main():
     request = urllib.request.Request(
         'https://api.ombhrum.com/v1/extensions/review/fabapp/sign',
         data=canonical({'manifest': unsigned}), method='POST',
-        headers={'Content-Type': 'application/json', 'x-fabushi-marketplace-review-token': token})
+        headers={'Content-Type': 'application/json', 'User-Agent': 'Fabushi-Marketplace-Delivery/1',
+                 'x-fabushi-marketplace-review-token': token})
     with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
         body = response.read(1024 * 1024 + 1)
     if len(body) > 1024 * 1024:
@@ -147,6 +148,16 @@ if __name__ == '__main__':
     except Exception as error:
         # Never echo HTTP error bodies, request headers, credentials or traceback.
         status = str(error.code) if isinstance(error, urllib.error.HTTPError) else 'none'
+        service_code = 'unclassified'
+        if isinstance(error, urllib.error.HTTPError):
+            try:
+                code = parse(error.read(4096)).get('error')
+                if code in {'REVIEW_AUTH_REQUIRED', 'INVALID_FABAPP_MANIFEST', 'SIGNING_CONFIGURATION_REQUIRED',
+                            'INVALID_SIGNING_KEY', 'SIGNATURE_SELF_CHECK_FAILED'}:
+                    service_code = code
+            except Exception:
+                service_code = 'non-contract-http-response'
         print('Protected package delivery failed; class=' + type(error).__name__
-              + '; http=' + status + '; no release published.', file=sys.stderr)
+              + '; http=' + status + '; service=' + service_code
+              + '; no release published.', file=sys.stderr)
         sys.exit(1)
