@@ -9,6 +9,9 @@ on:
       - "docs/specs/extension-trust-feed-v1.md"
       - "docs/specs/extension-moderation-cases-v1.md"
       - "ai-backend/src/extension_registry.js"
+      - "ai-backend/src/extension_install_proof.js"
+      - "ai-backend/test/extension_install_proof.test.js"
+      - "docs/specs/extension-install-proof-v1.md"
       - "ai-backend/src/extension_publisher_store.js"
       - "ai-backend/src/extension_release_store.js"
       - "ai-backend/src/extension_artifact_store.js"
@@ -55,3 +58,5 @@ jobs:
         run: node --test test/extension_registry.test.js test/extension_publisher_store.test.js test/extension_release_store.test.js test/extension_artifact_store.test.js test/extension_signing_store.test.js test/extension_moderation_store.test.js test/account_sync_store.test.js test/miniapp_marketplace.test.js test/miniapp_marketplace_http.test.js
       - name: Bind evidence to exact source
         run: git rev-parse HEAD >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify approved install proof privacy and binding
+        run: node --test test/extension_install_proof.test.js
