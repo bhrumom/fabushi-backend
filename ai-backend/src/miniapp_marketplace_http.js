@@ -644,6 +644,16 @@ export function createMiniAppMarketplaceRouter({
     res.json({ trust: extensionSigningStore.currentTrust() });
   });
 
+  router.get('/v1/extensions/install/:kind/:namespace/:name/:version', extensionRoute(async (req, res) => {
+    const proof = readExtensionInstallProof({ releaseStore: extensionReleaseStore,
+      artifactStore: extensionArtifactStore, signingStore: extensionSigningStore }, {
+      kind: req.params.kind, namespace: req.params.namespace,
+      name: req.params.name, version: req.params.version,
+    });
+    res.set('cache-control', 'no-store');
+    res.json(proof);
+  }));
+
   router.get('/v1/extensions', extensionRoute(async (req, res) => {
     const payload = browseExtensions(marketplace, {
       query: safeQuery(req.query.q ?? req.query.query),
@@ -1028,3 +1038,4 @@ export function registerMiniAppMarketplaceRoutes(app, options = {}) {
   app.use(registration.router);
   return registration;
 }
+import { readExtensionInstallProof } from './extension_install_proof.js';
