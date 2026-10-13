@@ -6,6 +6,12 @@ permissions:
   actions: read
 jobs:
   signed-package:
+    # GitHub hides draft releases from read-only tokens. This protected
+    # canonical-main job requires same-repository draft-maintainer access.
+    # It does not perform release publication or change repository content.
+    permissions:
+      contents: write
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: production
