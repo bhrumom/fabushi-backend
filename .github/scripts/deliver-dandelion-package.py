@@ -8,6 +8,7 @@ from pathlib import Path
 import stat
 import sys
 import urllib.request
+import urllib.error
 import zipfile
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -99,6 +100,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def main():
+    print('phase=preparation-integrity', flush=True)
     if os.environ.get('GITHUB_REF') != 'refs/heads/main' or os.environ.get('GITHUB_REPOSITORY') != 'bhrumom/fabushi-backend':
         raise ValueError('canonical main required')
     raw = Path('preparation.zip').read_bytes()
@@ -109,6 +111,7 @@ def main():
     token = os.environ.get('FABUSHI_MARKETPLACE_REVIEW_TOKEN', '')
     if not token:
         raise ValueError('review authorization missing')
+    print('phase=production-signer-request', flush=True)
     request = urllib.request.Request(
         'https://api.ombhrum.com/v1/extensions/review/fabapp/sign',
         data=canonical({'manifest': unsigned}), method='POST',
@@ -117,6 +120,7 @@ def main():
         body = response.read(1024 * 1024 + 1)
     if len(body) > 1024 * 1024:
         raise ValueError('signer response too large')
+    print('phase=pinned-signature-verification', flush=True)
     signed = verify_response(unsigned, parse(body))
     output = Path('signed-delivery')
     output.mkdir(exist_ok=False)
@@ -140,7 +144,9 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except Exception:
+    except Exception as error:
         # Never echo HTTP error bodies, request headers, credentials or traceback.
-        print('Protected package delivery failed; no release published.', file=sys.stderr)
+        status = str(error.code) if isinstance(error, urllib.error.HTTPError) else 'none'
+        print('Protected package delivery failed; class=' + type(error).__name__
+              + '; http=' + status + '; no release published.', file=sys.stderr)
         sys.exit(1)
