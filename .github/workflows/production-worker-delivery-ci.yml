@@ -6,6 +6,9 @@ on:
     paths:
       - "docs/specs/production-worker-delivery.md"
       - "docs/specs/marketplace-signing-bootstrap.md"
+      - "docs/specs/global-dandelion-package-delivery.md"
+      - ".github/scripts/*dandelion*.py"
+      - ".github/workflows/global-dandelion-package-delivery.yml"
       - ".github/scripts/*marketplace*.mjs"
       - ".github/workflows/marketplace-signing-bootstrap.yml"
       - ".github/scripts/assert-worker-security-secrets.sh"
@@ -52,3 +55,7 @@ jobs:
 
       - name: Verify real SQLite migration ordering and data preservation
         run: python3 scripts/test-human-call-migration.py
+      - name: Verify reviewed package delivery failure boundaries
+        run: |
+          python3 -m pip install cryptography==46.0.3
+          python3 .github/scripts/test-dandelion-package.py
