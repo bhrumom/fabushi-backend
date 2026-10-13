@@ -50,10 +50,12 @@ test('delegated Mini App identity fails closed on inactive or mismatched project
 });
 
 test('Platform Worker delegated token is sid-bound, exact-scope, introspectable and entitlement-only', () => {
-  const identity = readFileSync(join(workspace, 'third_party/mahayana/mahayana-rs/mahayana-platform-core/src/identity.rs'), 'utf8');
-  const router = readFileSync(join(workspace, 'third_party/mahayana/mahayana-rs/mahayana-platform-worker/src/worker_api.rs'), 'utf8');
-  const account = readFileSync(join(workspace, 'third_party/mahayana/mahayana-rs/mahayana-platform-worker/src/worker_api/account.rs'), 'utf8');
-  const commerce = readFileSync(join(workspace, 'third_party/mahayana/mahayana-rs/mahayana-platform-worker/src/worker_api/commerce.rs'), 'utf8');
+  // Inspect pinned canonical Core, never skip missing migrated source.
+  const coreWorkspace = process.env.FABUSHI_CONTRACT_CORE_ROOT || workspace;
+  const identity = readFileSync(join(coreWorkspace, 'third_party/mahayana/mahayana-rs/mahayana-platform-core/src/identity.rs'), 'utf8');
+  const router = readFileSync(join(coreWorkspace, 'third_party/mahayana/mahayana-rs/mahayana-platform-worker/src/worker_api.rs'), 'utf8');
+  const account = readFileSync(join(coreWorkspace, 'third_party/mahayana/mahayana-rs/mahayana-platform-worker/src/worker_api/account.rs'), 'utf8');
+  const commerce = readFileSync(join(coreWorkspace, 'third_party/mahayana/mahayana-rs/mahayana-platform-worker/src/worker_api/commerce.rs'), 'utf8');
   const server = readFileSync(join(workspace, 'ai-backend/src/server.js'), 'utf8');
   assert.match(identity, /struct PluginAccessTokenClaims[\s\S]*pub sid: String/);
   assert.match(router, /\/v1\/auth\/plugin-token\/introspect/);

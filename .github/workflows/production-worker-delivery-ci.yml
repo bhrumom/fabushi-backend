@@ -9,6 +9,8 @@ on:
       - "docs/specs/global-dandelion-package-delivery.md"
       - ".github/scripts/*dandelion*.py"
       - ".github/workflows/global-dandelion-package-delivery.yml"
+      - "fabushi/web/src/routes/extension-registry-gateway.js"
+      - "fabushi/web/tests/extension-registry-gateway.test.js"
       - ".github/scripts/*marketplace*.mjs"
       - ".github/workflows/marketplace-signing-bootstrap.yml"
       - ".github/scripts/assert-worker-security-secrets.sh"
@@ -51,6 +53,7 @@ jobs:
         run: |
           node --test fabushi/web/tests/production-worker-delivery-contract.test.js
           node --test fabushi/web/tests/extension-signing-routes.test.js
+          node --test fabushi/web/tests/extension-registry-gateway.test.js
           node --test .github/scripts/bootstrap-marketplace-worker.test.mjs
 
       - name: Verify real SQLite migration ordering and data preservation

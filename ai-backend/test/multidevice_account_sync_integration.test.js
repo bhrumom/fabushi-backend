@@ -154,6 +154,7 @@ test('two devices with different sessions converge Mini App, Bot chat history, c
       [
         'miniapp.installed',
         'bot.added',
+        'agent.created',
         'miniapp.bot.message',
         'miniapp.bot.message',
         'miniapp.cloud.set',
@@ -162,6 +163,13 @@ test('two devices with different sessions converge Mini App, Bot chat history, c
       ],
     );
 
+    const createdAgent = difference.events.find((event) => event.type === 'agent.created');
+    const botAgentId = iphoneBots.bots[0].bot.agentId;
+    assert.equal(typeof botAgentId, 'string');
+    assert.equal(createdAgent.entityId, botAgentId);
+    assert.equal(createdAgent.payload.agentId, botAgentId);
+    assert.equal(createdAgent.payload.profile.agentId, botAgentId);
+    assert.equal((await fetch(`${baseUrl}/v1/account/agents/${encodeURIComponent(botAgentId)}`, { headers: other })).status, 404);
     const otherApps = await json(await fetch(`${baseUrl}/v1/marketplace/added`, { headers: other }));
     assert.equal(otherApps.apps.length, 0);
     const otherHistory = await json(await fetch(`${baseUrl}/api/miniapps/global-dharma/messages?limit=100`, { headers: other }));
