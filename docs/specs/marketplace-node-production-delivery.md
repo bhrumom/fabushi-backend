@@ -8,7 +8,7 @@ User authority: complete missing setup for proprietary Global Dandelion publicat
 
 Production ai.ombhrum.com returns 404 for unified Registry. Existing service on
 bhrum2 runs canonical historical source 5448c51a462e0e0cd118cc63cac5a8fc06cc4b66
-in /opt/dacheng-ai/releases; Ubuntu24.04, Node22.22.2, port8788. Current backend
+in /opt/dacheng-ai/releases; ARM64 Ubuntu24.04, Node22.22.2, port8788. Current backend
 main contains Registry namespace/release/artifact/scan/sign/review/trust APIs but
 is not deployed. Reuse this service, account resolver and persistent stores;
 do not add a second Marketplace. Existing dataDir=/opt/dacheng-ai/data and
@@ -17,7 +17,7 @@ do not add a second Marketplace. Existing dataDir=/opt/dacheng-ai/data and
 ## Requirements
 
 - MND-01: main-only manual production-environment Actions delivery. Bind exact
-  canonical source. Node22/Ubuntu24 dependencies, builds and all tests in Actions;
+  canonical source. ARM64 Node22/Ubuntu24 dependencies, builds and all tests in Actions;
   VPS only receives prepared bytes/config and restarts the existing service.
 - MND-02: administrator initializes one dedicated deploy SSH identity in memory;
   private key only encrypted GitHub secret/ephemeral0600 runner identity. Refuse
@@ -26,6 +26,9 @@ do not add a second Marketplace. Existing dataDir=/opt/dacheng-ai/data and
 - MND-03: pin observed server host Ed25519 key, not ssh-keyscan at deploy time.
   Validate fixed command sourceSHA/digest, bounded tar and paths/links/special
   members before extracting only into new immutable release directory.
+  Verify server ARM64 and the SQLite native addon's ELF machine=183 before
+  backup/activation. After production pruning, rerun runtime tests in the same
+  native ARM64 runner; x86 builds cannot be accepted for this server.
 - MND-04: capture existing SQLite online backups before service change; preserve
   original environment, data ownership and historical release. Signer/reviewer
   values transferred over SSH stdin only, never artifact/log/source/tool argument.
@@ -66,6 +69,11 @@ AC-2: main prepared artifact, preserved data/config/backup, successful service a
 existing Registry read/reviewer authorization; rollback drill documented.
 AC-3: canonical gateway reaches same owner, other APIs regress without bypass.
 All pending. Missing network/device/credentials must not become a passing claim.
+
+Observed rollback: run38370871878 prepared x86 SQLite bytes for an ARM64 server;
+health rejected them and restored source5448c51 with service active. Backup and
+failed immutable14db8d4 release retained. This is rollback evidence, not deploy
+success. Receiver now rejects architecture mismatch before service activation.
 
 References: production-worker-delivery.md, unified-extension-registry-v1.md,
 extension-release-governance-v1.md, extension-release-signing-v1.md;
