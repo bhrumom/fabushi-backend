@@ -1,0 +1,31 @@
+name: Scan reviewed Global Dandelion candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  scan:
+    environment: production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require canonical main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download exact signed delivery archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/bhrumom/fabushi-backend/actions/artifacts/11797530939/zip > signed-delivery.zip
+      - run: python3 -m pip install cryptography==46.0.3
+      - name: Validate exact bytes and record digest-fenced scan
+        env:
+          FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
+        run: python3 .github/scripts/scan-dandelion-package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dandelion-scan-${{ github.sha }}
+          path: scan-evidence.json
