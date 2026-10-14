@@ -131,8 +131,10 @@ test("Core device transport uses target grant then Core session/operation and co
     ["core", "network-route"],
     ["private", "grantController"],
     ["core", "session-create"],
+    ["core", "network-route"],
     ["private", "authorizeTool"],
     ["core", "operation-create"],
+    ["core", "network-route"],
     ["private", "operation"],
     ["core", "operation-query"],
   ]);
@@ -364,4 +366,88 @@ test("Core device transport passes only the service-bound Core peer route to pri
   assert.equal(received.payload.networkGeneration, 13);
   assert.equal(Object.hasOwn(received, "proofSha256"), false);
   assert.equal(Object.hasOwn(received, "deviceSecret"), false);
+});
+
+
+test("Core device transport rejects an expired Core route before private dispatch", async () => {
+  let privateDispatches = 0;
+  const unavailable = async () => { throw new Error("must not run"); };
+  const transport = createCoreDeviceTransport({
+    accountClient: {
+      getRemoteComputerNetworkRoute: async () => networkRoute(9),
+      createRemoteComputerSession: unavailable,
+      reconcileRemoteComputerSession: unavailable,
+      createRemoteComputerOperation: unavailable,
+      queryRemoteComputerOperation: unavailable,
+      markRemoteComputerOperationOutcomeUnknown: unavailable,
+    },
+    privateTransport: {
+      async request() {
+        privateDispatches += 1;
+        throw new Error("expired route must not dispatch");
+      },
+    },
+    now: () => 2_000_000_000,
+  });
+  await assert.rejects(
+    () => transport.describeDeviceTool({
+      ...baseInput(),
+      toolName: "Computer",
+    }),
+    /network route failed identity correlation/u,
+  );
+  assert.equal(privateDispatches, 0);
+});
+
+test("Core device transport fails closed if network generation rotates during one device_call", async () => {
+  let routeReads = 0;
+  const privatePayloads = [];
+  const clientToken = "c".repeat(64);
+  const mobileToken = "m".repeat(64);
+  const transport = createCoreDeviceTransport({
+    accountClient: {
+      async getRemoteComputerNetworkRoute() {
+        routeReads += 1;
+        return networkRoute(routeReads === 1 ? 9 : 10);
+      },
+      async createRemoteComputerSession() {
+        return { sessionId: "session-fdn-rotation", mobileToken };
+      },
+      async reconcileRemoteComputerSession() {
+        throw new Error("unused");
+      },
+      async createRemoteComputerOperation() {
+        throw new Error("operation must not be created after route generation rotates");
+      },
+      async queryRemoteComputerOperation() {
+        throw new Error("unused");
+      },
+      async markRemoteComputerOperationOutcomeUnknown() {
+        throw new Error("unused");
+      },
+    },
+    privateTransport: {
+      async request({ payload, deviceId, networkGeneration }) {
+        privatePayloads.push(payload.type);
+        if (payload.type !== "grantController") throw new Error("only the initial grant may dispatch");
+        return {
+          type: "controllerGranted",
+          deviceId,
+          clientId: "client-fdn-rotation",
+          clientToken,
+          connectionId: payload.connectionId,
+          delegationId: payload.delegationId,
+          requestId: payload.requestId,
+          networkGeneration,
+        };
+      },
+    },
+    now: () => 1_800_000_000,
+  });
+  await assert.rejects(
+    () => transport.callDevice(baseInput()),
+    /network generation changed during the request/u,
+  );
+  assert.equal(routeReads, 2);
+  assert.deepEqual(privatePayloads, ["grantController"]);
 });
