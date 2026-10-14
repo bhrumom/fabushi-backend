@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -109,7 +110,7 @@ func TestHTTPHandlerRejectsUnknownFieldsBeforeDial(t *testing.T) {
 	})
 	httpReq := httptest.NewRequest(http.MethodPost, privateRequestPath, strings.NewReader(string(body)))
 	recorder := httptest.NewRecorder()
-	handler("cell-fdn-account-a", defaultTargetPort, dial, func() time.Time {
+	handler("cell-fdn-account-a", "100.64.0.2", defaultTargetPort, dial, func() time.Time {
 		return time.Unix(1_800_000_000, 0)
 	}).ServeHTTP(recorder, httpReq)
 
@@ -120,3 +121,59 @@ func TestHTTPHandlerRejectsUnknownFieldsBeforeDial(t *testing.T) {
 		t.Fatalf("unexpected dial count %d", dials)
 	}
 }
+
+func TestPreferredSelfNodePrefersTailnetIPv4AndRejectsPublicOnly(t *testing.T) {
+	ips := []netip.Addr{
+		netip.MustParseAddr("fd7a:115c:a1e0::12"),
+		netip.MustParseAddr("100.64.0.22"),
+	}
+	node, ok := preferredSelfNode(ips)
+	if !ok || node != "100.64.0.22" {
+		t.Fatalf("unexpected preferred node %q ok=%v", node, ok)
+	}
+	if _, ok := preferredSelfNode([]netip.Addr{netip.MustParseAddr("8.8.8.8")}); ok {
+		t.Fatal("public address unexpectedly accepted as self node")
+	}
+}
+
+func TestStatusSurfaceIsLoopbackMetadataOnlyAndDoesNotDial(t *testing.T) {
+	dials := 0
+	dial := func(context.Context, string, string) (net.Conn, error) {
+		dials++
+		return nil, io.EOF
+	}
+	httpReq := httptest.NewRequest(http.MethodGet, statusPath, nil)
+	recorder := httptest.NewRecorder()
+	handler("cell-fdn-account-a", "100.64.0.22", defaultTargetPort, dial, time.Now).
+		ServeHTTP(recorder, httpReq)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", recorder.Code)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil {
+		t.Fatalf("status JSON invalid: %v", err)
+	}
+	if len(status) != 3 || status["cellId"] != "cell-fdn-account-a" ||
+		status["nodeId"] != "100.64.0.22" || status["ready"] != true {
+		t.Fatalf("unexpected status %#v", status)
+	}
+	for _, forbidden := range []string{"authKey", "controlUrl", "stateDir", "hostname", "token", "secret"} {
+		if strings.Contains(recorder.Body.String(), forbidden) {
+			t.Fatalf("status leaked forbidden field %q: %s", forbidden, recorder.Body.String())
+		}
+	}
+	if dials != 0 {
+		t.Fatalf("status unexpectedly dialed %d times", dials)
+	}
+
+	for _, rawURL := range []string{statusPath + "?debug=1", privateRequestPath} {
+		req := httptest.NewRequest(http.MethodGet, rawURL, nil)
+		out := httptest.NewRecorder()
+		handler("cell-fdn-account-a", "100.64.0.22", defaultTargetPort, dial, time.Now).
+			ServeHTTP(out, req)
+		if out.Code != http.StatusNotFound {
+			t.Fatalf("unexpected GET acceptance for %s: %d", rawURL, out.Code)
+		}
+	}
+}
+
