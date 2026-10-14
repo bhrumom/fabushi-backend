@@ -1,11 +1,19 @@
 name: Global Dandelion scanner contract
 on:
+  push:
+    branches: [main, 'codex/**']
+    paths:
+      - '.github/scripts/*dandelion*'
+      - '.github/workflows/global-dandelion*'
+      - 'docs/specs/global-dandelion-security-scan.md'
+      - 'docs/specs/global-dandelion-release-review.md'
   pull_request:
     branches: [main]
     paths:
       - '.github/scripts/*dandelion*'
       - '.github/workflows/global-dandelion*'
       - 'docs/specs/global-dandelion-security-scan.md'
+      - 'docs/specs/global-dandelion-release-review.md'
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,4 +35,6 @@ jobs:
       - name: Verify signed candidate and reject tampering
         env:
           FABUSHI_SIGNED_SCAN_FIXTURE: signed-delivery.zip
-        run: python3 .github/scripts/scan-dandelion-package.test.py
+        run: |
+          python3 .github/scripts/scan-dandelion-package.test.py
+          python3 .github/scripts/review-dandelion-release.test.py

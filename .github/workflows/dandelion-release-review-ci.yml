@@ -1,0 +1,25 @@
+name: Exact Dandelion release review gates
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/*review-dandelion-release.py'
+      - '.github/workflows/*dandelion*review*.yml'
+      - 'docs/specs/global-dandelion-release-review.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/scripts/*review-dandelion-release.py'
+      - '.github/workflows/*dandelion*review*.yml'
+permissions:
+  contents: read
+jobs:
+  pure-review-gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify pure gates without credentials or release mutations
+        run: python3 .github/scripts/test-review-dandelion-release.py -v
