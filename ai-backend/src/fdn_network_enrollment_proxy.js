@@ -43,6 +43,22 @@ function validateBrokerToken(raw) {
   return token;
 }
 
+export function validateHeadscaleControlUrl(raw) {
+  const value = readText(raw, 2048);
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw enrollmentError("fdn_headscale_control_url_invalid", 503);
+  }
+  if (url.protocol !== "https:" || !url.hostname ||
+      url.username || url.password || url.search || url.hash ||
+      (url.pathname !== "/" && url.pathname !== "")) {
+    throw enrollmentError("fdn_headscale_control_url_invalid", 503);
+  }
+  return url.origin;
+}
+
 function validateGrantId(value) {
   const grantId = readText(value, 96);
   if (!/^network-enroll-[a-f0-9]{32}$/.test(grantId)) {
@@ -124,7 +140,7 @@ export class FdnEnrollmentBrokerClient {
   }
 }
 
-export function authorizeEnrollmentForAccount(user, payload) {
+export function authorizeEnrollmentForAccount(user, payload, { controlUrl } = {}) {
   const canonicalAccountId = readText(user?.fabushiAccountId, 256);
   if (!user?.isAuthenticated || !canonicalAccountId) {
     throw enrollmentError("fdn_enrollment_auth_required", 401);
@@ -147,6 +163,7 @@ export function authorizeEnrollmentForAccount(user, payload) {
   return {
     ...enrollment,
     deviceId: target.deviceId,
+    controlUrl: validateHeadscaleControlUrl(controlUrl),
   };
 }
 
@@ -172,7 +189,9 @@ export function registerFdnEnrollmentProxy({
   resolveUser,
   asyncHandler,
   clientFactory = () => new FdnEnrollmentBrokerClient(),
+  controlUrl = process.env.FABUSHI_FDN_HEADSCALE_CONTROL_URL,
 }) {
+  const trustedControlUrl = validateHeadscaleControlUrl(controlUrl);
   app.post(
     "/api/fdn/network-enrollment/start",
     asyncHandler(async (req, res) => {
@@ -180,7 +199,7 @@ export function registerFdnEnrollmentProxy({
         const user = await resolveUser(req, {});
         if (!user?.isAuthenticated) throw enrollmentError("fdn_enrollment_auth_required", 401);
         const payload = await clientFactory().start(req.body);
-        const enrollment = authorizeEnrollmentForAccount(user, payload);
+        const enrollment = authorizeEnrollmentForAccount(user, payload, { controlUrl: trustedControlUrl });
         return send(res, 200, { ok: true, enrollment });
       } catch (error) {
         return routeError(res, error);
@@ -195,7 +214,7 @@ export function registerFdnEnrollmentProxy({
         const user = await resolveUser(req, {});
         if (!user?.isAuthenticated) throw enrollmentError("fdn_enrollment_auth_required", 401);
         const payload = await clientFactory().complete(req.body);
-        const enrollment = authorizeEnrollmentForAccount(user, payload);
+        const enrollment = authorizeEnrollmentForAccount(user, payload, { controlUrl: trustedControlUrl });
         return send(res, 200, { ok: true, enrollment });
       } catch (error) {
         return routeError(res, error);
