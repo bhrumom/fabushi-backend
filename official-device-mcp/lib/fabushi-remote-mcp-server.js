@@ -715,6 +715,7 @@ export function createFabushiRemoteMcpServer(options = {}) {
     });
     const coreServiceAccessToken = String(account.coreServiceAccessToken || "").trim();
     const requireCoreDeviceAuthority = requireCoreServiceState || options.requireCoreDeviceAuthority === true;
+    const coreDeviceTransport = options.coreDeviceTransport ?? null;
 
     const loadCoreInventory = async () => {
       if (!coreServiceAccessToken) {
@@ -775,7 +776,10 @@ export function createFabushiRemoteMcpServer(options = {}) {
       },
       describeDeviceTool: async (accountId, deviceId, toolName) => {
         const computer = await findCoreComputer(deviceId);
-        if (!computer) return describeRegisteredDeviceTool(accountId, deviceId, toolName);
+        if (!computer) {
+          if (requireCoreDeviceAuthority) throw new Error("Canonical Core device authority is required.");
+          return describeRegisteredDeviceTool(accountId, deviceId, toolName);
+        }
         if (computer.online !== true) {
           return {
             deviceId,
@@ -786,11 +790,53 @@ export function createFabushiRemoteMcpServer(options = {}) {
             message: `Device ${deviceId} is offline in canonical Core inventory.`,
           };
         }
+        if (coreDeviceTransport?.describeDeviceTool) {
+          return coreDeviceTransport.describeDeviceTool({
+            accountId,
+            deviceId,
+            toolName,
+            computer,
+            coreServiceAccessToken,
+            connectionId: account.service?.connectionId || "",
+            delegationId: account.service?.delegationId || "",
+          });
+        }
+        if (requireCoreDeviceAuthority) {
+          return {
+            deviceId,
+            toolName,
+            available: false,
+            schemaVersion: "",
+            tool: null,
+            message: "Canonical Core-authorized target transport is unavailable.",
+          };
+        }
         return describeRegisteredDeviceTool(accountId, deviceId, toolName);
       },
       callDevice: async (accountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions) => {
         const computer = await findCoreComputer(deviceId);
+        if (!computer && requireCoreDeviceAuthority) throw new Error("Canonical Core device authority is required.");
         if (computer && computer.online !== true) throw new Error(`Device ${deviceId} is offline in canonical Core inventory.`);
+        if (coreDeviceTransport?.callDevice) {
+          return coreDeviceTransport.callDevice({
+            accountId,
+            deviceId,
+            toolName,
+            args,
+            timeoutSeconds,
+            diskPreflight,
+            requestId: callOptions?.requestId || "",
+            requestSha256: callOptions?.requestSha256 || "",
+            journalContext: callOptions?.journalContext || null,
+            computer,
+            coreServiceAccessToken,
+            connectionId: account.service?.connectionId || "",
+            delegationId: account.service?.delegationId || "",
+          });
+        }
+        if (requireCoreDeviceAuthority) {
+          throw new Error("Canonical Core-authorized target transport is required; direct registry execution is disabled.");
+        }
         return callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions);
       },
     });
