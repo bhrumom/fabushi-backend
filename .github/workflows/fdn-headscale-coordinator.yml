@@ -124,6 +124,55 @@ jobs:
           if grep -Eiq 'registerDeviceTools|devices registry|headscale:latest' enrollment-service.mjs; then
             exit 1
           fi
+      - name: Validate enrollment service supervisor
+        working-directory: fdn-network-coordinator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ./run-enrollment-service.sh
+          grep -F 'User=fabushi-fdn' systemd/fabushi-fdn-enrollment.service
+          grep -F 'Group=fabushi-fdn' systemd/fabushi-fdn-enrollment.service
+          grep -F 'UMask=0077' systemd/fabushi-fdn-enrollment.service
+          grep -F 'NoNewPrivileges=true' systemd/fabushi-fdn-enrollment.service
+          grep -F 'ProtectSystem=strict' systemd/fabushi-fdn-enrollment.service
+          grep -F 'PrivateDevices=true' systemd/fabushi-fdn-enrollment.service
+          grep -F 'ReadWritePaths=/var/lib/fabushi-fdn' systemd/fabushi-fdn-enrollment.service
+          grep -F 'umask 077' run-enrollment-service.sh
+          grep -F 'unix:///run/user/*/docker.sock' run-enrollment-service.sh
+          if grep -Fq 'DOCKER_HOST=unix:///var/run/docker.sock' run-enrollment-service.sh enrollment.env.example systemd/fabushi-fdn-enrollment.service; then
+            echo "rootful Docker socket must not be configured" >&2
+            exit 1
+          fi
+          secret='012345678901234567890123456789012345678901234567'
+          set +e
+          output="$(
+            FDN_NETWORK_AUTHORITY_TOKEN="$secret" \
+            FABUSHI_FDN_ENROLLMENT_BROKER_TOKEN="$secret" \
+            FABUSHI_FDN_ENROLLMENT_STATE_KEY_B64="$secret" \
+            FABUSHI_PLATFORM_CORE_URL='https://core.example.invalid' \
+            FABUSHI_FDN_ENROLLMENT_LISTEN_HOST='0.0.0.0' \
+            DOCKER_HOST='unix:///run/user/1000/docker.sock' \
+            bash ./run-enrollment-service.sh 2>&1
+          )"
+          status=$?
+          set -e
+          test "$status" -eq 64
+          grep -F 'enrollment service must remain loopback-only' <<<"$output"
+
+          set +e
+          output="$(
+            FDN_NETWORK_AUTHORITY_TOKEN="$secret" \
+            FABUSHI_FDN_ENROLLMENT_BROKER_TOKEN="$secret" \
+            FABUSHI_FDN_ENROLLMENT_STATE_KEY_B64="$secret" \
+            FABUSHI_PLATFORM_CORE_URL='https://core.example.invalid' \
+            FABUSHI_FDN_ENROLLMENT_LISTEN_HOST='127.0.0.1' \
+            DOCKER_HOST='unix:///var/run/docker.sock' \
+            bash ./run-enrollment-service.sh 2>&1
+          )"
+          status=$?
+          set -e
+          test "$status" -eq 64
+          grep -F 'dedicated rootless Docker unix socket' <<<"$output"
       - name: Validate policy sync ordering
         working-directory: fdn-network-coordinator
         shell: bash
