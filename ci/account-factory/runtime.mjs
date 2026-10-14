@@ -182,4 +182,5 @@ try {
   worker?.kill('SIGTERM');
   await Promise.all(servers.map(server => new Promise(done => server.close(done))));
 }
+assert.equal(evidence.overall, 'PASS', 'runtime or final cleanup failed');
 console.log(`Actual canonical Worker runtime: ${evidence.testCount} assertions, ${evidence.overall}; cloud/package acceptance NOT_VERIFIED.`);

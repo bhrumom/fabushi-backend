@@ -46,6 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git -C core rev-parse HEAD)" = "$CORE_SHA"
           mkdir -p evidence
           rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
@@ -75,6 +76,8 @@ jobs:
       - name: Exercise real OIDC, registration, login, refresh, revoke and zero-residual cleanup
         shell: bash
         run: NODE_EXTRA_CA_CERTS="$RUNNER_TEMP/account-worker/tls-cert.pem" node ci/account-factory/runtime.mjs
+      - name: Independently require every expected result and matching compiled wasm digest
+        run: node ci/account-factory/runtime-evidence.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
