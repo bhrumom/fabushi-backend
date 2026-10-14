@@ -8,6 +8,7 @@ import {
   listRegisteredDevices,
   registerDeviceTools,
   resetDeviceGatewayStateForTests,
+  stableCallDigest,
 } from "../lib/device-gateway.js";
 
 function listen(server) {
@@ -488,4 +489,87 @@ test("official device_call reports disconnect after dispatch as outcome_unknown 
   assert.equal(journalEvents.some((event) => event.type === "complete"), false);
   const unknownEvent = journalEvents.find((event) => event.type === "outcome_unknown");
   assert.equal(unknownEvent.requestId, unknown.structuredContent.requestId);
+});
+
+
+test("production device_call authority can be injected independently of the in-memory registry", async () => {
+  resetDeviceGatewayStateForTests();
+  const handlers = new Map();
+  const mcp = { registerTool(name, _definition, handler) { handlers.set(name, handler); } };
+  const calls = [];
+  registerDeviceTools(mcp, {
+    accountId: "account:core",
+    requireOperationJournal: true,
+    operationJournal: {
+      async create(record) { return { operationId: "core-op", ...record }; },
+      async complete() {},
+      async outcomeUnknown() {},
+    },
+    listDevices: async () => [{
+      id: "core-device",
+      name: "Core device",
+      platform: "linux",
+      status: "online",
+      lastSeen: new Date().toISOString(),
+      expiresAt: null,
+      metadata: {},
+      secureInputPublicKey: null,
+      capabilities: ["computer_state"],
+      toolSchemaCount: 1,
+      toolSchemaVersion: "core-projection-v1",
+    }],
+    describeDeviceTool: async (_accountId, deviceId, toolName) => ({
+      deviceId,
+      toolName,
+      available: true,
+      schemaVersion: "core-projection-v1",
+      tool: { name: toolName, inputSchema: { type: "object" }, outputSchema: { type: "object" } },
+      message: "Core-authorized projection.",
+    }),
+    callDevice: async (accountId, deviceId, toolName, args, _timeoutSeconds, _diskPreflight, options) => {
+      calls.push({ accountId, deviceId, toolName, args, options });
+      return { ok: true, result: { structuredContent: { source: "core-authorized-transport" } } };
+    },
+  });
+
+  const listed = await handlers.get("list_devices")({});
+  assert.equal(listed.structuredContent.devices[0].id, "core-device");
+
+  const reply = await handlers.get("device_call")({
+    deviceId: "core-device",
+    toolName: "computer_state",
+    argumentsJson: "{}",
+    diskPreflight: { impact: "none", reason: "state query has no material disk growth", targets: [] },
+  });
+  assert.equal(reply.structuredContent.status, "completed");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].accountId, "account:core");
+  assert.equal(calls[0].deviceId, "core-device");
+  assert.match(calls[0].options.requestId, /^[a-f0-9]{32}$/u);
+  assert.match(calls[0].options.requestSha256, /^[a-f0-9]{64}$/u);
+  assert.equal(calls[0].options.journalContext.operationId, "core-op");
+  assert.deepEqual(listRegisteredDevices("account:core"), []);
+});
+
+
+test("operation request digest is canonical across object key order", () => {
+  const preflightA = { impact: "none", reason: "no growth", targets: [] };
+  const preflightB = { targets: [], reason: "no growth", impact: "none" };
+  const left = stableCallDigest("computer_state", {
+    z: 1,
+    nested: { b: 2, a: 1 },
+    list: [{ y: 2, x: 1 }],
+  }, preflightA);
+  const right = stableCallDigest("computer_state", {
+    list: [{ x: 1, y: 2 }],
+    nested: { a: 1, b: 2 },
+    z: 1,
+  }, preflightB);
+  assert.match(left, /^[a-f0-9]{64}$/u);
+  assert.equal(left, right);
+  assert.notEqual(left, stableCallDigest("computer_state", {
+    list: [{ x: 1, y: 2 }],
+    nested: { a: 1, b: 3 },
+    z: 1,
+  }, preflightA));
 });

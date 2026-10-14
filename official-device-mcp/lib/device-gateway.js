@@ -43,11 +43,17 @@ function registryKey(accountId, deviceId) {
   return `${accountId}\0${deviceId}`;
 }
 
-function stableCallDigest(toolName, args, diskPreflight) {
-  return createHash("sha256").update(JSON.stringify({
-    toolName: String(toolName),
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+}
+
+export function stableCallDigest(toolName, args, diskPreflight) {
+  return createHash("sha256").update(canonicalJson({
     arguments: args,
     diskPreflight: normalizeDiskPreflight(diskPreflight),
+    toolName: String(toolName),
   })).digest("hex");
 }
 
@@ -596,6 +602,10 @@ export function registerDeviceTools(server, options = {}) {
   const accountId = options.accountId ?? (() => "");
   const operationJournal = options.operationJournal ?? null;
   const requireOperationJournal = options.requireOperationJournal === true;
+  const listDevices = options.listDevices ?? ((scopedAccountId) => listRegisteredDevices(scopedAccountId));
+  const describeDeviceTool = options.describeDeviceTool ?? ((scopedAccountId, deviceId, toolName) => describeRegisteredDeviceTool(scopedAccountId, deviceId, toolName));
+  const callDevice = options.callDevice ?? ((scopedAccountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions) =>
+    callRegisteredDevice(scopedAccountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions));
   const requiredAccountId = () => String(typeof accountId === "function" ? accountId() : accountId || "").trim();
 
   server.registerTool(
@@ -612,7 +622,7 @@ export function registerDeviceTools(server, options = {}) {
       if (!canRead()) return readAuthError();
       const accountId = requiredAccountId();
       if (!accountId) return readAuthError();
-      const result = { devices: listRegisteredDevices(accountId) };
+      const result = { devices: await listDevices(accountId) };
       return { structuredContent: result, content: [{ type: "text", text: JSON.stringify(result) }] };
     }
   );
@@ -631,7 +641,7 @@ export function registerDeviceTools(server, options = {}) {
       if (!canRead()) return readAuthError();
       const accountId = requiredAccountId();
       if (!accountId) return readAuthError();
-      const result = describeRegisteredDeviceTool(accountId, deviceId, toolName);
+      const result = await describeDeviceTool(accountId, deviceId, toolName);
       return { structuredContent: result, content: [{ type: "text", text: result.message }] };
     }
   );
@@ -681,7 +691,7 @@ export function registerDeviceTools(server, options = {}) {
           });
         }
         try {
-          const response = await callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds, normalizedPreflight, { requestId });
+          const response = await callDevice(accountId, deviceId, toolName, args, timeoutSeconds, normalizedPreflight, { requestId, requestSha256, journalContext });
           if (operationJournal) {
             try {
               await operationJournal.complete({
