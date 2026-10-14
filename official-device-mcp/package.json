@@ -1,0 +1,19 @@
+{
+  "name": "@fabushi/official-device-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node bin/fabushi-remote-mcp.js",
+    "check": "node --check bin/fabushi-remote-mcp.js && node --check lib/fabushi-account-auth.js && node --check lib/device-disk-safety.js && node --check lib/device-gateway.js && node --check lib/fabushi-remote-mcp-server.js",
+    "test": "node --test tests/fabushi-account-auth.test.js tests/device-gateway-account.test.js tests/fabushi-remote-mcp-server.test.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.2",
+    "ws": "^8.18.3",
+    "zod": "^3.25.76"
+  }
+}
