@@ -53,6 +53,7 @@ const proxy = httpsServer({ key: readFileSync(join(dir, 'tls-key.pem')), cert: r
     // fetch() already decompresses the upstream body. Do not instruct the
     // downstream client to decompress again or trust the compressed length.
     for (const name of ['content-encoding', 'content-length', 'transfer-encoding']) delete responseHeaders[name];
+    responseHeaders.connection = 'close';
     res.writeHead(response.status, responseHeaders); res.end(Buffer.from(await response.arrayBuffer()));
   } catch { res.writeHead(502).end('proxy_failed'); }
 });
@@ -105,7 +106,7 @@ try {
   };
   const auth = new CanonicalAuthAdapter({ config, mailbox: { async receive({ email }) { const code = emails.get(email); if (!code) throw Error('mail_not_delivered'); emails.delete(email); return code; } }, fetchImpl: async (url, options) => {
     const path = new URL(url).pathname;
-    try { const r = await fetch(url, options); console.log(`Canonical auth route ${path}: HTTP ${r.status}`); return r; }
+    try { const r = await fetch(url, { ...options, headers: { ...options.headers, connection: 'close' } }); console.log(`Canonical auth route ${path}: HTTP ${r.status}`); return r; }
     catch { console.error(`Canonical auth route ${path}: transport_failed`); throw Error('transport_failed'); }
   } });
   journal = new LeaseJournal(join(dir, 'leases.sqlite'));
@@ -115,7 +116,7 @@ try {
   const oidcUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL); oidcUrl.searchParams.set('audience', audience);
   const oidcResponse = await fetch(oidcUrl, { headers: { authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` }, redirect: 'error' });
   assert.ok(oidcResponse.ok); oidc = (await oidcResponse.json()).value;
-  handler = fixtureHandler({ factory, policy: { audience, repository: process.env.GITHUB_REPOSITORY, repositoryId: process.env.REPOSITORY_ID, ownerId: process.env.REPOSITORY_OWNER_ID, workflowRefs: [`${process.env.GITHUB_REPOSITORY}/.github/workflows/ci-account-factory-runtime.yml@${process.env.GITHUB_REF}`], refs: [process.env.GITHUB_REF] } });
+  handler = fixtureHandler({ factory, oidcOptions: { fetchImpl: (url, options) => fetch(url, { ...options, headers: { connection: 'close' } }) }, policy: { audience, repository: process.env.GITHUB_REPOSITORY, repositoryId: process.env.REPOSITORY_ID, ownerId: process.env.REPOSITORY_OWNER_ID, workflowRefs: [`${process.env.GITHUB_REPOSITORY}/.github/workflows/ci-account-factory-runtime.yml@${process.env.GITHUB_REF}`], refs: [process.env.GITHUB_REF] } });
   const fixtureRequest = (path, method, body, token = oidc) => handler(new Request(`https://fixture.invalid${path}`, { method, headers: { authorization: `Bearer ${token}` }, body: body && JSON.stringify(body) }));
   assert.equal((await fixtureRequest('/v1/leases', 'POST', { scenarioId: 'actual-worker' }, 'invalid')).status, 401);
   assertions.oidcInvalidRejected = 'PASS';
@@ -128,7 +129,7 @@ try {
   }
   const payload = await created.json(); if (!created.ok) printRuntimeErrors(); assert.equal(created.status, 201, `fixture allocation failed: ${payload.error || 'unknown'}`); lease = payload;
   assertions.realRegistrationAndLogin = 'PASS';
-  const api = (path, session, body) => fetch(`${config.authOrigin}${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${session.accessToken}`, 'content-type': 'application/json' }, body: body && JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(15000) });
+  const api = (path, session, body) => fetch(`${config.authOrigin}${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${session.accessToken}`, 'content-type': 'application/json', connection: 'close' }, body: body && JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(15000) });
   const [a, b, c] = lease.accounts;
   const identity = { repository: process.env.GITHUB_REPOSITORY, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, sourceSha: process.env.GITHUB_SHA };
   await assert.rejects(factory.cleanup({ ...identity, runId: `${identity.runId}1` }, lease.leaseId), /lease_forbidden/);
