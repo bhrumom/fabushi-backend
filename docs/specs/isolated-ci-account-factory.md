@@ -137,3 +137,23 @@ superseding the proposal's pre-split repository mapping.
 | AF-02 live inventory / AC-2 | blocked | Independent test resources, mailbox, janitor and hosted fixture service not configured |
 | AF-07 / AC-4 | blocked | Cross-platform P2..P4 and integration remain required |
 | AC-3 | blocked | Legacy/governance production provision workflow retirement pending |
+
+## 18. Actions-owned real Worker runtime slice
+
+AF-08: In Actions only, compile the exact pinned canonical Core wasm Worker,
+run it with Wrangler local D1 in a disposable runner directory, generate unique
+RSA keys and HTTPS loopback trust, and use the existing registration email bridge
+with a bounded mailbox receiver. No Cloudflare credentials or remote D1 command
+is available. Run actual browser registration, Argon2id password login, RS256
+session/user-info/refresh/logout, A same-account multi-session and B isolation.
+The factory HTTP boundary must verify a real Actions OIDC token. Direct SQL is
+allowed only for the isolated local janitor, never for account creation. Verify
+all created account/session/password/challenge/attempt references disappear.
+
+AC-5: Exact Backend and Core SHA, actual compiled wasm digest, Actions run,
+assertion count and zero residual are recorded. This is real Worker/auth runtime
+with emulated D1; it is not deployed-cloud or packaged multi-device acceptance.
+Hosted TTL cancellation and cross-device tests remain AC-2/4 blockers. Normal Core
+registration remains unchanged; the email bridge substitutes delivery transport,
+not code validation or password/session algorithms. The runtime may expose Core
+bugs, which must be repaired under the Core owner's spec before acceptance.
