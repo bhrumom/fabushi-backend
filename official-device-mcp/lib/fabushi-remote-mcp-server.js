@@ -247,6 +247,8 @@ export function createFabushiRemoteMcpServer(options = {}) {
   const statePath = options.statePath ?? process.env.FABUSHI_REMOTE_MCP_STATE_PATH ?? resolve(homedir(), ".fabushi", "remote-mcp-state.json");
   const auditPath = options.auditPath ?? process.env.FABUSHI_REMOTE_MCP_AUDIT_PATH ?? resolve(homedir(), ".fabushi", "remote-mcp-audit.jsonl");
   const accountClient = options.accountClient ?? createFabushiAccountClient({ baseUrl: options.apiBaseUrl });
+  const operationJournal = options.operationJournal ?? null;
+  const requireOperationJournal = options.requireOperationJournal ?? process.env.FABUSHI_CORE_OPERATION_JOURNAL_REQUIRED === "1";
   const now = options.now ?? Date.now;
   const limits = {
     clients: positiveLimit(options.limits?.clients, DEFAULT_LIMITS.clients),
@@ -535,6 +537,8 @@ export function createFabushiRemoteMcpServer(options = {}) {
       writeAuthError: () => authError("devices.control"),
       readSecuritySchemes: READ_SECURITY_SCHEMES,
       writeSecuritySchemes: WRITE_SECURITY_SCHEMES,
+      operationJournal,
+      requireOperationJournal,
     });
     return server;
   }
