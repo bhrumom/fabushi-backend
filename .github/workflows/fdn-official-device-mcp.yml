@@ -50,6 +50,8 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
       - name: Record migration provenance
         shell: bash
         run: |
