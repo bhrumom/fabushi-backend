@@ -177,7 +177,7 @@ jobs:
             const owner='bhrumom', repo='fabushi-platform-core';
             const main=await github.rest.repos.getBranch({owner,repo,branch:'main'});
             if(main.data.commit.sha!==sha) throw new Error('Core SHA is not current main');
-            for (const workflow of ['official-mcp-oauth.yml','fdn-remote-computer-session-reconcile.yml']) {
+            for (const workflow of ['official-mcp-oauth.yml','fdn-session-reconcile.yml']) {
               const runs=await github.rest.actions.listWorkflowRuns({owner,repo,workflow_id:workflow,head_sha:sha,per_page:100});
               if(!runs.data.workflow_runs.some(r=>r.head_sha===sha&&r.head_branch==='main'&&r.conclusion==='success')) {
                 throw new Error('missing successful exact-Core verification: '+workflow);
