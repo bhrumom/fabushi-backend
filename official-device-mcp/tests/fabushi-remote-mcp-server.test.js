@@ -289,19 +289,20 @@ test("Core service delegation state persists only encrypted refresh and recovers
   resetDeviceGatewayStateForTests();
   const directory = await mkdtemp(join(tmpdir(), "fabushi-core-service-state-"));
   const statePath = join(directory, "state.json");
-  const vaultKey = Buffer.alloc(32, 13).toString("base64url");
-  const vault = createServiceCredentialVault({ key: vaultKey });
+  const vault = createServiceCredentialVault({ key: Buffer.alloc(32, 13).toString("base64url") });
   const ordinaryAccountToken = "ordinary-account-token-" + "a".repeat(48);
   const firstCoreAccess = "core-access-" + "b".repeat(64);
   const firstCoreRefresh = "core-refresh-" + "c".repeat(64);
   const rotatedCoreAccess = "rotated-access-" + "d".repeat(64);
   const rotatedCoreRefresh = "rotated-refresh-" + "e".repeat(64);
+  let browserDeviceId = "";
   let bootstrapCalls = 0;
   let refreshCalls = 0;
   let connectionId = "";
 
   const accountClient = {
-    async startBrowserLogin() {
+    async startBrowserLogin({ deviceId }) {
+      browserDeviceId = deviceId;
       return {
         attemptId: "attempt-service-state",
         pollSecret: "poll-service-state",
@@ -309,7 +310,9 @@ test("Core service delegation state persists only encrypted refresh and recovers
         expiresAt: Math.floor(Date.now() / 1000) + 600,
       };
     },
-    async pollBrowserLogin() {
+    async pollBrowserLogin(attemptId, pollSecret) {
+      assert.equal(attemptId, "attempt-service-state");
+      assert.equal(pollSecret, "poll-service-state");
       return { status: "completed", session: { accessToken: ordinaryAccountToken } };
     },
     async resolveAccessToken(token) {
@@ -339,12 +342,9 @@ test("Core service delegation state persists only encrypted refresh and recovers
     async refreshOfficialMcpServiceDelegation() {
       throw new Error("initial server must use bootstrap access token from memory");
     },
-    async resolveAccessToken() {
-      return { userId: "user:service-state", label: "Service State User", user: { id: "user:service-state" } };
-    },
   };
 
-  let first = createFabushiRemoteMcpServer({
+  const first = createFabushiRemoteMcpServer({
     host: "127.0.0.1",
     port: 0,
     publicOrigin: "https://api.ombhrum.com",
@@ -355,18 +355,18 @@ test("Core service delegation state persists only encrypted refresh and recovers
     serviceCredentialVault: vault,
   });
   const firstAddress = await first.listen();
-  const localOrigin = `http://127.0.0.1:${firstAddress.port}`;
-
-  const registration = await fetch(`${localOrigin}/oauth/register`, {
+  const origin = `http://127.0.0.1:${firstAddress.port}`;
+  const redirectUri = "http://127.0.0.1/callback";
+  const registration = await fetch(`${origin}/oauth/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ redirect_uris: ["http://127.0.0.1/callback"] }),
+    body: JSON.stringify({ redirect_uris: [redirectUri] }),
   }).then((response) => response.json());
   const verifier = "s".repeat(64);
-  const authorizeUrl = new URL(`${localOrigin}/oauth/authorize`);
+  const authorizeUrl = new URL(`${origin}/oauth/authorize`);
   authorizeUrl.search = new URLSearchParams({
     client_id: registration.client_id,
-    redirect_uri: "http://127.0.0.1/callback",
+    redirect_uri: redirectUri,
     response_type: "code",
     state: "service-state",
     scope: "devices.read devices.control",
@@ -376,72 +376,27 @@ test("Core service delegation state persists only encrypted refresh and recovers
   }).toString();
   const authorize = await fetch(authorizeUrl, { redirect: "manual" });
   assert.equal(authorize.status, 302);
-  const requestId = new URL(authorize.headers.get("location")).pathname.endsWith("/service-state")
-    ? null
-    : null;
-  // The request id is embedded in the local completion URL generated from the browser device id.
-  // Start a second authorization helper is unnecessary; capture it from startBrowserLogin below instead.
-  await first.close();
-
-  // Re-run with a capture-capable client so the authorization request id remains explicit.
-  await rm(statePath, { force: true });
-  let browserDeviceId = "";
-  accountClient.startBrowserLogin = async ({ deviceId }) => {
-    browserDeviceId = deviceId;
-    return {
-      attemptId: "attempt-service-state",
-      pollSecret: "poll-service-state",
-      loginUrl: "https://accounts.example.test/login/service-state",
-      expiresAt: Math.floor(Date.now() / 1000) + 600,
-    };
-  };
-  first = createFabushiRemoteMcpServer({
-    host: "127.0.0.1",
-    port: 0,
-    publicOrigin: "https://api.ombhrum.com",
-    statePath,
-    auditPath: "",
-    accountClient,
-    requireCoreServiceState: true,
-    serviceCredentialVault: vault,
-  });
-  const address = await first.listen();
-  const origin = `http://127.0.0.1:${address.port}`;
-  const registration2 = await fetch(`${origin}/oauth/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ redirect_uris: ["http://127.0.0.1/callback"] }),
-  }).then((response) => response.json());
-  const authorizeUrl2 = new URL(`${origin}/oauth/authorize`);
-  authorizeUrl2.search = new URLSearchParams({
-    client_id: registration2.client_id,
-    redirect_uri: "http://127.0.0.1/callback",
-    response_type: "code",
-    state: "service-state",
-    scope: "devices.read devices.control",
-    resource: "https://api.ombhrum.com/mcp",
-    code_challenge: challenge(verifier),
-    code_challenge_method: "S256",
-  }).toString();
-  await fetch(authorizeUrl2, { redirect: "manual" });
-  const localRequestId = browserDeviceId.slice("mcp-oauth-".length);
-  const authorization = await fetch(`${origin}/oauth/fabushi/status?request_id=${encodeURIComponent(localRequestId)}`).then((response) => response.json());
-  const callback = new URL(authorization.redirectUrl);
-  const code = callback.searchParams.get("code");
-  const issued = await fetch(`${origin}/oauth/token`, {
+  const requestId = browserDeviceId.slice("mcp-oauth-".length);
+  const authorization = await fetch(`${origin}/oauth/fabushi/status?request_id=${encodeURIComponent(requestId)}`).then((response) => response.json());
+  assert.equal(authorization.status, "completed");
+  const code = new URL(authorization.redirectUrl).searchParams.get("code");
+  const issuedResponse = await fetch(`${origin}/oauth/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "authorization_code",
-      client_id: registration2.client_id,
-      redirect_uri: "http://127.0.0.1/callback",
+      client_id: registration.client_id,
+      redirect_uri: redirectUri,
       resource: "https://api.ombhrum.com/mcp",
       code,
       code_verifier: verifier,
     }),
-  }).then((response) => response.json());
-  assert.equal(bootstrapCalls >= 1, true);
+  });
+  assert.equal(issuedResponse.status, 200);
+  const issued = await issuedResponse.json();
+  assert.equal(bootstrapCalls, 1);
   assert.ok(connectionId);
+
   const persisted = await readFile(statePath, "utf8");
   for (const forbidden of [ordinaryAccountToken, firstCoreAccess, firstCoreRefresh]) {
     assert.equal(persisted.includes(forbidden), false, forbidden);
@@ -456,7 +411,7 @@ test("Core service delegation state persists only encrypted refresh and recovers
       refreshCalls += 1;
       assert.equal(input.delegationId, "service-delegation-state-1");
       assert.equal(input.connectionId, connectionId);
-      assert.equal(input.externalClientId, registration2.client_id);
+      assert.equal(input.externalClientId, registration.client_id);
       assert.equal(input.resource, "https://api.ombhrum.com/mcp");
       assert.equal(input.refreshToken, firstCoreRefresh);
       return {
@@ -503,3 +458,4 @@ test("Core service delegation state persists only encrypted refresh and recovers
     assert.equal(rotatedState.includes(forbidden), false, forbidden);
   }
 });
+
