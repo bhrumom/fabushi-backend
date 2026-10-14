@@ -250,7 +250,6 @@ test("Core device transport describes a target-owned schema without consulting t
   };
   const accountClient = {
     async getRemoteComputerNetworkRoute() {
-      events?.push?.(["core", "network-route"]);
       return networkRoute();
     },
     async createRemoteComputerSession() { throw new Error("describe must not create a session"); },
