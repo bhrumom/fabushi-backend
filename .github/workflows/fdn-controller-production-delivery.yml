@@ -245,7 +245,7 @@ jobs:
             --arg currentCoreSha "${{ steps.release-provenance.outputs.current_core_sha }}" \
             --arg previousBackendSha "${{ steps.release-provenance.outputs.previous_backend_sha }}" \
             --arg previousCoreSha "${{ steps.release-provenance.outputs.previous_core_sha }}" \
-            '{backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,coreRepository:"bhrumom/fabushi-platform-core",coreSha:$coreSha,runId:$run,bundleSha256:$digest,current:{backendSha:$currentBackendSha,coreSha:$currentCoreSha},previous:{backendSha:($previousBackendSha|select(length>0)?),coreSha:($previousCoreSha|select(length>0)?)},result:"installed-and-health-checked"}' \
+            '{backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,coreRepository:"bhrumom/fabushi-platform-core",coreSha:$coreSha,runId:$run,bundleSha256:$digest,current:{backendSha:$currentBackendSha,coreSha:$currentCoreSha},previous:{backendSha:(if $previousBackendSha == "" then null else $previousBackendSha end),coreSha:(if $previousCoreSha == "" then null else $previousCoreSha end)},result:"installed-and-health-checked"}' \
             > fdn-controller-deployed-provenance.json
       - uses: actions/upload-artifact@v4
         with:
