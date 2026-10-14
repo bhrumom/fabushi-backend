@@ -81,6 +81,12 @@ export function createCoreDeviceTransport(options = {}) {
       || !String(route.nodeId || "").trim()) {
       throw new Error("Canonical Core network route failed identity correlation.");
     }
+    const generation = Number(route.generation);
+    if (context.boundNetworkGeneration == null) {
+      context.boundNetworkGeneration = generation;
+    } else if (Number(context.boundNetworkGeneration) !== generation) {
+      throw new Error("Canonical Core network generation changed during the request.");
+    }
     return route;
   }
 
