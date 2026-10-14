@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import WebSocket from "ws";
 import { createFabushiRemoteMcpServer } from "../lib/fabushi-remote-mcp-server.js";
 import { resetDeviceGatewayStateForTests } from "../lib/device-gateway.js";
+import { createServiceCredentialVault } from "../lib/service-credential-vault.js";
 
 function challenge(verifier) {
   return createHash("sha256").update(verifier).digest("base64url");
@@ -278,4 +282,224 @@ test("Fabushi remote MCP rejects unsafe redirect, missing PKCE, wrong resource, 
   assert.equal(wrongResourceResponse.status, 400);
   assert.equal((await wrongResourceResponse.json()).error, "invalid_target");
   assert.equal(browserLoginStarts, 0);
+});
+
+
+test("Core service delegation state persists only encrypted refresh and recovers once after restart", async (t) => {
+  resetDeviceGatewayStateForTests();
+  const directory = await mkdtemp(join(tmpdir(), "fabushi-core-service-state-"));
+  const statePath = join(directory, "state.json");
+  const vaultKey = Buffer.alloc(32, 13).toString("base64url");
+  const vault = createServiceCredentialVault({ key: vaultKey });
+  const ordinaryAccountToken = "ordinary-account-token-" + "a".repeat(48);
+  const firstCoreAccess = "core-access-" + "b".repeat(64);
+  const firstCoreRefresh = "core-refresh-" + "c".repeat(64);
+  const rotatedCoreAccess = "rotated-access-" + "d".repeat(64);
+  const rotatedCoreRefresh = "rotated-refresh-" + "e".repeat(64);
+  let bootstrapCalls = 0;
+  let refreshCalls = 0;
+  let connectionId = "";
+
+  const accountClient = {
+    async startBrowserLogin() {
+      return {
+        attemptId: "attempt-service-state",
+        pollSecret: "poll-service-state",
+        loginUrl: "https://accounts.example.test/login/service-state",
+        expiresAt: Math.floor(Date.now() / 1000) + 600,
+      };
+    },
+    async pollBrowserLogin() {
+      return { status: "completed", session: { accessToken: ordinaryAccountToken } };
+    },
+    async resolveAccessToken(token) {
+      assert.equal(token, ordinaryAccountToken);
+      return { userId: "user:service-state", label: "Service State User", user: { id: "user:service-state" } };
+    },
+    async createOfficialMcpServiceDelegation(input) {
+      bootstrapCalls += 1;
+      assert.equal(input.accountAccessToken, ordinaryAccountToken);
+      assert.match(input.connectionId, /^official-mcp:[A-Za-z0-9_-]{24,160}$/u);
+      connectionId = input.connectionId;
+      assert.equal(input.externalClientId.startsWith("fabushi_"), true);
+      assert.equal(input.resource, "https://api.ombhrum.com/mcp");
+      assert.deepEqual(input.scopes, ["devices.read", "devices.control"]);
+      return {
+        accessToken: firstCoreAccess,
+        refreshToken: firstCoreRefresh,
+        delegationId: "service-delegation-state-1",
+        accessTokenExpiresAt: Math.floor(Date.now() / 1000) + 300,
+        refreshTokenExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+        connectionId: input.connectionId,
+        externalClientId: input.externalClientId,
+        resource: input.resource,
+        scopes: input.scopes,
+      };
+    },
+    async refreshOfficialMcpServiceDelegation() {
+      throw new Error("initial server must use bootstrap access token from memory");
+    },
+    async resolveAccessToken() {
+      return { userId: "user:service-state", label: "Service State User", user: { id: "user:service-state" } };
+    },
+  };
+
+  let first = createFabushiRemoteMcpServer({
+    host: "127.0.0.1",
+    port: 0,
+    publicOrigin: "https://api.ombhrum.com",
+    statePath,
+    auditPath: "",
+    accountClient,
+    requireCoreServiceState: true,
+    serviceCredentialVault: vault,
+  });
+  const firstAddress = await first.listen();
+  const localOrigin = `http://127.0.0.1:${firstAddress.port}`;
+
+  const registration = await fetch(`${localOrigin}/oauth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ redirect_uris: ["http://127.0.0.1/callback"] }),
+  }).then((response) => response.json());
+  const verifier = "s".repeat(64);
+  const authorizeUrl = new URL(`${localOrigin}/oauth/authorize`);
+  authorizeUrl.search = new URLSearchParams({
+    client_id: registration.client_id,
+    redirect_uri: "http://127.0.0.1/callback",
+    response_type: "code",
+    state: "service-state",
+    scope: "devices.read devices.control",
+    resource: "https://api.ombhrum.com/mcp",
+    code_challenge: challenge(verifier),
+    code_challenge_method: "S256",
+  }).toString();
+  const authorize = await fetch(authorizeUrl, { redirect: "manual" });
+  assert.equal(authorize.status, 302);
+  const requestId = new URL(authorize.headers.get("location")).pathname.endsWith("/service-state")
+    ? null
+    : null;
+  // The request id is embedded in the local completion URL generated from the browser device id.
+  // Start a second authorization helper is unnecessary; capture it from startBrowserLogin below instead.
+  await first.close();
+
+  // Re-run with a capture-capable client so the authorization request id remains explicit.
+  await rm(statePath, { force: true });
+  let browserDeviceId = "";
+  accountClient.startBrowserLogin = async ({ deviceId }) => {
+    browserDeviceId = deviceId;
+    return {
+      attemptId: "attempt-service-state",
+      pollSecret: "poll-service-state",
+      loginUrl: "https://accounts.example.test/login/service-state",
+      expiresAt: Math.floor(Date.now() / 1000) + 600,
+    };
+  };
+  first = createFabushiRemoteMcpServer({
+    host: "127.0.0.1",
+    port: 0,
+    publicOrigin: "https://api.ombhrum.com",
+    statePath,
+    auditPath: "",
+    accountClient,
+    requireCoreServiceState: true,
+    serviceCredentialVault: vault,
+  });
+  const address = await first.listen();
+  const origin = `http://127.0.0.1:${address.port}`;
+  const registration2 = await fetch(`${origin}/oauth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ redirect_uris: ["http://127.0.0.1/callback"] }),
+  }).then((response) => response.json());
+  const authorizeUrl2 = new URL(`${origin}/oauth/authorize`);
+  authorizeUrl2.search = new URLSearchParams({
+    client_id: registration2.client_id,
+    redirect_uri: "http://127.0.0.1/callback",
+    response_type: "code",
+    state: "service-state",
+    scope: "devices.read devices.control",
+    resource: "https://api.ombhrum.com/mcp",
+    code_challenge: challenge(verifier),
+    code_challenge_method: "S256",
+  }).toString();
+  await fetch(authorizeUrl2, { redirect: "manual" });
+  const localRequestId = browserDeviceId.slice("mcp-oauth-".length);
+  const authorization = await fetch(`${origin}/oauth/fabushi/status?request_id=${encodeURIComponent(localRequestId)}`).then((response) => response.json());
+  const callback = new URL(authorization.redirectUrl);
+  const code = callback.searchParams.get("code");
+  const issued = await fetch(`${origin}/oauth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: registration2.client_id,
+      redirect_uri: "http://127.0.0.1/callback",
+      resource: "https://api.ombhrum.com/mcp",
+      code,
+      code_verifier: verifier,
+    }),
+  }).then((response) => response.json());
+  assert.equal(bootstrapCalls >= 1, true);
+  assert.ok(connectionId);
+  const persisted = await readFile(statePath, "utf8");
+  for (const forbidden of [ordinaryAccountToken, firstCoreAccess, firstCoreRefresh]) {
+    assert.equal(persisted.includes(forbidden), false, forbidden);
+  }
+  assert.match(persisted, /"algorithm": "A256GCM"/u);
+  assert.match(persisted, /"delegationId": "service-delegation-state-1"/u);
+  await first.close();
+
+  const recoveryClient = {
+    async resolveAccessToken() { throw new Error("ordinary account token must not be needed after restart"); },
+    async refreshOfficialMcpServiceDelegation(input) {
+      refreshCalls += 1;
+      assert.equal(input.delegationId, "service-delegation-state-1");
+      assert.equal(input.connectionId, connectionId);
+      assert.equal(input.externalClientId, registration2.client_id);
+      assert.equal(input.resource, "https://api.ombhrum.com/mcp");
+      assert.equal(input.refreshToken, firstCoreRefresh);
+      return {
+        accessToken: rotatedCoreAccess,
+        refreshToken: rotatedCoreRefresh,
+        delegationId: input.delegationId,
+        accessTokenExpiresAt: Math.floor(Date.now() / 1000) + 300,
+        refreshTokenExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+        connectionId: input.connectionId,
+        externalClientId: input.externalClientId,
+        resource: input.resource,
+      };
+    },
+  };
+  const second = createFabushiRemoteMcpServer({
+    host: "127.0.0.1",
+    port: 0,
+    publicOrigin: "https://api.ombhrum.com",
+    statePath,
+    auditPath: "",
+    accountClient: recoveryClient,
+    requireCoreServiceState: true,
+    serviceCredentialVault: vault,
+  });
+  const secondAddress = await second.listen();
+  const secondOrigin = `http://127.0.0.1:${secondAddress.port}`;
+  t.after(async () => {
+    await second.close().catch(() => {});
+    await rm(directory, { recursive: true, force: true });
+    resetDeviceGatewayStateForTests();
+  });
+
+  for (let index = 0; index < 2; index += 1) {
+    const response = await fetch(`${secondOrigin}/mcp`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${issued.access_token}`, "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.notEqual(response.status, 503);
+  }
+  assert.equal(refreshCalls, 1);
+  const rotatedState = await readFile(statePath, "utf8");
+  for (const forbidden of [ordinaryAccountToken, firstCoreAccess, firstCoreRefresh, rotatedCoreAccess, rotatedCoreRefresh]) {
+    assert.equal(rotatedState.includes(forbidden), false, forbidden);
+  }
 });
