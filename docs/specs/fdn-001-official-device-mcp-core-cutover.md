@@ -39,6 +39,24 @@ handed to the transport must be the same snapshot to avoid a route-generation
 TOCTOU. Only cellId/nodeId/generation/expiresAt are routing hints; application
 authorization remains Core/Host-owned.
 
+### Controller network-worker IPC
+
+The official MCP process must not open arbitrary public sockets from tool input.
+Its preferred private transport is a supervised first-party network worker reached
+only through bounded local IPC. The controller supplies the already-validated
+Core route snapshot (cellId, nodeId, generation, expiresAt), the fixed product
+Remote Computer port, timeout, and one bounded JSONL frame. The worker owns
+Tailscale/Headscale node state and decides direct-versus-DERP transport; it does
+not decide tool authorization.
+
+The controller must reject non-loopback worker endpoints, route expiry, invalid
+node identities, responses larger than the bounded result limit, response
+identity mismatches, and transport errors. Once an operation frame may have been
+dispatched, timeout/disconnect remains outcome_unknown and is never converted to
+an automatic replay. Authenticated reverse WebSocket remains an explicit
+fallback only, never an implicit replacement for a failed private-network
+dispatch.
+
 ## Durable state
 
 Official MCP service refresh credentials and service-bound Remote Computer
