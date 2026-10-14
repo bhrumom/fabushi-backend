@@ -596,6 +596,10 @@ export function registerDeviceTools(server, options = {}) {
   const accountId = options.accountId ?? (() => "");
   const operationJournal = options.operationJournal ?? null;
   const requireOperationJournal = options.requireOperationJournal === true;
+  const listDevices = options.listDevices ?? ((scopedAccountId) => listRegisteredDevices(scopedAccountId));
+  const describeDeviceTool = options.describeDeviceTool ?? ((scopedAccountId, deviceId, toolName) => describeRegisteredDeviceTool(scopedAccountId, deviceId, toolName));
+  const callDevice = options.callDevice ?? ((scopedAccountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions) =>
+    callRegisteredDevice(scopedAccountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions));
   const requiredAccountId = () => String(typeof accountId === "function" ? accountId() : accountId || "").trim();
 
   server.registerTool(
@@ -612,7 +616,7 @@ export function registerDeviceTools(server, options = {}) {
       if (!canRead()) return readAuthError();
       const accountId = requiredAccountId();
       if (!accountId) return readAuthError();
-      const result = { devices: listRegisteredDevices(accountId) };
+      const result = { devices: await listDevices(accountId) };
       return { structuredContent: result, content: [{ type: "text", text: JSON.stringify(result) }] };
     }
   );
@@ -631,7 +635,7 @@ export function registerDeviceTools(server, options = {}) {
       if (!canRead()) return readAuthError();
       const accountId = requiredAccountId();
       if (!accountId) return readAuthError();
-      const result = describeRegisteredDeviceTool(accountId, deviceId, toolName);
+      const result = await describeDeviceTool(accountId, deviceId, toolName);
       return { structuredContent: result, content: [{ type: "text", text: result.message }] };
     }
   );
@@ -681,7 +685,7 @@ export function registerDeviceTools(server, options = {}) {
           });
         }
         try {
-          const response = await callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds, normalizedPreflight, { requestId });
+          const response = await callDevice(accountId, deviceId, toolName, args, timeoutSeconds, normalizedPreflight, { requestId, requestSha256, journalContext });
           if (operationJournal) {
             try {
               await operationJournal.complete({
