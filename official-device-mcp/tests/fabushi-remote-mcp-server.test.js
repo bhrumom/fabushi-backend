@@ -61,6 +61,9 @@ test("Fabushi remote MCP binds ChatGPT OAuth and Runner devices to one account",
     auditPath: "",
     accountClient,
     defaultLeaseSeconds: 120,
+    // This test intentionally exercises the legacy authenticated /agent parity
+    // harness. Production does not opt in to registry authority.
+    allowLegacyRegistryFallback: true,
   });
   const address = await service.listen();
   const origin = `http://127.0.0.1:${address.port}`;
@@ -469,6 +472,9 @@ test("Core-authority production server cannot fall back to direct in-memory devi
   assert.match(source, /FABUSHI_FDN_AUTHENTICATED_REVERSE_WS_FALLBACK/u);
   assert.match(source, /createAuthenticatedReverseWebSocketPrivateTransport\(\)/u);
   assert.match(source, /privateTransport: coreDevicePrivateTransport/u);
+  assert.match(source, /const allowLegacyRegistryFallback = options\.allowLegacyRegistryFallback === true;/u);
+  assert.match(source, /const requireCoreDeviceAuthority = !allowLegacyRegistryFallback;/u);
+  assert.doesNotMatch(source, /FABUSHI_.*LEGACY.*REGISTRY/u);
   assert.match(source, /const coreDeviceTransport = configuredCoreDeviceTransport;/u);
   assert.match(source, /if \(requireCoreDeviceAuthority\) \{\s*throw new Error\("Canonical Core-authorized target transport is required; direct registry execution is disabled\."\);\s*\}/u);
   assert.match(source, /if \(coreDeviceTransport\?\.callDevice\)/u);
