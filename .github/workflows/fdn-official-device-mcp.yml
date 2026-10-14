@@ -1,0 +1,59 @@
+name: FDN official device MCP
+
+on:
+  pull_request:
+    paths:
+      - "official-device-mcp/**"
+      - "docs/specs/fabushi-official-mcp-oauth.md"
+      - ".github/workflows/fdn-official-device-mcp.yml"
+  push:
+    branches: [main]
+    paths:
+      - "official-device-mcp/**"
+      - "docs/specs/fabushi-official-mcp-oauth.md"
+      - ".github/workflows/fdn-official-device-mcp.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-device-mcp:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: official-device-mcp
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Bind exact tested HEAD
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            expected="${{ github.event.pull_request.head.sha }}"
+          else
+            expected="${{ github.sha }}"
+          fi
+          test "$actual" = "$expected"
+          echo "Exact tested HEAD: $actual" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: official-device-mcp/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Record migration provenance
+        shell: bash
+        run: |
+          {
+            echo "Canonical Backend SHA: $(git rev-parse HEAD)"
+            echo "Legacy parity source: bhrumom/fabushi@7f2935500cec3a199caf7823557ce5d106e051f4"
+          } >> "$GITHUB_STEP_SUMMARY"
