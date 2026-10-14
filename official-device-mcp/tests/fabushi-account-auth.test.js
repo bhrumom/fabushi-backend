@@ -184,6 +184,46 @@ test("Remote Computer inventory uses only the delegated service access token and
 });
 
 
+test("Remote Computer network route is service-token scoped and secret-minimal", async () => {
+  const calls = [];
+  const serviceAccessToken = "s".repeat(64);
+  const client = createFabushiAccountClient({
+    baseUrl: "https://api.ombhrum.com",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, method: init.method, authorization: init.headers.Authorization, body: init.body });
+      return jsonResponse(200, {
+        deviceId: "device-1",
+        cellId: "cell-fdn-1",
+        nodeId: "node-fdn-1",
+        generation: 9,
+        expiresAt: 1_900_000_000,
+        connectionId: "official-mcp:connection-1",
+        delegationId: "service-delegation-1",
+        active: true,
+      });
+    },
+  });
+  const route = await client.getRemoteComputerNetworkRoute(serviceAccessToken, { deviceId: "device-1" });
+  assert.deepEqual(route, {
+    deviceId: "device-1",
+    cellId: "cell-fdn-1",
+    nodeId: "node-fdn-1",
+    generation: 9,
+    expiresAt: 1_900_000_000,
+    connectionId: "official-mcp:connection-1",
+    delegationId: "service-delegation-1",
+    active: true,
+  });
+  assert.deepEqual(calls, [{
+    url: "https://api.ombhrum.com/v1/computers/device-1/network-route",
+    method: "POST",
+    authorization: `Bearer ${serviceAccessToken}`,
+    body: undefined,
+  }]);
+  assert.equal(JSON.stringify(route).includes("proofSha256"), false);
+  assert.equal(JSON.stringify(route).includes("deviceSecret"), false);
+});
+
 test("Core Remote Computer controller client preserves service-bound identities and stable operation requests", async () => {
   const calls = [];
   const serviceToken = "s".repeat(64);
