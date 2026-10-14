@@ -76,15 +76,34 @@ jobs:
           grep -F 'ln -sfn "$release" "$root/current.new"' fdn-network-coordinator/install-controller-stack.sh
           grep -F 'mv -Tf "$root/current.new" "$root/current"' fdn-network-coordinator/install-controller-stack.sh
           grep -F 'health check failed; previous release restored' fdn-network-coordinator/install-controller-stack.sh
-      - name: Resolve, test and build pinned controller worker
+      - name: Resolve pinned controller worker module graph
         working-directory: official-device-network-worker
         run: |
           set -euo pipefail
-          cp go.mod "$RUNNER_TEMP/fdn-worker-go.mod"
           go mod tidy
-          cmp -s go.mod "$RUNNER_TEMP/fdn-worker-go.mod"
           grep -Fx 'require tailscale.com v1.104.1' go.mod
           test "$(go list -m -f '{{.Version}}' tailscale.com)" = "v1.104.1"
+          cp go.mod "$RUNNER_TEMP/fdn-worker-generated-go.mod"
+          cp go.sum "$RUNNER_TEMP/fdn-worker-generated-go.sum"
+          git diff -- go.mod go.sum | tee "$RUNNER_TEMP/fdn-worker-module-lock.diff"
+      - name: Upload generated controller worker module lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: fdn-worker-module-lock-${{ env.EXACT_SHA }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/fdn-worker-generated-go.mod
+            ${{ runner.temp }}/fdn-worker-generated-go.sum
+            ${{ runner.temp }}/fdn-worker-module-lock.diff
+      - name: Enforce canonical controller worker module lock
+        working-directory: official-device-network-worker
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- go.mod go.sum
+      - name: Test and build pinned controller worker
+        working-directory: official-device-network-worker
+        run: |
+          set -euo pipefail
           go test ./...
           go vet ./...
           CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o ../official-device-network-worker.bin .
