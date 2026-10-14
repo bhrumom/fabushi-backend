@@ -74,3 +74,12 @@ This repository also becomes the canonical owner of the existing Fabushi officia
 - AC-FDN-B4: revoke/account-switch/network-loss/result-loss cases prove stale grants and ambiguous side effects are fenced rather than replayed blindly.
 
 Current status: AC-FDN-B1 is being implemented in this branch. AC-FDN-B2..B4 remain pending and must not be reported as passed until exact deployment/device evidence exists.
+
+
+### FDN-001 Core operation-journal cutover slice — 2026-10-14
+
+- B-FDN-8: `device_call` must allocate a stable opaque requestId before transport dispatch and bind that request to the authenticated Fabushi account, target device, exact tool name and request digest in the canonical Platform Core Remote Computer operation journal. A transport timeout, socket disconnect, or response loss after dispatch is `outcome_unknown`; it is never interpreted as “not executed” and is never automatically replayed.
+- B-FDN-9: The Backend gateway may retain reverse-WSS as one transport, but transport reachability is not authorization. Production Core-journal mode is fail-closed: if Core operation create/query/claim authorization is unavailable, the gateway must not silently fall back to direct unjournaled execution.
+- B-FDN-10: The target device receives only the opaque requestId, exact tool name, bounded arguments and disk preflight needed by the existing executor. Ordinary Fabushi login access tokens, Remote Computer deviceSecret/mobileToken, MCP grant material, network private keys and Core service credentials are never included in the device call frame.
+- B-FDN-11: The public `device_call` response distinguishes `completed`, `failed`, and `outcome_unknown` and carries the stable requestId. Query/cancel surfaces may be added compatibly, but unknown outcomes cannot be retried automatically.
+- AC-FDN-B5: Exact-head Actions prove stable request identity, account/device/tool binding through an injected canonical Core journal adapter, fail-closed production configuration, transport-loss => outcome_unknown, and no secret fields in target call frames. Real deployed Core/session/network/Host E2E remains required before G09/G16 or FDN-A04/A08/A16 can pass.

@@ -6,6 +6,7 @@ import {
   attachDeviceGateway,
   callRegisteredDevice,
   listRegisteredDevices,
+  registerDeviceTools,
   resetDeviceGatewayStateForTests,
 } from "../lib/device-gateway.js";
 
@@ -349,4 +350,142 @@ test("iOS device registration rejects malformed PushKit tokens before persistenc
   assert.equal(await closed, 1008);
   assert.equal(syncCount, 0);
   assert.equal(listRegisteredDevices("account:ios").length, 0);
+});
+
+
+test("official device_call binds one stable requestId to the Core journal and target frame", async (t) => {
+  resetDeviceGatewayStateForTests();
+  const server = createServer((_req, res) => res.writeHead(404).end());
+  const gateway = attachDeviceGateway(server, {
+    resolveAccount: async (token) => token === "journal-account-token" ? { userId: "account:journal" } : null,
+    defaultLeaseSeconds: 60,
+  });
+  const port = await listen(server);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/agent`, { headers: { Authorization: "Bearer journal-account-token" } });
+  t.after(async () => {
+    ws.terminate();
+    await closeServer(server, gateway);
+    resetDeviceGatewayStateForTests();
+  });
+  await opened(ws);
+  ws.send(JSON.stringify({
+    type: "register",
+    deviceId: "journal-device",
+    name: "Journal device",
+    platform: "linux",
+    capabilities: ["computer_state"],
+    tools: [{ name: "computer_state", inputSchema: { type: "object" }, outputSchema: { type: "object" } }],
+  }));
+  await nextJson(ws);
+
+  const handlers = new Map();
+  const mcp = { registerTool(name, _definition, handler) { handlers.set(name, handler); } };
+  const journalEvents = [];
+  registerDeviceTools(mcp, {
+    accountId: "account:journal",
+    operationJournal: {
+      async create(record) {
+        journalEvents.push({ type: "create", ...record });
+        return { operationId: "op-1" };
+      },
+      async complete(record) {
+        journalEvents.push({ type: "complete", ...record });
+      },
+      async outcomeUnknown(record) {
+        journalEvents.push({ type: "outcome_unknown", ...record });
+      },
+    },
+    requireOperationJournal: true,
+  });
+
+  let targetFrame = null;
+  ws.once("message", (raw) => {
+    targetFrame = JSON.parse(raw.toString("utf8"));
+    ws.send(JSON.stringify({
+      type: "result",
+      requestId: targetFrame.requestId,
+      ok: true,
+      result: { structuredContent: { app: "Fabushi" } },
+    }));
+  });
+  const reply = await handlers.get("device_call")({
+    deviceId: "journal-device",
+    toolName: "computer_state",
+    argumentsJson: "{}",
+    diskPreflight: { impact: "none", reason: "state query has no material disk growth", targets: [] },
+  });
+  assert.equal(reply.structuredContent.status, "completed");
+  assert.match(reply.structuredContent.requestId, /^[a-f0-9]{32}$/u);
+  assert.equal(targetFrame.requestId, reply.structuredContent.requestId);
+  assert.equal(targetFrame.toolName, "computer_state");
+  assert.deepEqual(Object.keys(targetFrame).sort(), ["arguments", "diskPreflight", "requestId", "toolName", "type"].sort());
+  assert.equal(journalEvents[0].type, "create");
+  assert.equal(journalEvents[0].accountId, "account:journal");
+  assert.equal(journalEvents[0].deviceId, "journal-device");
+  assert.equal(journalEvents[0].toolName, "computer_state");
+  assert.equal(journalEvents[0].requestId, targetFrame.requestId);
+  assert.match(journalEvents[0].requestSha256, /^[a-f0-9]{64}$/u);
+  assert.equal(journalEvents[1].type, "complete");
+  assert.equal(journalEvents[1].requestId, targetFrame.requestId);
+});
+
+test("official device_call reports disconnect after dispatch as outcome_unknown and never falls back without required Core journal", async (t) => {
+  resetDeviceGatewayStateForTests();
+  const server = createServer((_req, res) => res.writeHead(404).end());
+  const gateway = attachDeviceGateway(server, {
+    resolveAccount: async (token) => token === "unknown-account-token" ? { userId: "account:unknown" } : null,
+    defaultLeaseSeconds: 60,
+  });
+  const port = await listen(server);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/agent`, { headers: { Authorization: "Bearer unknown-account-token" } });
+  t.after(async () => {
+    ws.terminate();
+    await closeServer(server, gateway);
+    resetDeviceGatewayStateForTests();
+  });
+  await opened(ws);
+  ws.send(JSON.stringify({
+    type: "register",
+    deviceId: "unknown-device",
+    name: "Unknown device",
+    platform: "linux",
+    capabilities: ["computer_state"],
+    tools: [{ name: "computer_state", inputSchema: { type: "object" }, outputSchema: { type: "object" } }],
+  }));
+  await nextJson(ws);
+
+  const handlers = new Map();
+  const mcp = { registerTool(name, _definition, handler) { handlers.set(name, handler); } };
+  registerDeviceTools(mcp, { accountId: "account:unknown", requireOperationJournal: true });
+  const blocked = await handlers.get("device_call")({
+    deviceId: "unknown-device",
+    toolName: "computer_state",
+    argumentsJson: "{}",
+    diskPreflight: { impact: "none", reason: "state query has no material disk growth", targets: [] },
+  });
+  assert.equal(blocked.structuredContent.status, "failed");
+  assert.match(blocked.structuredContent.resultJson, /Core operation journal is required/u);
+
+  const journalEvents = [];
+  handlers.clear();
+  registerDeviceTools(mcp, {
+    accountId: "account:unknown",
+    requireOperationJournal: true,
+    operationJournal: {
+      async create(record) { journalEvents.push({ type: "create", ...record }); return { operationId: "op-unknown" }; },
+      async complete(record) { journalEvents.push({ type: "complete", ...record }); },
+      async outcomeUnknown(record) { journalEvents.push({ type: "outcome_unknown", ...record }); },
+    },
+  });
+  ws.once("message", () => ws.close());
+  const unknown = await handlers.get("device_call")({
+    deviceId: "unknown-device",
+    toolName: "computer_state",
+    argumentsJson: "{}",
+    diskPreflight: { impact: "none", reason: "state query has no material disk growth", targets: [] },
+  });
+  assert.equal(unknown.structuredContent.status, "outcome_unknown");
+  assert.equal(journalEvents.some((event) => event.type === "complete"), false);
+  const unknownEvent = journalEvents.find((event) => event.type === "outcome_unknown");
+  assert.equal(unknownEvent.requestId, unknown.structuredContent.requestId);
 });
