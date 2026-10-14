@@ -141,6 +141,7 @@ test('canonical adapter exercises normal registration/mailbox/poll/login and ref
     assert.ok(url.startsWith(config.authOrigin)); assert.equal(options.redirect, 'error');
     calls.push([new URL(url).pathname, options]);
     if (url.endsWith('/start')) return Response.json({ attemptId: 'attempt-1', loginUrl: `${config.authOrigin}/api/auth/browser/portal?attemptId=attempt-1&ticket=secret-ticket`, pollSecret: 'poll-secret' });
+    if (url.endsWith('/register/code')) return Response.json({ success: true });
     if (url.includes('/attempts/')) return Response.json({ status });
     if (url.endsWith('/login')) return Response.json({ user: { id: 1, username: 'ci-user' }, accessToken: 'contract-access', refreshToken: 'contract-refresh' });
     return new Response('form response');
