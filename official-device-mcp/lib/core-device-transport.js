@@ -41,6 +41,7 @@ function validateTransport(privateTransport) {
 
 function validateAccountClient(accountClient) {
   for (const method of [
+    "getRemoteComputerNetworkRoute",
     "createRemoteComputerSession",
     "reconcileRemoteComputerSession",
     "createRemoteComputerOperation",
@@ -59,11 +60,36 @@ export function createCoreDeviceTransport(options = {}) {
   const privateTransport = validateTransport(options.privateTransport);
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
 
-  async function privateRequest(context, payload, timeoutSeconds) {
+  async function canonicalRoute(context) {
+    const route = await accountClient.getRemoteComputerNetworkRoute(
+      context.coreServiceAccessToken,
+      { deviceId: context.deviceId },
+    );
+    const generation = Number(route?.generation);
+    const expiresAt = Number(route?.expiresAt);
+    if (!route || route.active !== true
+      || String(route.deviceId || "") !== context.deviceId
+      || String(route.connectionId || "") !== context.connectionId
+      || String(route.delegationId || "") !== context.delegationId
+      || !Number.isSafeInteger(generation) || generation <= 0
+      || !Number.isSafeInteger(expiresAt) || expiresAt <= now()
+      || generation !== Number(context.computer?.networkGeneration || 0)) {
+      throw new Error("Canonical Core network route failed service/device/generation correlation.");
+    }
+    return {
+      cellId: requiredText(route, "cellId", 128),
+      nodeId: requiredText(route, "nodeId", 160),
+      generation,
+      expiresAt,
+    };
+  }
+
+  async function privateRequest(context, route, payload, timeoutSeconds) {
     const response = await privateTransport.request({
       accountId: context.accountId,
       deviceId: context.deviceId,
-      networkGeneration: Number(context.computer?.networkGeneration || 0),
+      networkGeneration: route.generation,
+      networkRoute: route,
       payload,
       timeoutSeconds,
     });
@@ -73,8 +99,8 @@ export function createCoreDeviceTransport(options = {}) {
     return response;
   }
 
-  async function controllerGrant(context) {
-    const networkGeneration = Number(context.computer?.networkGeneration || 0);
+  async function controllerGrant(context, route) {
+    const networkGeneration = route.generation;
     if (!Number.isSafeInteger(networkGeneration) || networkGeneration <= 0 || context.computer?.networkBound !== true) {
       throw new Error("Target device has no active canonical network binding.");
     }
@@ -86,7 +112,7 @@ export function createCoreDeviceTransport(options = {}) {
       context.delegationId,
       networkGeneration,
     );
-    const granted = await privateRequest(context, {
+    const granted = await privateRequest(context, route, {
       type: "grantController",
       deviceId: context.deviceId,
       networkGeneration,
@@ -131,10 +157,10 @@ export function createCoreDeviceTransport(options = {}) {
     }
   }
 
-  async function authorizeTool(context, session, grant) {
-    const networkGeneration = Number(context.computer.networkGeneration);
+  async function authorizeTool(context, route, session, grant) {
+    const networkGeneration = route.generation;
     const requestedExpiresAt = now() + Math.min(context.timeoutSeconds + TOOL_GRANT_SKEW_SECONDS, 10 * 60);
-    const authorized = await privateRequest(context, {
+    const authorized = await privateRequest(context, route, {
       type: "authorizeTool",
       deviceId: context.deviceId,
       networkGeneration,
@@ -209,7 +235,8 @@ export function createCoreDeviceTransport(options = {}) {
       context.toolName,
       context.computer.networkGeneration,
     );
-    const response = await privateRequest(context, {
+    const route = await canonicalRoute(context);
+    const response = await privateRequest(context, route, {
       type: "describeTool",
       deviceId: context.deviceId,
       networkGeneration: Number(context.computer.networkGeneration),
@@ -286,9 +313,10 @@ export function createCoreDeviceTransport(options = {}) {
       }
       if (context.computer?.online !== true) throw new Error(`Device ${context.deviceId} is offline in canonical Core inventory.`);
 
-      const grant = await controllerGrant(context);
+      const route = await canonicalRoute(context);
+      const grant = await controllerGrant(context, route);
       const session = await sessionFor(context, grant);
-      const grantGeneration = await authorizeTool(context, session, grant);
+      const grantGeneration = await authorizeTool(context, route, session, grant);
 
       const operation = await accountClient.createRemoteComputerOperation(context.coreServiceAccessToken, {
         deviceId: context.deviceId,
@@ -310,7 +338,7 @@ export function createCoreDeviceTransport(options = {}) {
 
       let targetReply;
       try {
-        targetReply = await privateRequest(context, {
+        targetReply = await privateRequest(context, route, {
           type: "operation",
           deviceId: context.deviceId,
           networkGeneration: Number(context.computer.networkGeneration),
