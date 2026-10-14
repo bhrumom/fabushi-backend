@@ -54,7 +54,7 @@ log:
 
 policy:
   mode: file
-  path: /etc/headscale/policy.hujson
+  path: /etc/headscale/fdn-runtime/policy.hujson
 
 dns:
   magic_dns: false
