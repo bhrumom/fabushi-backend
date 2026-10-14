@@ -8,6 +8,7 @@ import {
   listRegisteredDevices,
   registerDeviceTools,
   resetDeviceGatewayStateForTests,
+  stableCallDigest,
 } from "../lib/device-gateway.js";
 
 function listen(server) {
@@ -548,4 +549,27 @@ test("production device_call authority can be injected independently of the in-m
   assert.match(calls[0].options.requestSha256, /^[a-f0-9]{64}$/u);
   assert.equal(calls[0].options.journalContext.operationId, "core-op");
   assert.deepEqual(listRegisteredDevices("account:core"), []);
+});
+
+
+test("operation request digest is canonical across object key order", () => {
+  const preflightA = { impact: "none", reason: "no growth", targets: [] };
+  const preflightB = { targets: [], reason: "no growth", impact: "none" };
+  const left = stableCallDigest("computer_state", {
+    z: 1,
+    nested: { b: 2, a: 1 },
+    list: [{ y: 2, x: 1 }],
+  }, preflightA);
+  const right = stableCallDigest("computer_state", {
+    list: [{ x: 1, y: 2 }],
+    nested: { a: 1, b: 2 },
+    z: 1,
+  }, preflightB);
+  assert.match(left, /^[a-f0-9]{64}$/u);
+  assert.equal(left, right);
+  assert.notEqual(left, stableCallDigest("computer_state", {
+    list: [{ x: 1, y: 2 }],
+    nested: { a: 1, b: 3 },
+    z: 1,
+  }, preflightA));
 });
