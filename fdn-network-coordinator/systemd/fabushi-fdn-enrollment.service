@@ -1,0 +1,33 @@
+[Unit]
+Description=Fabushi FDN network enrollment broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fabushi-fdn/current/fdn-network-coordinator
+EnvironmentFile=/etc/fabushi/fdn-network-enrollment.env
+ExecStart=/usr/bin/bash /opt/fabushi-fdn/current/fdn-network-coordinator/run-enrollment-service.sh
+Restart=on-failure
+RestartSec=5
+User=fabushi-fdn
+Group=fabushi-fdn
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateDevices=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=fabushi-fdn
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/fabushi-fdn
+
+[Install]
+WantedBy=multi-user.target
