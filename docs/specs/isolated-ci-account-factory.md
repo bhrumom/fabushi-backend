@@ -35,6 +35,7 @@ test execution. Contract fixtures do not prove live registration or device E2E.
   redirects, credentials in URLs and unconfigured mailbox/janitor adapters.
 - AF-03: Every lease is scoped by repository/run_id/run_attempt/scenario_id.
   A/B/C ordinary users and two A device identities are unique. Persist planned
+  usernames obey Core's 3–32 ASCII alphanumeric/underscore/hyphen contract;
   identities before registration; never persist or publish passwords/tokens.
   Serialize allocation and enforce active-lease quota and maximum TTL.
 - AF-04: Use /api/auth/browser/start, register/code, register, attempts polling

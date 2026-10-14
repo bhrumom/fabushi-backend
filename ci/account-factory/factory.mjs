@@ -54,7 +54,7 @@ export class AccountFactory {
     if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(scenario || '')) throw new Error('invalid_scenario');
     const id = createHash('sha256').update(`${owner}:${scenario}`).digest('hex');
     const lease = { id, owner, expiresAt: this.now() + this.ttlMs, accounts: ['a', 'b', 'c'].map(role => ({
-      role, username: `ci_${id.slice(0, 40)}_${role}`, email: `ci_${id.slice(0, 40)}_${role}@ci.invalid`,
+      role, username: `ci_${id.slice(0, 24)}_${role}`, email: `ci_${id.slice(0, 40)}_${role}@ci.invalid`,
       deviceIds: [0, ...(role === 'a' ? [1] : [])].map(n => `ci-${id.slice(0, 40)}-${role}-${n}`),
     })) };
     this.journal.reserve(lease, this.quota);

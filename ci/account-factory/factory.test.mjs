@@ -23,6 +23,7 @@ test('planned A/B/C identities are distinct; A has two normal device sessions; j
   const lease = await factory.create(identity, 'accounts');
   assert.equal(lease.accounts.length, 3);
   assert.equal(new Set(lease.accounts.map(a => a.username)).size, 3);
+  assert.ok(lease.accounts.every(a => /^[A-Za-z0-9_-]{3,32}$/.test(a.username)));
   assert.equal(lease.accounts[0].sessions.length, 2);
   assert.equal(new Set(lease.accounts.flatMap(a => a.deviceIds)).size, 4);
   const row = JSON.stringify(journal.get(lease.leaseId));
