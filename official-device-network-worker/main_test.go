@@ -23,7 +23,7 @@ func validRequest() workerRequest {
 		ExpiresAt:  4_000_000_000,
 		TargetPort: defaultTargetPort,
 		TimeoutMS:  5000,
-		Frame:      "{"type":"describeTool","toolName":"Computer"}\n",
+		Frame:      `{"type":"describeTool","toolName":"Computer"}` + "\n",
 	}
 }
 
@@ -71,7 +71,7 @@ func TestDispatchWritesOneFrameAndReadsOneCorrelatedJSONResult(t *testing.T) {
 		if string(frame) != req.Frame {
 			return
 		}
-		_, _ = io.WriteString(server, "{"type":"toolDescription","available":false}\n")
+		_, _ = io.WriteString(server, `{"type":"toolDescription","available":false}`+"\n")
 	}()
 
 	result, err := dispatchPrivateRequest(context.Background(), dial, req, defaultTargetPort)
