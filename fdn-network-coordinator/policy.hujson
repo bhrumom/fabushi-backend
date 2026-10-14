@@ -1,0 +1,7 @@
+{
+  // FDN-001 starts every network cell at deny-all.
+  // The production coordinator owner may only add grants derived from
+  // current Core account/device/network-binding state and must remove them
+  // when the binding generation rotates or is revoked.
+  "grants": []
+}
