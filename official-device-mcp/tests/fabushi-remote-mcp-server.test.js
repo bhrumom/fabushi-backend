@@ -459,3 +459,18 @@ test("Core service delegation state persists only encrypted refresh and recovers
   }
 });
 
+
+
+test("Core-authority production server cannot fall back to direct in-memory device execution", async () => {
+  const source = await readFile(new URL("../lib/fabushi-remote-mcp-server.js", import.meta.url), "utf8");
+  assert.match(source, /const coreDeviceTransport = options\.coreDeviceTransport \?\? null;/u);
+  assert.match(source, /if \(requireCoreDeviceAuthority\) \{\s*throw new Error\("Canonical Core-authorized target transport is required; direct registry execution is disabled\."\);\s*\}/u);
+  assert.match(source, /if \(coreDeviceTransport\?\.callDevice\)/u);
+  assert.match(source, /return callRegisteredDevice\(accountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions\);/u);
+  assert.ok(
+    source.indexOf("Canonical Core-authorized target transport is required; direct registry execution is disabled.")
+      < source.lastIndexOf("return callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions);"),
+    "direct registry execution must remain strictly behind the Core-authority fail-closed branch",
+  );
+  assert.match(source, /!requireCoreDeviceAuthority && coreOnline && fallback/u);
+});
