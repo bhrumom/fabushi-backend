@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 45
     environment: ci-isolated
     env:
-      CORE_SHA: a445d3a093c4c08159f6bd4132cb62a51e2ce05a
+      CORE_SHA: f781e6c85375ba0945aa4fd4c19ead89e396dfdb
       REPOSITORY_ID: ${{ github.repository_id }}
       REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
     steps:

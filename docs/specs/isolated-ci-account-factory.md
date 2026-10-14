@@ -193,3 +193,13 @@ Runtime: https://github.com/bhrumom/fabushi-backend/actions/runs/38599511598.
 Contracts: https://github.com/bhrumom/fabushi-backend/actions/runs/38599519762.
 No hosted Account Factory, real cross-device package or whole-program completion
 is claimed. Existing production privileged identities have not been deleted.
+
+## 20. Accepted Core main dependency re-pin
+
+Core PR 21 is merged; canonical main at re-pin is
+f781e6c85375ba0945aa4fd4c19ead89e396dfdb. Main also includes independently merged
+Remote Computer/schema changes relative to the earlier a445d3a implementation
+pin. Therefore re-run the real account compatibility suite on f781e6c rather than
+implicitly reusing the older wasm evidence. Its existing Core Actions 38600063038
+and 38600063041 pass. Backend source/run and newly compiled wasm digest must be
+recorded by the new runtime report. This does not claim production deployment.
