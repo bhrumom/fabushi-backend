@@ -22,6 +22,7 @@ import (
 
 const (
 	privateRequestPath  = "/v1/fdn/private-request"
+	statusPath          = "/v1/fdn/status"
 	defaultBind         = "127.0.0.1:8791"
 	defaultTargetPort   = 8792
 	maxRequestBytes     = 64 * 1024
@@ -59,6 +60,12 @@ type workerResponse struct {
 	Error      string          `json:"error,omitempty"`
 }
 
+type workerStatusResponse struct {
+	CellID string `json:"cellId"`
+	NodeID string `json:"nodeId"`
+	Ready  bool   `json:"ready"`
+}
+
 type dialFunc func(context.Context, string, string) (net.Conn, error)
 
 func validID(value string, min, max int) bool {
@@ -82,6 +89,20 @@ func validTailnetPeer(value string) bool {
 		return false
 	}
 	return tailscaleV4.Contains(addr) || tailscaleV6.Contains(addr)
+}
+
+func preferredSelfNode(ips []netip.Addr) (string, bool) {
+	for _, ip := range ips {
+		if ip.Is4() && tailscaleV4.Contains(ip) {
+			return ip.String(), true
+		}
+	}
+	for _, ip := range ips {
+		if tailscaleV6.Contains(ip) {
+			return ip.String(), true
+		}
+	}
+	return "", false
 }
 
 func validateRequest(req workerRequest, expectedCell string, fixedPort int, now time.Time) error {
@@ -148,10 +169,18 @@ func dispatchPrivateRequest(ctx context.Context, dial dialFunc, req workerReques
 	return readTargetResult(conn, timeout)
 }
 
-func handler(expectedCell string, fixedPort int, dial dialFunc, now func() time.Time) http.Handler {
+func handler(expectedCell, selfNodeID string, fixedPort int, dial dialFunc, now func() time.Time) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json; charset=utf-8")
 		w.Header().Set("cache-control", "no-store")
+		if r.Method == http.MethodGet && r.URL.Path == statusPath && r.URL.RawQuery == "" {
+			_ = json.NewEncoder(w).Encode(workerStatusResponse{
+				CellID: expectedCell,
+				NodeID: selfNodeID,
+				Ready:  true,
+			})
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != privateRequestPath || r.URL.RawQuery != "" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -235,15 +264,23 @@ func main() {
 			log.Print("[fabushi-fdn-network] tsnet state changed")
 		},
 	}
+	startContext, cancelStart := context.WithTimeout(context.Background(), 90*time.Second)
+	status, err := server.Up(startContext)
+	cancelStart()
 	authKey = ""
-	if err := server.Start(); err != nil {
-		log.Fatal("Fabushi FDN network worker failed to start")
+	server.AuthKey = ""
+	if err != nil {
+		log.Fatal("Fabushi FDN network worker failed to reach running state")
 	}
 	defer server.Close()
+	selfNodeID, ok := preferredSelfNode(status.TailscaleIPs)
+	if !ok {
+		log.Fatal("Fabushi FDN network worker has no valid private node address")
+	}
 
 	httpServer := &http.Server{
 		Addr:              bind,
-		Handler:           handler(expectedCell, targetPort, server.Dial, time.Now),
+		Handler:           handler(expectedCell, selfNodeID, targetPort, server.Dial, time.Now),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
