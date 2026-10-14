@@ -48,6 +48,12 @@ jobs:
           set -euo pipefail
           grep -F 'image: docker.io/headscale/headscale:0.29.5' docker-compose.yml
           grep -F '"grants": []' policy.hujson
+          grep -F '"grants": []' runtime/policy.hujson
+          grep -F 'path: /etc/headscale/fdn-runtime/policy.hujson' runtime/config.yaml
+          grep -F './runtime:/etc/headscale/fdn-runtime:ro' docker-compose.yml
+          if grep -Fq './policy.hujson:/etc/headscale/policy.hujson' docker-compose.yml; then
+            exit 1
+          fi
           grep -F 'verify_clients: true' runtime/config.yaml
           grep -F 'urls: []' runtime/config.yaml
           grep -F 'magic_dns: false' runtime/config.yaml
@@ -81,6 +87,23 @@ jobs:
           if grep -Eiq 'deviceSecret|proofSha256|accessToken|refreshToken|clientToken|mobileToken' runtime/projected-policy.hujson; then
             exit 1
           fi
+      - name: Validate policy sync ordering
+        working-directory: fdn-network-coordinator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ./sync-core-policy.sh
+          node --input-type=module - <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const source = await readFile("sync-core-policy.sh", "utf8");
+          const project = source.indexOf("node ./project-core-policy.mjs");
+          const check = source.indexOf("headscale policy check");
+          const publish = source.indexOf('mv -f "$candidate_policy" "$active_policy"');
+          const reload = source.indexOf("docker compose kill -s HUP headscale");
+          if (!(project >= 0 && project < check && check < publish && publish < reload)) {
+            throw new Error("policy sync must project -> validate -> publish -> reload");
+          }
+          NODE
       - name: Validate compose
         working-directory: fdn-network-coordinator
         run: docker compose config --quiet
@@ -89,15 +112,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm             -v "$PWD/runtime/config.yaml:/etc/headscale/config.yaml:ro"             -v "$PWD/policy.hujson:/etc/headscale/policy.hujson:ro"             docker.io/headscale/headscale:0.29.5             configtest
+          docker run --rm \
+            -v "$PWD/runtime/config.yaml:/etc/headscale/config.yaml:ro" \
+            -v "$PWD/runtime:/etc/headscale/fdn-runtime:ro" \
+            docker.io/headscale/headscale:0.29.5 \
+            configtest
       - name: Validate generated projected policy with Headscale 0.29.5
         working-directory: fdn-network-coordinator
         shell: bash
         run: |
           set -euo pipefail
+          cp runtime/projected-policy.hujson runtime/policy.hujson
+          chmod 600 runtime/policy.hujson
           docker run --rm \
             -v "$PWD/runtime/config.yaml:/etc/headscale/config.yaml:ro" \
-            -v "$PWD/runtime/projected-policy.hujson:/etc/headscale/policy.hujson:ro" \
+            -v "$PWD/runtime:/etc/headscale/fdn-runtime:ro" \
             docker.io/headscale/headscale:0.29.5 \
             configtest
       - name: Record coordinator provenance
