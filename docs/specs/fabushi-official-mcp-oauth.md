@@ -50,3 +50,27 @@ Plan: spec first, additive bootstrap, SQLite migration regression in Actions, al
 Acceptance AC-B4: migration upgrade/data-preservation regression and delivery configuration checks pass exact-head Actions. AC-B1-B3 remain subject to production and provider evidence.
 
 Recovery compliance: B-MCP-1/2/4/5 preserved; B-MCP-6/7 and AC-B4 passed on implementation 341929e in Actions 37889599910 (six delivery contracts and three real SQLite upgrade/data-preservation cases) and 37889599965 (three gateway cases). This follow-up keeps Wrangler normal bundling while suppressing only the already-completed build hook. AC-B2/3 remain blocked on production delivery and real provider/packaged acceptance; failed run 37889336367 made no Worker deployment. Final-head verification is required again before merge.
+
+
+## FDN-001 official device-control migration — 2026-10-14
+
+This repository also becomes the canonical owner of the existing Fabushi official **device-control MCP** that historically lived under `bhrumom/fabushi/chatgpt-vps-control`. This is a migration of the same public product and protocol, not a second MCP service.
+
+### Requirements
+
+- B-FDN-1: Preserve the existing public MCP concepts and compatible tools `fabushi_account`, `list_devices`, `describe_device_tool`, and `device_call`; do not fork a second account system, device registry, or public endpoint.
+- B-FDN-2: Account identity must come from the existing Fabushi account APIs. Equal device IDs across different Fabushi accounts remain isolated. Device self-reported names, IPs, email addresses, or node IDs are never sufficient authority.
+- B-FDN-3: The migrated gateway keeps account-scoped WebSocket registration, bounded device/tool catalog sizes, explicit capability filtering, pending-call bounds, disconnect handling, audit hooks, and credential redaction. Dynamic tool descriptions are data, never authorization.
+- B-FDN-4: The first canonical migration preserves source behavior from legacy main `7f2935500cec3a199caf7823557ce5d106e051f4` and verifies it in GitHub Actions before any production cutover. No builds or tests run on persistent hosts.
+- B-FDN-5: Subsequent FDN work must replace direct account-scoped socket reachability with the accepted FDN-001 path: account/device authorization -> Remote Computer session/requestId reconciliation -> restricted network gateway -> target Host second authorization. WireGuard/DERP/reverse-WSS transport must not weaken application authorization.
+- B-FDN-6: Production cutover keeps the existing public origin and OAuth direction for third-party MCP clients connecting to Fabushi. Provider-marketplace OAuth remains a separate flow and credential boundary.
+- B-FDN-7: Side-effecting device operations require stable request identity, result reconciliation, cancellation, audit, revocation fencing, and explicit outcome-unknown handling before automatic network retry is allowed.
+
+### Acceptance
+
+- AC-FDN-B1: Canonical Backend package compiles/checks and its focused account-isolation, device-routing, and MCP OAuth tests pass on the exact PR head.
+- AC-FDN-B2: Legacy source is no longer the implementation owner after cutover; deployment provenance points to a Backend canonical SHA while the public endpoint and installed clients remain compatible.
+- AC-FDN-B3: Real official MCP calls reach an authorized same-account Fabushi device through the FDN transport/session path and a cross-account negative case is rejected.
+- AC-FDN-B4: revoke/account-switch/network-loss/result-loss cases prove stale grants and ambiguous side effects are fenced rather than replayed blindly.
+
+Current status: AC-FDN-B1 is being implemented in this branch. AC-FDN-B2..B4 remain pending and must not be reported as passed until exact deployment/device evidence exists.
