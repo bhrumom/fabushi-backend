@@ -24,7 +24,7 @@ test("client forwards only exact grant input and broker credential",async()=>{
     token:TOKEN,
     fetchImpl:async(url,options)=>{
       seen={url,options};
-      return {ok:true,status:200,async json(){return {ok:true,enrollment:{grantId:GRANT_ID,generation:2},target:{userId:"user:one",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:2}};}};
+      return {ok:true,status:200,async json(){return {ok:true,enrollment:{grantId:GRANT_ID,generation:2},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:2}};}};
     }
   });
   await client.start({grantId:GRANT_ID,grantSecret:SECRET});
@@ -34,18 +34,31 @@ test("client forwards only exact grant input and broker credential",async()=>{
   assert.throws(()=>client.start({grantId:GRANT_ID,grantSecret:SECRET,userId:"user:one"}),e=>e.code==="fdn_enrollment_request_invalid");
 });
 
-test("account authorization requires real authenticated Fabushi subject",()=>{
-  const payload={ok:true,enrollment:{grantId:GRANT_ID,generation:4,authKey:"secret-key"},target:{userId:"user:one",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
-  assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:one",isAuthenticated:false},payload),e=>e.code==="fdn_enrollment_auth_required");
-  assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:other",isAuthenticated:true},payload),e=>e.code==="fdn_enrollment_account_mismatch");
-  const projected=authorizeEnrollmentForAccount({userId:"user:one",isAuthenticated:true},payload);
+test("account authorization compares Core target to canonical raw Fabushi account id",()=>{
+  const payload={ok:true,enrollment:{grantId:GRANT_ID,generation:4,authKey:"secret-key"},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
+  assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:197915874789377",fabushiAccountId:"197915874789377",isAuthenticated:false},payload),e=>e.code==="fdn_enrollment_auth_required");
+  assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:197915874789377",isAuthenticated:true},payload),e=>e.code==="fdn_enrollment_auth_required");
+  assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:other",fabushiAccountId:"other",isAuthenticated:true},payload),e=>e.code==="fdn_enrollment_account_mismatch");
+  const projected=authorizeEnrollmentForAccount({userId:"user:197915874789377",fabushiAccountId:"197915874789377",isAuthenticated:true},payload);
   assert.equal(projected.authKey,"secret-key");
   assert.equal(projected.deviceId,"device-1");
 });
 
+test("local user namespace, username, email, and token hash cannot substitute for canonical account id",()=>{
+  const payload={ok:true,enrollment:{grantId:GRANT_ID,generation:4},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
+  for (const user of [
+    {userId:"user:197915874789377",isAuthenticated:true},
+    {userId:"user:alice",username:"197915874789377",isAuthenticated:true},
+    {userId:"user:alice",email:"197915874789377",isAuthenticated:true},
+    {userId:"user:alice",tokenHash:"197915874789377",isAuthenticated:true},
+  ]) {
+    assert.throws(()=>authorizeEnrollmentForAccount(user,payload),e=>e.code==="fdn_enrollment_auth_required");
+  }
+});
+
 test("account authorization rejects broker generation mismatch",()=>{
-  const payload={ok:true,enrollment:{grantId:GRANT_ID,generation:5},target:{userId:"user:one",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
-  assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:one",isAuthenticated:true},payload),e=>e.code==="fdn_enrollment_generation_mismatch");
+  const payload={ok:true,enrollment:{grantId:GRANT_ID,generation:5},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
+  assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:197915874789377",fabushiAccountId:"197915874789377",isAuthenticated:true},payload),e=>e.code==="fdn_enrollment_generation_mismatch");
 });
 
 test("broker failures keep raw upstream detail out of public error object",async()=>{
