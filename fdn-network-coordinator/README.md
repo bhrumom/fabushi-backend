@@ -32,3 +32,33 @@ must never be placed in command arguments, policy files or logs.
 This projection code and CI are prerequisites only. G02/G03/G05 still require
 approved production deployment, generation/revoke propagation, two-account
 negative evidence and real WireGuard/DERP tool calls.
+
+## Enrollment service lifecycle
+
+`enrollment-service.mjs` is supervised on the coordinator host by
+`systemd/fabushi-fdn-enrollment.service`. It remains loopback-only and is not
+an additional public device API. The existing ai-backend account proxy is the
+product-facing boundary; the service owns only Core network-authority redemption,
+Headscale enrollment correlation, and Core node binding.
+
+Production installation requirements:
+
+- run as the dedicated `fabushi-fdn` OS account;
+- install `/etc/fabushi/fdn-network-enrollment.env` with mode `0600`;
+- keep broker state under `/var/lib/fabushi-fdn` with mode `0700`;
+- use a dedicated rootless Docker daemon for the coordinator account and set
+  `DOCKER_HOST` to its `/run/user/<uid>/docker.sock`; the launcher rejects the
+  rootful system Docker socket;
+- use a distinct `FABUSHI_FDN_ENROLLMENT_BROKER_TOKEN`; never reuse the Core
+  network-authority token, Fabushi account token, deviceSecret, or MCP service token;
+- expose the loopback service only through the approved authenticated internal
+  ingress used by ai-backend.
+
+The unit hardens the service with `NoNewPrivileges`, strict filesystem
+protection, private temporary/device namespaces, a restrictive umask, and a
+single writable state root. It refuses to start unless Headscale is healthy.
+
+This lifecycle wiring is still only a G02 prerequisite. Real production
+deployment, enrollment from a signed Fabushi client, cross-account isolation,
+WireGuard direct calls, DERP relay calls, and authenticated fallback calls must
+be proven separately before G02/G03/G05 can pass.
