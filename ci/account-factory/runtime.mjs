@@ -54,6 +54,7 @@ const proxy = httpsServer({ key: readFileSync(join(dir, 'tls-key.pem')), cert: r
 });
 proxy.fixturePort = 9443; servers.push(proxy);
 let worker, journal, factory, handler, oidc, lease;
+let startupOutput = '';
 const assertions = {};
 const evidence = { kind: 'canonical-worker-runtime-integration', backendSha: process.env.GITHUB_SHA, coreSha: process.env.CORE_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, d1Mode: 'emulated-local', hostedFixtureService: 'NOT_VERIFIED', packagedCrossDeviceE2E: 'NOT_VERIFIED', assertions, overall: 'FAIL' };
 try {
@@ -61,11 +62,17 @@ try {
   for (const name of ['0001_account_auth.sql', '0002_oauth_identities.sql', '0003_oauth_attempt_failed_status.sql', '0004_email_registration_challenges.sql', '0005_principals_connections.sql', '0006_mcp_connection_oauth.sql', '0007_service_delegations.sql']) sql(readFileSync(resolve('core/third_party/mahayana/mahayana-rs/mahayana-platform-worker/account-migrations', name), 'utf8'));
   await Promise.all(servers.map(listen));
   // No secret-bearing config or raw runtime logs are uploaded.
-  worker = spawn(wrangler, ['dev', '--local', '--port', '8787', '--ip', '127.0.0.1', '--persist-to', state, '--config', configPath], { stdio: ['ignore', 'ignore', 'ignore'] });
+  worker = spawn(wrangler, ['dev', '--local', '--port', '8787', '--ip', '127.0.0.1', '--persist-to', state, '--config', configPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const capture = data => { if (startupOutput.length < 262144) startupOutput += data.toString(); };
+  worker.stdout.on('data', capture); worker.stderr.on('data', capture);
   let ready = false;
   for (let n = 0; n < 60; n++) {
     try { const r = await fetch('https://127.0.0.1:9443/health', { signal: AbortSignal.timeout(1000) }); if (r.ok) { ready = true; break; } } catch {}
     await new Promise(r => setTimeout(r, 1000));
+  }
+  if (!ready) {
+    for (const value of Object.values(workerVars)) { startupOutput = startupOutput.replaceAll(value, '[redacted]').replaceAll(JSON.stringify(value), '[redacted]'); }
+    console.error(startupOutput.split('\n').filter(line => /error|invalid|failed|cannot|could|ENOENT|binding/i.test(line) && !/PRIVATE_KEY|BRIDGE_SECRET|PUBLIC_KEY/.test(line)).slice(-30).join('\n'));
   }
   assert.ok(ready, 'canonical Worker did not start');
   const config = { environment: 'ci-isolated', authOrigin: 'https://127.0.0.1:9443', allowedAuthOrigin: 'https://127.0.0.1:9443', accountDbId: workerConfig.d1_databases[0].database_id, platformDbId: workerConfig.d1_databases[1].database_id, mailboxResourceId: 'runner-only-mailbox', productionResourceIds: ['production-resources-denied'] };
