@@ -303,7 +303,7 @@ async function main() {
   const statePath = process.env.FABUSHI_FDN_INGRESS_STATE_FILE;
   if (!statePath) throw new Error("FABUSHI_FDN_INGRESS_STATE_FILE is required");
   const common = {
-    coreOrigin: process.env.FABUSHI_CORE_API_BASE_URL,
+    coreOrigin: process.env.FABUSHI_PLATFORM_CORE_URL,
     authorityToken: process.env.FDN_NETWORK_AUTHORITY_TOKEN,
     statePath,
   };
