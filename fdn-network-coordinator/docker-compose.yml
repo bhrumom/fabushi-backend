@@ -1,0 +1,27 @@
+services:
+  headscale:
+    image: docker.io/headscale/headscale:0.29.5
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/run/headscale
+    command: serve
+    ports:
+      - "127.0.0.1:8080:8080/tcp"
+      - "127.0.0.1:9090:9090/tcp"
+      - "3478:3478/udp"
+    volumes:
+      - ./runtime/config.yaml:/etc/headscale/config.yaml:ro
+      - ./policy.hujson:/etc/headscale/policy.hujson:ro
+      - headscale-state:/var/lib/headscale
+    healthcheck:
+      test: ["CMD", "headscale", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  headscale-state:
