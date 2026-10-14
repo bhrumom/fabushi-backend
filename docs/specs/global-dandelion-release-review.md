@@ -46,3 +46,9 @@ Failure before write is blocked; uncertain write requires read-only public-proof
 diagnosis rather than rerunning. Evidence records RR-01..04 and remaining gates.
 References: backend scan38453729078, Desktop PR64/source f346686, real publisher
 pending-review observation and user request to finish publication (2026-10-14).
+
+Operational repair: run38505500031 failed with HTTPError. A read-only request
+using Python's default User-Agent receives403, while the existing delivery agent
+identifier reaches the API. Use the same explicit Fabushi delivery User-Agent for
+review and public-proof requests; do not alter gateway/auth/TLS/redirect policy.
+Reconcile immutable server state read-only before another explicit manual run.
