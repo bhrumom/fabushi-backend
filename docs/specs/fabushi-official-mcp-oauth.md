@@ -95,3 +95,16 @@ Current status: AC-FDN-B1 is being implemented in this branch. AC-FDN-B2..B4 rem
 
 - AC-FDN-B6: Exact-head GitHub Actions prove service delegation bootstrap/refresh request binding, token redaction, timeout/failure behavior and account-scoped device listing with mocks at the HTTP contract boundary. No ordinary Fabushi login access/refresh token is persisted by the official-device-MCP server.
 - AC-FDN-B7: Production service-delegation cutover remains pending until encrypted service-refresh persistence, canonical Core deployment SHA, official MCP deployment SHA, Remote Computer controller/operation binding, target Host authorization, and real same-account/cross-account E2E evidence are all present.
+
+
+### FDN-001 encrypted service-delegation state cutover — 2026-10-14
+
+- B-FDN-17: When Fabushi browser login completes for a third-party MCP authorization, the ordinary Fabushi account access token may exist only in the local completion stack long enough to verify the account and bootstrap one Core `official-device-mcp` service delegation. It must not be copied into authorization codes, MCP access/refresh token entries, the JSON state file, audit records, tool arguments, device frames, or Core operation records.
+- B-FDN-18: Every MCP authorization gets a fresh opaque `official-mcp:<random>` connectionId. The Core delegation and persisted service credential binding must include the immutable accountId, connectionId, delegationId, external MCP clientId, exact MCP resource and granted scopes. Equal account email, device name, IP, or another connection under the same account is not interchangeable authority.
+- B-FDN-19: The Core service refresh credential must be persisted only as an authenticated encrypted envelope produced by the accepted service credential vault. State load must reject malformed/unbound service metadata instead of silently downgrading to ordinary-account or direct-device authority. The vault key is deployment configuration and is never written to state.
+- B-FDN-20: The short-lived Core service access credential is memory-only. A persisted MCP grant can recover it after restart only by opening the encrypted refresh envelope and performing one Core rotation. A refresh timeout/ambiguous response is fail-closed and is never automatically replayed.
+- B-FDN-21: MCP authorization code exchange and MCP refresh rotation preserve the same Core connectionId/delegation/resource/account binding. Rotating the public MCP token does not create a new Core identity or detach it from the encrypted service credential.
+- B-FDN-22: Production cutover is opt-in/fail-closed until the vault key is configured and this service-state path is enabled. The legacy direct reverse-WSS registry must not silently become the authority if required Core service state is missing.
+
+- AC-FDN-B8: Exact-head GitHub Actions prove the browser-completion ordinary token is absent from code/token/state payloads, service refresh plaintext is absent from persisted JSON, AAD binding survives state save/load, restart recovery rotates exactly once, and ambiguous Core refresh is not retried.
+- AC-FDN-B9: This slice does not yet claim G09/G16 or FDN-A04/A08/A16. Those remain pending until the persisted service identity is actually used by canonical Core device/session/operation routing and a deployed real Host call succeeds.

@@ -48,7 +48,9 @@ test("tamper and wrong vault key fail closed", () => {
     () => createServiceCredentialVault({ key: otherKey }).open(envelope, binding),
     (error) => error instanceof ServiceCredentialVaultError && error.code === "vault_key_mismatch",
   );
-  const tampered = { ...envelope, ciphertext: envelope.ciphertext.slice(0, -1) + (envelope.ciphertext.endsWith("A") ? "B" : "A") };
+  const tamperedBytes = Buffer.from(envelope.ciphertext, "base64url");
+  tamperedBytes[0] ^= 0x01;
+  const tampered = { ...envelope, ciphertext: tamperedBytes.toString("base64url") };
   assert.throws(
     () => vault.open(tampered, binding),
     (error) => error instanceof ServiceCredentialVaultError && error.code === "service_credential_decrypt_failed",

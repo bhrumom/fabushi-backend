@@ -8,6 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { attachDeviceGateway, registerDeviceTools } from "./device-gateway.js";
 import { createFabushiAccountClient } from "./fabushi-account-auth.js";
+import { createServiceCredentialVault } from "./service-credential-vault.js";
 import { DEVICE_DISK_SAFETY_INSTRUCTIONS } from "./device-disk-safety.js";
 
 const ACCESS_TOKEN_TTL_SECONDS = 8 * 60 * 60;
@@ -208,7 +209,60 @@ function trimMapToLimit(map, limit) {
   }
 }
 
-function normalizeStatePayload(payload) {
+function normalizeEpochMs(value, field) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) throw new Error(`Invalid ${field}.`);
+  return number < 1_000_000_000_000 ? Math.floor(number * 1000) : Math.floor(number);
+}
+
+function normalizePersistedServiceBinding(service, { accountId, clientId, resource, scopes }) {
+  if (!service || typeof service !== "object") return null;
+  const connectionId = String(service.connectionId || "").trim();
+  const delegationId = String(service.delegationId || "").trim();
+  const externalClientId = String(service.externalClientId || "").trim();
+  const serviceResource = String(service.resource || "").trim();
+  const serviceScopes = Array.isArray(service.scopes) ? [...new Set(service.scopes.map(String))].sort() : [];
+  const envelope = service.refreshEnvelope;
+  if (!/^official-mcp:[A-Za-z0-9_-]{24,160}$/u.test(connectionId)
+      || !delegationId || delegationId.length > 200
+      || externalClientId !== clientId
+      || serviceResource !== resource
+      || serviceScopes.join(" ") !== [...new Set(scopes)].sort().join(" ")
+      || !envelope || envelope.version !== 1 || envelope.algorithm !== "A256GCM"
+      || typeof envelope.keyId !== "string" || typeof envelope.iv !== "string"
+      || typeof envelope.tag !== "string" || typeof envelope.ciphertext !== "string"
+      || "accessToken" in service || "refreshToken" in service || "accountAccessToken" in service) {
+    throw new Error(`Invalid persisted Core service binding for account ${safeAccountRef(accountId)}.`);
+  }
+  return {
+    connectionId,
+    delegationId,
+    externalClientId,
+    resource: serviceResource,
+    scopes: serviceScopes,
+    refreshTokenExpiresAt: normalizeEpochMs(service.refreshTokenExpiresAt, "service refresh expiry"),
+    refreshEnvelope: {
+      version: 1,
+      algorithm: "A256GCM",
+      keyId: String(envelope.keyId),
+      iv: String(envelope.iv),
+      tag: String(envelope.tag),
+      ciphertext: String(envelope.ciphertext),
+    },
+  };
+}
+
+function serviceVaultBinding(accountId, service) {
+  return {
+    accountId,
+    connectionId: service.connectionId,
+    delegationId: service.delegationId,
+    externalClientId: service.externalClientId,
+    resource: service.resource,
+  };
+}
+
+function normalizeStatePayload(payload, { requireCoreServiceState = false } = {}) {
   const output = { clients: [], accessTokens: [], refreshTokens: [] };
   for (const client of payload?.clients ?? []) {
     const clientId = String(client?.clientId || "");
@@ -219,19 +273,29 @@ function normalizeStatePayload(payload) {
   for (const token of payload?.accessTokens ?? []) {
     const expiresAt = Number(token?.expiresAt || 0);
     if (!token?.token || !token?.accountId || expiresAt <= now) continue;
+    const clientId = String(token.clientId || "");
+    const resource = String(token.resource || "");
+    const scopes = Array.isArray(token.scopes) ? token.scopes.filter((scope) => MCP_SCOPES.includes(scope)) : [];
+    const service = normalizePersistedServiceBinding(token.service, { accountId: String(token.accountId), clientId, resource, scopes });
+    if (requireCoreServiceState && !service) continue;
     output.accessTokens.push({
       token: String(token.token), accountId: String(token.accountId), accountLabel: String(token.accountLabel || ""),
-      clientId: String(token.clientId || ""), resource: String(token.resource || ""), scopes: Array.isArray(token.scopes) ? token.scopes.filter((scope) => MCP_SCOPES.includes(scope)) : [],
-      createdAt: Number(token.createdAt || now), expiresAt,
+      clientId, resource, scopes,
+      createdAt: Number(token.createdAt || now), expiresAt, ...(service ? { service } : {}),
     });
   }
   for (const token of payload?.refreshTokens ?? []) {
     const expiresAt = Number(token?.expiresAt || 0);
     if (!token?.token || !token?.accountId || expiresAt <= now) continue;
+    const clientId = String(token.clientId || "");
+    const resource = String(token.resource || "");
+    const scopes = Array.isArray(token.scopes) ? token.scopes.filter((scope) => MCP_SCOPES.includes(scope)) : [];
+    const service = normalizePersistedServiceBinding(token.service, { accountId: String(token.accountId), clientId, resource, scopes });
+    if (requireCoreServiceState && !service) continue;
     output.refreshTokens.push({
       token: String(token.token), accountId: String(token.accountId), accountLabel: String(token.accountLabel || ""),
-      clientId: String(token.clientId || ""), resource: String(token.resource || ""), scopes: Array.isArray(token.scopes) ? token.scopes.filter((scope) => MCP_SCOPES.includes(scope)) : [],
-      createdAt: Number(token.createdAt || now), expiresAt,
+      clientId, resource, scopes,
+      createdAt: Number(token.createdAt || now), expiresAt, ...(service ? { service } : {}),
     });
   }
   return output;
@@ -249,6 +313,9 @@ export function createFabushiRemoteMcpServer(options = {}) {
   const accountClient = options.accountClient ?? createFabushiAccountClient({ baseUrl: options.apiBaseUrl });
   const operationJournal = options.operationJournal ?? null;
   const requireOperationJournal = options.requireOperationJournal ?? process.env.FABUSHI_CORE_OPERATION_JOURNAL_REQUIRED === "1";
+  const requireCoreServiceState = options.requireCoreServiceState ?? process.env.FABUSHI_CORE_SERVICE_STATE_REQUIRED === "1";
+  const serviceCredentialVault = options.serviceCredentialVault
+    ?? (requireCoreServiceState ? createServiceCredentialVault({ key: options.serviceVaultKey }) : null);
   const now = options.now ?? Date.now;
   const limits = {
     clients: positiveLimit(options.limits?.clients, DEFAULT_LIMITS.clients),
@@ -262,6 +329,8 @@ export function createFabushiRemoteMcpServer(options = {}) {
   const codes = new Map();
   const accessTokens = new Map();
   const refreshTokens = new Map();
+  const serviceAccessTokens = new Map();
+  const serviceRefreshInflight = new Map();
   const rateBuckets = new Map();
   let saveChain = Promise.resolve();
   let loaded = false;
@@ -283,7 +352,7 @@ export function createFabushiRemoteMcpServer(options = {}) {
     if (statePath) {
       try { payload = JSON.parse(await readFile(statePath, "utf8")); } catch {}
     }
-    const normalized = normalizeStatePayload(payload);
+    const normalized = normalizeStatePayload(payload, { requireCoreServiceState });
     for (const client of normalized.clients.slice(-limits.clients)) clients.set(client.clientId, { redirectUris: client.redirectUris, createdAt: client.createdAt || now() });
     for (const token of normalized.accessTokens.slice(-limits.accessTokens)) accessTokens.set(token.token, token);
     for (const token of normalized.refreshTokens.slice(-limits.refreshTokens)) refreshTokens.set(token.token, token);
@@ -295,8 +364,28 @@ export function createFabushiRemoteMcpServer(options = {}) {
       const payload = {
         version: 1,
         clients: [...clients].map(([clientId, value]) => ({ clientId, redirectUris: value.redirectUris, createdAt: value.createdAt })),
-        accessTokens: [...accessTokens.values()],
-        refreshTokens: [...refreshTokens.values()],
+        accessTokens: [...accessTokens.values()].map((entry) => ({
+          token: entry.token,
+          accountId: entry.accountId,
+          accountLabel: entry.accountLabel,
+          clientId: entry.clientId,
+          resource: entry.resource,
+          scopes: entry.scopes,
+          createdAt: entry.createdAt,
+          expiresAt: entry.expiresAt,
+          ...(entry.service ? { service: entry.service } : {}),
+        })),
+        refreshTokens: [...refreshTokens.values()].map((entry) => ({
+          token: entry.token,
+          accountId: entry.accountId,
+          accountLabel: entry.accountLabel,
+          clientId: entry.clientId,
+          resource: entry.resource,
+          scopes: entry.scopes,
+          createdAt: entry.createdAt,
+          expiresAt: entry.expiresAt,
+          ...(entry.service ? { service: entry.service } : {}),
+        })),
       };
       await mkdir(dirname(statePath), { recursive: true });
       const temporary = `${statePath}.${process.pid}.${now()}.${randomBytes(4).toString("hex")}.tmp`;
@@ -392,7 +481,7 @@ export function createFabushiRemoteMcpServer(options = {}) {
     const started = await accountClient.startBrowserLogin({ deviceId: `mcp-oauth-${requestId}`, platform: "web" });
     authorizationRequests.set(requestId, {
       requestId, clientId, redirectUri, state, codeChallenge: challenge, codeChallengeMethod: challengeMethod,
-      resource, scopes, attemptId: started.attemptId, pollSecret: started.pollSecret,
+      resource, scopes, connectionId: `official-mcp:${randomToken(24)}`, attemptId: started.attemptId, pollSecret: started.pollSecret,
       expiresAt: Math.min(now() + AUTHORIZATION_TTL_MS, started.expiresAt ? started.expiresAt * 1000 : Number.MAX_SAFE_INTEGER),
     });
     await audit({ type: "oauth.authorization.started", clientId: sha256Base64Url(clientId).slice(0, 16) });
@@ -434,11 +523,48 @@ export function createFabushiRemoteMcpServer(options = {}) {
       authorizationRequests.delete(requestId);
       return writeJson(response, 503, { status: "failed", message: "授权服务暂时繁忙，请稍后重试。" });
     }
+    let service;
+    if (requireCoreServiceState) {
+      try {
+        const delegated = await accountClient.createOfficialMcpServiceDelegation({
+          accountAccessToken,
+          connectionId: pending.connectionId,
+          externalClientId: pending.clientId,
+          resource: pending.resource,
+          scopes: pending.scopes,
+        });
+        if (!serviceCredentialVault) throw new Error("service credential vault unavailable");
+        const binding = {
+          accountId: account.userId,
+          connectionId: delegated.connectionId,
+          delegationId: delegated.delegationId,
+          externalClientId: delegated.externalClientId,
+          resource: delegated.resource,
+        };
+        service = {
+          connectionId: delegated.connectionId,
+          delegationId: delegated.delegationId,
+          externalClientId: delegated.externalClientId,
+          resource: delegated.resource,
+          scopes: [...pending.scopes].sort(),
+          refreshTokenExpiresAt: normalizeEpochMs(delegated.refreshTokenExpiresAt, "service refresh expiry"),
+          refreshEnvelope: serviceCredentialVault.seal(delegated.refreshToken, binding),
+        };
+        serviceAccessTokens.set(delegated.delegationId, {
+          accessToken: delegated.accessToken,
+          expiresAt: normalizeEpochMs(delegated.accessTokenExpiresAt, "service access expiry"),
+        });
+      } catch (error) {
+        authorizationRequests.delete(requestId);
+        await audit({ type: "oauth.service_delegation.failed", accountRef: safeAccountRef(account.userId), code: error?.code || "service_delegation_failed" }).catch(() => {});
+        return writeJson(response, 200, { status: "failed", message: "Fabushi 设备控制授权建立失败，请重新授权。" });
+      }
+    }
     const code = randomToken(32);
     codes.set(code, {
       clientId: pending.clientId, redirectUri: pending.redirectUri, codeChallenge: pending.codeChallenge,
       codeChallengeMethod: pending.codeChallengeMethod, resource: pending.resource, scopes: pending.scopes,
-      accountId: account.userId, accountLabel: account.label, expiresAt: now() + CODE_TTL_MS,
+      accountId: account.userId, accountLabel: account.label, ...(service ? { service } : {}), expiresAt: now() + CODE_TTL_MS,
     });
     authorizationRequests.delete(requestId);
     const redirect = new URL(pending.redirectUri);
@@ -488,12 +614,12 @@ export function createFabushiRemoteMcpServer(options = {}) {
     const accessEntry = {
       token: accessToken, accountId: source.accountId, accountLabel: source.accountLabel,
       clientId, resource: source.resource, scopes: source.scopes, createdAt: timestamp,
-      expiresAt: timestamp + ACCESS_TOKEN_TTL_SECONDS * 1000,
+      expiresAt: timestamp + ACCESS_TOKEN_TTL_SECONDS * 1000, ...(source.service ? { service: source.service } : {}),
     };
     const refreshEntry = {
       token: refreshToken, accountId: source.accountId, accountLabel: source.accountLabel,
       clientId, resource: source.resource, scopes: source.scopes, createdAt: timestamp,
-      expiresAt: timestamp + REFRESH_TOKEN_TTL_SECONDS * 1000,
+      expiresAt: timestamp + REFRESH_TOKEN_TTL_SECONDS * 1000, ...(source.service ? { service: source.service } : {}),
     };
     accessTokens.set(accessToken, accessEntry);
     refreshTokens.set(refreshToken, refreshEntry);
@@ -508,6 +634,58 @@ export function createFabushiRemoteMcpServer(options = {}) {
       refresh_token: refreshToken,
       scope: source.scopes.join(" "),
     });
+  }
+
+  async function ensureCoreServiceAccess(account) {
+    if (!requireCoreServiceState) return null;
+    const service = account?.service;
+    if (!service || !serviceCredentialVault) throw new Error("Core service state is required for this MCP authorization.");
+    const cached = serviceAccessTokens.get(service.delegationId);
+    if (cached && cached.expiresAt > now() + 10_000) return cached.accessToken;
+    const existing = serviceRefreshInflight.get(service.delegationId);
+    if (existing) return existing;
+    const operation = (async () => {
+      const binding = serviceVaultBinding(account.accountId, service);
+      const refreshToken = serviceCredentialVault.open(service.refreshEnvelope, binding);
+      const rotated = await accountClient.refreshOfficialMcpServiceDelegation({
+        delegationId: service.delegationId,
+        refreshToken,
+        connectionId: service.connectionId,
+        externalClientId: service.externalClientId,
+        resource: service.resource,
+      });
+      if (rotated.delegationId !== service.delegationId
+          || rotated.connectionId !== service.connectionId
+          || rotated.externalClientId !== service.externalClientId
+          || rotated.resource !== service.resource) {
+        throw new Error("Core service refresh binding changed unexpectedly.");
+      }
+      const nextService = {
+        ...service,
+        refreshTokenExpiresAt: normalizeEpochMs(rotated.refreshTokenExpiresAt, "service refresh expiry"),
+        refreshEnvelope: serviceCredentialVault.seal(rotated.refreshToken, binding),
+      };
+      for (const entry of accessTokens.values()) {
+        if (entry.service?.delegationId === service.delegationId) entry.service = nextService;
+      }
+      for (const entry of refreshTokens.values()) {
+        if (entry.service?.delegationId === service.delegationId) entry.service = nextService;
+      }
+      serviceAccessTokens.set(service.delegationId, {
+        accessToken: rotated.accessToken,
+        expiresAt: normalizeEpochMs(rotated.accessTokenExpiresAt, "service access expiry"),
+      });
+      await saveState();
+      return rotated.accessToken;
+    })();
+    serviceRefreshInflight.set(service.delegationId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (serviceRefreshInflight.get(service.delegationId) === operation) {
+        serviceRefreshInflight.delete(service.delegationId);
+      }
+    }
   }
 
   function createMcp(account) {
@@ -591,7 +769,17 @@ export function createFabushiRemoteMcpServer(options = {}) {
             "access-control-expose-headers": "WWW-Authenticate,Mcp-Session-Id",
           });
         }
-        const mcp = createMcp(account);
+        let mcpAccount = account;
+        if (requireCoreServiceState) {
+          try {
+            const coreServiceAccessToken = await ensureCoreServiceAccess(account);
+            mcpAccount = { ...account, coreServiceAccessToken };
+          } catch (error) {
+            await audit({ type: "oauth.service_delegation.refresh_failed", accountRef: safeAccountRef(account.accountId), code: error?.code || "service_refresh_failed" }).catch(() => {});
+            return writeJson(response, 503, { error: "service_delegation_unavailable", error_description: "Fabushi device control authorization must be renewed." });
+          }
+        }
+        const mcp = createMcp(mcpAccount);
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
         response.setHeader("Access-Control-Allow-Origin", "*");
         response.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id,WWW-Authenticate");
