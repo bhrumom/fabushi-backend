@@ -14,6 +14,7 @@ import {
   registerDeviceTools,
 } from "./device-gateway.js";
 import { createFabushiAccountClient } from "./fabushi-account-auth.js";
+import { createCoreDeviceTransport } from "./core-device-transport.js";
 import { createServiceCredentialVault } from "./service-credential-vault.js";
 import { DEVICE_DISK_SAFETY_INSTRUCTIONS } from "./device-disk-safety.js";
 
@@ -323,6 +324,14 @@ export function createFabushiRemoteMcpServer(options = {}) {
   const serviceCredentialVault = options.serviceCredentialVault
     ?? (requireCoreServiceState ? createServiceCredentialVault({ key: options.serviceVaultKey }) : null);
   const now = options.now ?? Date.now;
+  const configuredCoreDeviceTransport = options.coreDeviceTransport
+    ?? (options.coreDevicePrivateTransport
+      ? createCoreDeviceTransport({
+          accountClient,
+          privateTransport: options.coreDevicePrivateTransport,
+          now: () => Math.floor(now() / 1000),
+        })
+      : null);
   const limits = {
     clients: positiveLimit(options.limits?.clients, DEFAULT_LIMITS.clients),
     authorizationRequests: positiveLimit(options.limits?.authorizationRequests, DEFAULT_LIMITS.authorizationRequests),
@@ -715,7 +724,7 @@ export function createFabushiRemoteMcpServer(options = {}) {
     });
     const coreServiceAccessToken = String(account.coreServiceAccessToken || "").trim();
     const requireCoreDeviceAuthority = requireCoreServiceState || options.requireCoreDeviceAuthority === true;
-    const coreDeviceTransport = options.coreDeviceTransport ?? null;
+    const coreDeviceTransport = configuredCoreDeviceTransport;
 
     const loadCoreInventory = async () => {
       if (!coreServiceAccessToken) {
