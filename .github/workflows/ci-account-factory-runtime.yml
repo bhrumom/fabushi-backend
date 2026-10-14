@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm install --prefix "$RUNNER_TEMP/fixture-tools" --no-audit --no-fund wrangler@4.110.0
+          npm install --prefix "$RUNNER_TEMP/fixture-tools" --no-audit --no-fund wrangler@4.151.0
           node ci/account-factory/prepare-runtime.mjs
           openssl req -x509 -newkey rsa:2048 -nodes -keyout "$RUNNER_TEMP/account-worker/tls-key.pem" -out "$RUNNER_TEMP/account-worker/tls-cert.pem" -days 1 -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1' >/dev/null 2>&1
           chmod 600 "$RUNNER_TEMP/account-worker/tls-key.pem"

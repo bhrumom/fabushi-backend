@@ -97,7 +97,8 @@ try {
   };
   const auth = new CanonicalAuthAdapter({ config, mailbox: { async receive({ email }) { const code = emails.get(email); if (!code) throw Error('mail_not_delivered'); emails.delete(email); return code; } } });
   journal = new LeaseJournal(join(dir, 'leases.sqlite'));
-  factory = new AccountFactory({ config, journal, auth, janitor });
+  let factoryTime = Date.now();
+  factory = new AccountFactory({ config, journal, auth, janitor, now: () => factoryTime });
   const audience = 'fabushi-ci-fixtures';
   const oidcUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL); oidcUrl.searchParams.set('audience', audience);
   const oidcResponse = await fetch(oidcUrl, { headers: { authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` }, redirect: 'error' });
@@ -111,6 +112,9 @@ try {
   assertions.realRegistrationAndLogin = 'PASS';
   const api = (path, session, body) => fetch(`${config.authOrigin}${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${session.accessToken}`, 'content-type': 'application/json' }, body: body && JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(15000) });
   const [a, b, c] = lease.accounts;
+  const identity = { repository: process.env.GITHUB_REPOSITORY, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, sourceSha: process.env.GITHUB_SHA };
+  await assert.rejects(factory.cleanup({ ...identity, runId: `${identity.runId}1` }, lease.leaseId), /lease_forbidden/);
+  assertions.crossRunCleanupDenied = 'PASS';
   const aUsers = await Promise.all(a.sessions.map(async s => { const r = await api('/api/auth/user-info', s); assert.equal(r.status, 200); return r.json(); }));
   assert.ok((aUsers[0].user?.id ?? aUsers[0].id) != null && (aUsers[1].user?.id ?? aUsers[1].id) != null);
   assert.equal(String(aUsers[0].user?.id ?? aUsers[0].id), String(aUsers[1].user?.id ?? aUsers[1].id));
@@ -131,6 +135,12 @@ try {
   assert.equal((await api('/api/auth/user-info', a.sessions[1])).status, 200); assertions.otherSessionRetained = 'PASS';
   const cleanup = await fixtureRequest(`/v1/leases/${lease.leaseId}`, 'DELETE'); assert.equal(cleanup.status, 200); assert.equal((await cleanup.json()).remaining, 0); assertions.zeroResidualCleanup = 'PASS';
   const stale = await api('/api/auth/user-info', a.sessions[0]); assert.equal(stale.status, 401); assertions.deletedSessionDenied = 'PASS';
+  const ttlResponse = await fixtureRequest('/v1/leases', 'POST', { scenarioId: 'actual-ttl' });
+  const ttlLease = await ttlResponse.json(); assert.equal(ttlResponse.status, 201);
+  factoryTime = ttlLease.expiresAt + 1;
+  const swept = await factory.sweep(); assert.ok(swept.some(r => r.leaseId === ttlLease.leaseId && r.remaining === 0));
+  assert.equal((await api('/api/auth/user-info', ttlLease.accounts[0].sessions[0])).status, 401);
+  assertions.ttlReclamation = 'PASS'; evidence.ttlClock = 'factory-controlled; Core authentication uses real clock';
   evidence.wasmSha256 = createHash('sha256').update(readFileSync(resolve('core/deploy/platform-worker/build/worker/index.wasm'))).digest('hex');
   evidence.testCount = Object.keys(assertions).length; evidence.overall = 'PASS';
 } finally {
