@@ -364,8 +364,28 @@ export function createFabushiRemoteMcpServer(options = {}) {
       const payload = {
         version: 1,
         clients: [...clients].map(([clientId, value]) => ({ clientId, redirectUris: value.redirectUris, createdAt: value.createdAt })),
-        accessTokens: [...accessTokens.values()],
-        refreshTokens: [...refreshTokens.values()],
+        accessTokens: [...accessTokens.values()].map((entry) => ({
+          token: entry.token,
+          accountId: entry.accountId,
+          accountLabel: entry.accountLabel,
+          clientId: entry.clientId,
+          resource: entry.resource,
+          scopes: entry.scopes,
+          createdAt: entry.createdAt,
+          expiresAt: entry.expiresAt,
+          ...(entry.service ? { service: entry.service } : {}),
+        })),
+        refreshTokens: [...refreshTokens.values()].map((entry) => ({
+          token: entry.token,
+          accountId: entry.accountId,
+          accountLabel: entry.accountLabel,
+          clientId: entry.clientId,
+          resource: entry.resource,
+          scopes: entry.scopes,
+          createdAt: entry.createdAt,
+          expiresAt: entry.expiresAt,
+          ...(entry.service ? { service: entry.service } : {}),
+        })),
       };
       await mkdir(dirname(statePath), { recursive: true });
       const temporary = `${statePath}.${process.pid}.${now()}.${randomBytes(4).toString("hex")}.tmp`;
@@ -749,15 +769,17 @@ export function createFabushiRemoteMcpServer(options = {}) {
             "access-control-expose-headers": "WWW-Authenticate,Mcp-Session-Id",
           });
         }
+        let mcpAccount = account;
         if (requireCoreServiceState) {
           try {
-            account.coreServiceAccessToken = await ensureCoreServiceAccess(account);
+            const coreServiceAccessToken = await ensureCoreServiceAccess(account);
+            mcpAccount = { ...account, coreServiceAccessToken };
           } catch (error) {
             await audit({ type: "oauth.service_delegation.refresh_failed", accountRef: safeAccountRef(account.accountId), code: error?.code || "service_refresh_failed" }).catch(() => {});
             return writeJson(response, 503, { error: "service_delegation_unavailable", error_description: "Fabushi device control authorization must be renewed." });
           }
         }
-        const mcp = createMcp(account);
+        const mcp = createMcp(mcpAccount);
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
         response.setHeader("Access-Control-Allow-Origin", "*");
         response.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id,WWW-Authenticate");
