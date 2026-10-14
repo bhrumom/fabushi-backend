@@ -95,16 +95,16 @@ func TestHTTPHandlerRejectsUnknownFieldsBeforeDial(t *testing.T) {
 	}
 	req := validRequest()
 	body, _ := json.Marshal(map[string]any{
-		"requestId": req.RequestID,
-		"accountId": req.AccountID,
-		"deviceId": req.DeviceID,
-		"cellId": req.CellID,
-		"nodeId": req.NodeID,
-		"generation": req.Generation,
-		"expiresAt": req.ExpiresAt,
-		"targetPort": req.TargetPort,
-		"timeoutMs": req.TimeoutMS,
-		"frame": req.Frame,
+		"requestId":    req.RequestID,
+		"accountId":    req.AccountID,
+		"deviceId":     req.DeviceID,
+		"cellId":       req.CellID,
+		"nodeId":       req.NodeID,
+		"generation":   req.Generation,
+		"expiresAt":    req.ExpiresAt,
+		"targetPort":   req.TargetPort,
+		"timeoutMs":    req.TimeoutMS,
+		"frame":        req.Frame,
 		"deviceSecret": "must-not-be-accepted",
 	})
 	httpReq := httptest.NewRequest(http.MethodPost, privateRequestPath, strings.NewReader(string(body)))
