@@ -30,6 +30,17 @@ remain as a fallback transport, but only after canonical Core account/device and
 operation checks. Transport loss after dispatch is outcome_unknown and does not
 cause automatic replay of side effects.
 
+Before any production target description or device call is dispatched, the
+official MCP controller must resolve the target through Platform Core's
+service-bound `POST /v1/computers/:device_id/network-route` projection. The
+service response is accepted only when deviceId, connectionId, delegationId,
+positive generation, unexpired expiresAt, and active state match the current MCP
+delegation and the inventory generation. Only cellId/nodeId/generation/expiresAt
+may be handed to the private transport as routing hints; proof material,
+deviceSecret, login credentials, target grants, and network private keys remain
+outside the controller boundary. A route mismatch or expiry fails closed and
+must not fall back to an unscoped /agent registry path.
+
 ## Durable state
 
 Official MCP service refresh credentials and service-bound Remote Computer
