@@ -182,3 +182,106 @@ test("Remote Computer inventory uses only the delegated service access token and
   assert.deepEqual(await client.listRemoteComputers(serviceAccessToken), [{ deviceId: "device-1", online: true }]);
   assert.deepEqual(calls, [{ url: "https://api.ombhrum.com/v1/computers", authorization: `Bearer ${serviceAccessToken}` }]);
 });
+
+
+test("Core Remote Computer controller client preserves service-bound identities and stable operation requests", async () => {
+  const calls = [];
+  const serviceToken = "s".repeat(64);
+  const clientToken = "c".repeat(64);
+  const mobileToken = "m".repeat(64);
+  const digest = "a".repeat(64);
+  const client = createFabushiAccountClient({
+    baseUrl: "https://api.ombhrum.com",
+    fetchImpl: async (url, init) => {
+      const body = init.body ? JSON.parse(init.body) : null;
+      calls.push({ url, method: init.method, authorization: init.headers.Authorization, body });
+      if (url.endsWith("/v1/computers/pair")) return jsonResponse(200, {
+        deviceId: "device-1", clientId: "remote-client-1", clientToken, serviceBound: true,
+      });
+      if (url.endsWith("/sessions")) return jsonResponse(200, {
+        sessionId: "remote-session-1", deviceId: "device-1", clientId: "remote-client-1", mobileToken, state: "pending",
+      });
+      if (url.endsWith("/sessions/reconcile")) return jsonResponse(200, {
+        sessionId: "remote-session-1", deviceId: "device-1", clientId: "remote-client-1", mobileToken, state: "pending",
+      });
+      if (url.endsWith("/operations")) return jsonResponse(200, {
+        operationId: "remote-operation-1", requestId: "operation-request-0001", sessionId: "remote-session-1",
+        clientId: "remote-client-1", toolName: "computer_state", requestSha256: digest, state: "pending",
+      });
+      return jsonResponse(200, {
+        operationId: "remote-operation-1", requestId: "operation-request-0001", sessionId: "remote-session-1",
+        clientId: "remote-client-1", toolName: "computer_state", requestSha256: digest, state: "outcome_unknown",
+      });
+    },
+  });
+
+  const paired = await client.pairRemoteComputer(serviceToken, { pairingCode: "A1B2C3D4E5F6", label: "Official MCP" });
+  assert.equal(paired.clientToken, clientToken);
+  const session = await client.createRemoteComputerSession(serviceToken, {
+    deviceId: paired.deviceId, clientId: paired.clientId, clientToken: paired.clientToken, requestId: "session-request-0001",
+  });
+  assert.equal(session.mobileToken, mobileToken);
+  await client.reconcileRemoteComputerSession(serviceToken, {
+    deviceId: paired.deviceId, clientId: paired.clientId, clientToken: paired.clientToken, requestId: "session-request-0001",
+  });
+  await client.createRemoteComputerOperation(serviceToken, {
+    deviceId: paired.deviceId, sessionId: session.sessionId, clientId: paired.clientId, mobileToken: session.mobileToken,
+    requestId: "operation-request-0001", toolName: "computer_state", requestSha256: digest,
+  });
+  await client.queryRemoteComputerOperation(serviceToken, {
+    deviceId: paired.deviceId, sessionId: session.sessionId, clientId: paired.clientId, mobileToken: session.mobileToken,
+    requestId: "operation-request-0001",
+  });
+  await client.cancelRemoteComputerOperation(serviceToken, {
+    deviceId: paired.deviceId, sessionId: session.sessionId, clientId: paired.clientId, mobileToken: session.mobileToken,
+    requestId: "operation-request-0001",
+  });
+  await client.markRemoteComputerOperationOutcomeUnknown(serviceToken, {
+    deviceId: paired.deviceId, sessionId: session.sessionId, clientId: paired.clientId, mobileToken: session.mobileToken,
+    requestId: "operation-request-0001",
+  });
+
+  assert.equal(calls.length, 7);
+  assert.ok(calls.every((call) => call.authorization === `Bearer ${serviceToken}`));
+  assert.deepEqual(calls[0].body, { pairingCode: "A1B2C3D4E5F6", label: "Official MCP" });
+  assert.deepEqual(calls[1].body, { clientId: "remote-client-1", clientToken, requestId: "session-request-0001" });
+  assert.deepEqual(calls[3].body, {
+    clientId: "remote-client-1", mobileToken, requestId: "operation-request-0001",
+    toolName: "computer_state", requestSha256: digest, sensitiveResult: false,
+  });
+  assert.deepEqual(calls[4].body, { clientId: "remote-client-1", mobileToken });
+  assert.match(calls[4].url, /operations\/operation-request-0001\/query$/u);
+  assert.match(calls[5].url, /operations\/operation-request-0001\/cancel$/u);
+  assert.match(calls[6].url, /operations\/operation-request-0001\/outcome-unknown$/u);
+});
+
+test("Core Remote Computer controller client rejects malformed and mismatched authority before routing", async () => {
+  let calls = 0;
+  const serviceToken = "s".repeat(64);
+  const client = createFabushiAccountClient({
+    baseUrl: "https://api.ombhrum.com",
+    fetchImpl: async () => {
+      calls += 1;
+      return jsonResponse(200, {
+        operationId: "remote-operation-1", requestId: "different-request-0001", sessionId: "remote-session-1",
+        clientId: "remote-client-1", toolName: "computer_state", requestSha256: "a".repeat(64), state: "pending",
+      });
+    },
+  });
+  await assert.rejects(
+    () => client.createRemoteComputerOperation(serviceToken, {
+      deviceId: "device-1", sessionId: "remote-session-1", clientId: "remote-client-1", mobileToken: "m".repeat(64),
+      requestId: "short", toolName: "computer_state", requestSha256: "a".repeat(64),
+    }),
+    (error) => error instanceof FabushiAccountAuthError && error.code === "invalid_request_id",
+  );
+  assert.equal(calls, 0);
+  await assert.rejects(
+    () => client.createRemoteComputerOperation(serviceToken, {
+      deviceId: "device-1", sessionId: "remote-session-1", clientId: "remote-client-1", mobileToken: "m".repeat(64),
+      requestId: "operation-request-0001", toolName: "computer_state", requestSha256: "a".repeat(64),
+    }),
+    (error) => error instanceof FabushiAccountAuthError && error.code === "remote_operation_identity_mismatch",
+  );
+  assert.equal(calls, 1);
+});

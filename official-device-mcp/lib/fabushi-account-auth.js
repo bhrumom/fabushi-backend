@@ -74,6 +74,50 @@ function normalizeServiceBinding({ connectionId, externalClientId, resource, sco
   };
 }
 
+function normalizeRemoteIdentifier(value, field, max = 160, min = 1) {
+  const normalized = String(value || "").trim();
+  if (normalized.length < min || normalized.length > max || !/^[A-Za-z0-9_.:-]+$/u.test(normalized)) {
+    throw new FabushiAccountAuthError(`invalid_${field}`, `Remote Computer ${field} is invalid.`);
+  }
+  return normalized;
+}
+
+function normalizeRemoteRequestId(value) {
+  return normalizeRemoteIdentifier(value, "request_id", 160, 16);
+}
+
+function normalizeRemoteToolName(value) {
+  return normalizeRemoteIdentifier(value, "tool_name", 128, 1);
+}
+
+function normalizeSha256(value) {
+  const normalized = String(value || "").trim();
+  if (!/^[0-9a-f]{64}$/u.test(normalized)) {
+    throw new FabushiAccountAuthError("invalid_request_digest", "Remote Computer requestSha256 is invalid.");
+  }
+  return normalized;
+}
+
+function normalizeRemoteCredential(value, field) {
+  const normalized = String(value || "").trim();
+  if (normalized.length < 48 || normalized.length > 256 || /[\r\n]/u.test(normalized)) {
+    throw new FabushiAccountAuthError(`invalid_${field}`, `Remote Computer ${field} is invalid.`);
+  }
+  return normalized;
+}
+
+function requireResponseIdentity(payload, expected, code) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new FabushiAccountAuthError(code, "Remote Computer response is invalid.");
+  }
+  for (const [field, value] of Object.entries(expected)) {
+    if (String(payload[field] ?? "") !== String(value)) {
+      throw new FabushiAccountAuthError(code, `Remote Computer response ${field} does not match the request.`);
+    }
+  }
+  return payload;
+}
+
 function normalizeServiceDelegation(payload) {
   const accessToken = normalizeBearerToken(payload?.accessToken);
   const refreshToken = normalizeBearerToken(payload?.refreshToken, "invalid_service_refresh_token");
@@ -134,6 +178,44 @@ export function createFabushiAccountClient(options = {}) {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  async function remoteSessionRequest(suffix, serviceAccessToken, { deviceId, clientId, clientToken, requestId } = {}) {
+    const token = normalizeBearerToken(serviceAccessToken);
+    const device = normalizeRemoteIdentifier(deviceId, "device_id", 128);
+    const client = normalizeRemoteIdentifier(clientId, "client_id", 160);
+    const credential = normalizeRemoteCredential(clientToken, "client_token");
+    const stableRequestId = normalizeRemoteRequestId(requestId);
+    const payload = await request(`/v1/computers/${encodeURIComponent(device)}${suffix}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ clientId: client, clientToken: credential, requestId: stableRequestId }),
+    });
+    requireResponseIdentity(payload, { deviceId: device, clientId: client }, "remote_session_identity_mismatch");
+    const sessionId = normalizeRemoteIdentifier(payload.sessionId, "session_id", 160);
+    const mobileToken = normalizeRemoteCredential(payload.mobileToken, "mobile_token");
+    return { ...payload, sessionId, mobileToken };
+  }
+
+  async function remoteOperationControllerRequest(action, serviceAccessToken, {
+    deviceId, sessionId, clientId, mobileToken, requestId,
+  } = {}) {
+    const token = normalizeBearerToken(serviceAccessToken);
+    const device = normalizeRemoteIdentifier(deviceId, "device_id", 128);
+    const session = normalizeRemoteIdentifier(sessionId, "session_id", 160);
+    const client = normalizeRemoteIdentifier(clientId, "client_id", 160);
+    const mobile = normalizeRemoteCredential(mobileToken, "mobile_token");
+    const stableRequestId = normalizeRemoteRequestId(requestId);
+    if (!["query", "cancel", "outcome-unknown"].includes(action)) throw new TypeError("Unsupported Remote Computer operation action.");
+    const payload = await request(
+      `/v1/computers/${encodeURIComponent(device)}/sessions/${encodeURIComponent(session)}/operations/${encodeURIComponent(stableRequestId)}/${action}`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ clientId: client, mobileToken: mobile }),
+      },
+    );
+    return requireResponseIdentity(payload, { requestId: stableRequestId, sessionId: session, clientId: client }, "remote_operation_identity_mismatch");
   }
 
   return {
@@ -203,6 +285,78 @@ export function createFabushiAccountClient(options = {}) {
         throw new FabushiAccountAuthError("invalid_computer_inventory", "Fabushi Remote Computer inventory is invalid.");
       }
       return payload.computers;
+    },
+
+    async pairRemoteComputer(serviceAccessToken, { pairingCode, label } = {}) {
+      const token = normalizeBearerToken(serviceAccessToken);
+      const code = String(pairingCode || "").trim().toUpperCase();
+      const normalizedLabel = String(label || "").trim();
+      if (!/^[0-9A-F]{12}$/u.test(code)) {
+        throw new FabushiAccountAuthError("invalid_pairing_code", "Remote Computer pairing code is invalid.");
+      }
+      if (!normalizedLabel || normalizedLabel.length > 160 || /[\r\n]/u.test(normalizedLabel)) {
+        throw new FabushiAccountAuthError("invalid_client_label", "Remote Computer client label is invalid.");
+      }
+      const payload = await request("/v1/computers/pair", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ pairingCode: code, label: normalizedLabel }),
+      });
+      const deviceId = normalizeRemoteIdentifier(payload?.deviceId, "device_id", 128);
+      const clientId = normalizeRemoteIdentifier(payload?.clientId, "client_id", 160);
+      const clientToken = normalizeRemoteCredential(payload?.clientToken, "client_token");
+      if (payload?.serviceBound !== true) {
+        throw new FabushiAccountAuthError("unbound_remote_client", "Remote Computer pair response is not service-bound.");
+      }
+      return { ...payload, deviceId, clientId, clientToken };
+    },
+
+    async createRemoteComputerSession(serviceAccessToken, { deviceId, clientId, clientToken, requestId } = {}) {
+      return remoteSessionRequest("/sessions", serviceAccessToken, { deviceId, clientId, clientToken, requestId });
+    },
+
+    async reconcileRemoteComputerSession(serviceAccessToken, { deviceId, clientId, clientToken, requestId } = {}) {
+      return remoteSessionRequest("/sessions/reconcile", serviceAccessToken, { deviceId, clientId, clientToken, requestId });
+    },
+
+    async createRemoteComputerOperation(serviceAccessToken, {
+      deviceId, sessionId, clientId, mobileToken, requestId, toolName, requestSha256, sensitiveResult = false,
+    } = {}) {
+      const token = normalizeBearerToken(serviceAccessToken);
+      const device = normalizeRemoteIdentifier(deviceId, "device_id", 128);
+      const session = normalizeRemoteIdentifier(sessionId, "session_id", 160);
+      const client = normalizeRemoteIdentifier(clientId, "client_id", 160);
+      const mobile = normalizeRemoteCredential(mobileToken, "mobile_token");
+      const stableRequestId = normalizeRemoteRequestId(requestId);
+      const tool = normalizeRemoteToolName(toolName);
+      const digest = normalizeSha256(requestSha256);
+      const payload = await request(`/v1/computers/${encodeURIComponent(device)}/sessions/${encodeURIComponent(session)}/operations`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          clientId: client,
+          mobileToken: mobile,
+          requestId: stableRequestId,
+          toolName: tool,
+          requestSha256: digest,
+          sensitiveResult: Boolean(sensitiveResult),
+        }),
+      });
+      return requireResponseIdentity(payload, {
+        requestId: stableRequestId, sessionId: session, clientId: client, toolName: tool, requestSha256: digest,
+      }, "remote_operation_identity_mismatch");
+    },
+
+    async queryRemoteComputerOperation(serviceAccessToken, input = {}) {
+      return remoteOperationControllerRequest("query", serviceAccessToken, input);
+    },
+
+    async cancelRemoteComputerOperation(serviceAccessToken, input = {}) {
+      return remoteOperationControllerRequest("cancel", serviceAccessToken, input);
+    },
+
+    async markRemoteComputerOperationOutcomeUnknown(serviceAccessToken, input = {}) {
+      return remoteOperationControllerRequest("outcome-unknown", serviceAccessToken, input);
     },
 
     async startBrowserLogin({ deviceId, platform = "web" } = {}) {
