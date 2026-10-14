@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { createFabushiRemoteMcpServer } from "../lib/fabushi-remote-mcp-server.js";
+import { assertOfficialDeviceMcpProductionStartup } from "../lib/production-startup.js";
 
+assertOfficialDeviceMcpProductionStartup();
 const service = createFabushiRemoteMcpServer();
 const address = await service.listen();
 const host = typeof address === "object" && address ? address.address : service.host;
