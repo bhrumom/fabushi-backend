@@ -1,0 +1,212 @@
+name: FDN controller production delivery
+
+on:
+  pull_request:
+    paths:
+      - "fdn-network-coordinator/**"
+      - "official-device-network-worker/**"
+      - "official-device-mcp/**"
+      - ".github/workflows/fdn-controller-production-delivery.yml"
+  push:
+    branches: [main]
+    paths:
+      - "fdn-network-coordinator/**"
+      - "official-device-network-worker/**"
+      - "official-device-mcp/**"
+      - ".github/workflows/fdn-controller-production-delivery.yml"
+  workflow_dispatch:
+    inputs:
+      core_sha:
+        description: Verified current Platform Core main SHA
+        required: true
+        type: string
+      deploy:
+        description: Install the verified controller stack on the production controller
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: fdn-controller-production-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      EXACT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.EXACT_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Bind exact backend source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: official-device-network-worker/go.mod
+          cache-dependency-path: official-device-network-worker/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: official-device-mcp/package-lock.json
+      - name: Verify coordinator and controller contracts
+        run: |
+          set -euo pipefail
+          bash -n fdn-network-coordinator/install-controller-stack.sh
+          bash -n fdn-network-coordinator/run-enrollment-service.sh
+          bash -n fdn-network-coordinator/run-official-device-mcp-ingress-binder.sh
+          node --test fdn-network-coordinator/enrollment-broker.test.mjs
+          node --test fdn-network-coordinator/enrollment-service.test.mjs
+          node --test fdn-network-coordinator/official-device-mcp-ingress-binder.test.mjs
+          grep -F 'User=fabushi-fdn' fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service
+          grep -F 'User=fabushi-fdn' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -F 'WorkingDirectory=/opt/fabushi-fdn/current' fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service
+          grep -F 'WorkingDirectory=/opt/fabushi-fdn/current/official-device-mcp' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -F 'StateDirectory=fabushi-fdn' fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service
+          grep -F 'StateDirectory=fabushi-fdn' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -F 'ln -sfn "$release" "$root/current.new"' fdn-network-coordinator/install-controller-stack.sh
+          grep -F 'mv -Tf "$root/current.new" "$root/current"' fdn-network-coordinator/install-controller-stack.sh
+          grep -F 'health check failed; previous release restored' fdn-network-coordinator/install-controller-stack.sh
+      - name: Test and build pinned controller worker
+        working-directory: official-device-network-worker
+        run: |
+          set -euo pipefail
+          test "$(go list -m -f '{{.Version}}' tailscale.com)" = "v1.104.1"
+          go test ./...
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o ../official-device-network-worker.bin .
+      - name: Test shipping official device MCP
+        working-directory: official-device-mcp
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run check
+          npm test
+          node --check lib/production-startup.js
+          node --test tests/production-startup.test.js
+          npm prune --omit=dev --ignore-scripts
+      - name: Assemble immutable controller bundle
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/fdn-controller"
+          install -d "$stage/bin"
+          install -m 0755 official-device-network-worker.bin "$stage/bin/official-device-network-worker"
+          cp -a fdn-network-coordinator "$stage/fdn-network-coordinator"
+          cp -a official-device-mcp "$stage/official-device-mcp"
+          chmod 0755 "$stage/fdn-network-coordinator/install-controller-stack.sh"
+          printf '%s\n' "$EXACT_SHA" > "$stage/BACKEND_SHA"
+          find "$stage" -type f -print0 | sort -z | xargs -0 sha256sum > "$stage/MANIFEST.sha256"
+          tar -C "$stage" -czf fdn-controller-stack.tgz .
+          sha256sum fdn-controller-stack.tgz > fdn-controller-stack.tgz.sha256
+          jq -n --arg backendSha "$EXACT_SHA" --arg run "$GITHUB_RUN_ID"             '{backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,runId:$run,artifact:"fdn-controller-stack.tgz",installRoot:"/opt/fabushi-fdn/current",stateRoot:"/var/lib/fabushi-fdn",serviceAccount:"fabushi-fdn"}'             > fdn-controller-provenance.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fdn-controller-stack-${{ env.EXACT_SHA }}
+          if-no-files-found: error
+          path: |
+            fdn-controller-stack.tgz
+            fdn-controller-stack.tgz.sha256
+            fdn-controller-provenance.json
+
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    needs: build-and-verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    env:
+      CORE_SHA: ${{ inputs.core_sha }}
+      DEPLOY_HOST: ${{ secrets.FABUSHI_FDN_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.FABUSHI_FDN_DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.FABUSHI_FDN_DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.FABUSHI_FDN_DEPLOY_KNOWN_HOSTS }}
+      NETWORK_ENV_B64: ${{ secrets.FABUSHI_FDN_NETWORK_WORKER_ENV_B64 }}
+      ENROLLMENT_ENV_B64: ${{ secrets.FABUSHI_FDN_ENROLLMENT_ENV_B64 }}
+      MCP_ENV_B64: ${{ secrets.FABUSHI_FDN_OFFICIAL_DEVICE_MCP_ENV_B64 }}
+    steps:
+      - name: Require current canonical backend main and isolated deployment secrets
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "${{ github.sha }}"
+          [[ "$CORE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS NETWORK_ENV_B64 ENROLLMENT_ENV_B64 MCP_ENV_B64; do
+            test -n "${!name}"
+          done
+      - name: Prove exact Core main verification
+        uses: actions/github-script@v8
+        env:
+          CORE_SHA: ${{ inputs.core_sha }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const sha=process.env.CORE_SHA;
+            if(!/^[a-f0-9]{40}$/.test(sha)) throw new Error('invalid Core SHA');
+            const owner='bhrumom', repo='fabushi-platform-core';
+            const main=await github.rest.repos.getBranch({owner,repo,branch:'main'});
+            if(main.data.commit.sha!==sha) throw new Error('Core SHA is not current main');
+            for (const workflow of ['official-mcp-oauth.yml','fdn-remote-computer-session-reconcile.yml']) {
+              const runs=await github.rest.actions.listWorkflowRuns({owner,repo,workflow_id:workflow,head_sha:sha,per_page:100});
+              if(!runs.data.workflow_runs.some(r=>r.head_sha===sha&&r.head_branch==='main'&&r.conclusion==='success')) {
+                throw new Error('missing successful exact-Core verification: '+workflow);
+              }
+            }
+      - uses: actions/download-artifact@v5
+        with:
+          name: fdn-controller-stack-${{ github.sha }}
+      - name: Verify artifact digest and prepare SSH
+        run: |
+          set -euo pipefail
+          sha256sum -c fdn-controller-stack.tgz.sha256
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/known_hosts"
+      - name: Stage isolated service environments and verified bundle
+        run: |
+          set -euo pipefail
+          printf '%s' "$NETWORK_ENV_B64" | base64 --decode > "$RUNNER_TEMP/fdn-network-worker.env"
+          printf '%s' "$ENROLLMENT_ENV_B64" | base64 --decode > "$RUNNER_TEMP/fdn-network-enrollment.env"
+          printf '%s' "$MCP_ENV_B64" | base64 --decode > "$RUNNER_TEMP/fdn-official-device-mcp.env"
+          chmod 0600 "$RUNNER_TEMP"/*.env
+          for file in "$RUNNER_TEMP"/*.env; do
+            if grep -Eiq '(^|_)(access|refresh|device|mobile)token=' "$file"; then
+              echo "ordinary Fabushi/device tokens are forbidden in controller service env files" >&2
+              exit 64
+            fi
+          done
+          scp fdn-controller-stack.tgz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/fdn-controller-stack-$GITHUB_SHA.tgz"
+          scp "$RUNNER_TEMP/fdn-network-worker.env" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/fdn-network-worker.env"
+          scp "$RUNNER_TEMP/fdn-network-enrollment.env" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/fdn-network-enrollment.env"
+          scp "$RUNNER_TEMP/fdn-official-device-mcp.env" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/fdn-official-device-mcp.env"
+      - name: Atomically install and health-check production controller
+        run: |
+          set -euo pipefail
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo install -d -m 0755 /etc/fabushi &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-network-worker.env /etc/fabushi/fdn-network-worker.env &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-network-enrollment.env /etc/fabushi/fdn-network-enrollment.env &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-official-device-mcp.env /etc/fabushi/fdn-official-device-mcp.env &&             sudo tar -xOf /tmp/fdn-controller-stack-$GITHUB_SHA.tgz ./fdn-network-coordinator/install-controller-stack.sh > /tmp/install-controller-stack.sh &&             sudo chmod 0755 /tmp/install-controller-stack.sh &&             sudo /tmp/install-controller-stack.sh /tmp/fdn-controller-stack-$GITHUB_SHA.tgz $GITHUB_SHA $CORE_SHA install &&             sudo /opt/fabushi-fdn/current/fdn-network-coordinator/install-controller-stack.sh ignored $GITHUB_SHA $CORE_SHA health &&             test \"\$(sudo cat /opt/fabushi-fdn/current/BACKEND_SHA)\" = \"$GITHUB_SHA\" &&             test \"\$(sudo cat /opt/fabushi-fdn/current/CORE_SHA)\" = \"$CORE_SHA\""
+      - name: Record deployed provenance
+        run: |
+          set -euo pipefail
+          digest="$(cut -d' ' -f1 fdn-controller-stack.tgz.sha256)"
+          jq -n --arg backendSha "$GITHUB_SHA" --arg coreSha "$CORE_SHA" --arg run "$GITHUB_RUN_ID" --arg digest "$digest"             '{backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,coreRepository:"bhrumom/fabushi-platform-core",coreSha:$coreSha,runId:$run,bundleSha256:$digest,result:"installed-and-health-checked"}'             > fdn-controller-deployed-provenance.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fdn-controller-deployed-${{ github.sha }}
+          if-no-files-found: error
+          path: fdn-controller-deployed-provenance.json
+      - name: Remove transient deployment material
+        if: always()
+        run: |
+          rm -f "$HOME/.ssh/id_ed25519" "$RUNNER_TEMP"/*.env
+          if [[ -n "${DEPLOY_HOST:-}" && -n "${DEPLOY_USER:-}" && -f "$HOME/.ssh/known_hosts" ]]; then
+            ssh "$DEPLOY_USER@$DEPLOY_HOST" "rm -f /tmp/fdn-controller-stack-$GITHUB_SHA.tgz /tmp/fdn-network-worker.env /tmp/fdn-network-enrollment.env /tmp/fdn-official-device-mcp.env /tmp/install-controller-stack.sh" || true
+          fi
