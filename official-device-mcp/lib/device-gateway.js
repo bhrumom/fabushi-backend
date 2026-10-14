@@ -43,11 +43,17 @@ function registryKey(accountId, deviceId) {
   return `${accountId}\0${deviceId}`;
 }
 
-function stableCallDigest(toolName, args, diskPreflight) {
-  return createHash("sha256").update(JSON.stringify({
-    toolName: String(toolName),
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+}
+
+export function stableCallDigest(toolName, args, diskPreflight) {
+  return createHash("sha256").update(canonicalJson({
     arguments: args,
     diskPreflight: normalizeDiskPreflight(diskPreflight),
+    toolName: String(toolName),
   })).digest("hex");
 }
 
