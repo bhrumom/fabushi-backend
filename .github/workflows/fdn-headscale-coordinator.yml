@@ -87,6 +87,31 @@ jobs:
           if grep -Eiq 'deviceSecret|proofSha256|accessToken|refreshToken|clientToken|mobileToken' runtime/projected-policy.hujson; then
             exit 1
           fi
+      - name: Test Core to Headscale enrollment binding
+        working-directory: fdn-network-coordinator
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test ./enrollment-broker.test.mjs
+          node --check ./enrollment-broker.mjs
+          node --input-type=module - <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const source = await readFile("enrollment-broker.mjs", "utf8");
+          for (const required of [
+            "/v1/internal/computers/network-enrollment-grants/redeem",
+            "/v1/internal/computers/network-bindings/bind",
+            "/v1/internal/computers/network-bindings/cell-snapshot",
+            "preAuthKey?.id",
+            "redeem_outcome_unknown",
+            "bind_outcome_unknown",
+            "aes-256-gcm",
+          ]) {
+            if (!source.includes(required)) throw new Error(`missing enrollment invariant: ${required}`);
+          }
+          for (const forbidden of ["registerDeviceTools", "devices registry", "headscale:latest"]) {
+            if (source.includes(forbidden)) throw new Error(`forbidden enrollment authority: ${forbidden}`);
+          }
+          NODE
       - name: Validate policy sync ordering
         working-directory: fdn-network-coordinator
         shell: bash
