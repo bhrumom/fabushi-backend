@@ -285,3 +285,71 @@ test("Core Remote Computer controller client rejects malformed and mismatched au
   );
   assert.equal(calls, 1);
 });
+
+
+test("official MCP reads only the service-bound minimal Core network route", async () => {
+  const calls = [];
+  const serviceToken = "s".repeat(64);
+  const client = createFabushiAccountClient({
+    baseUrl: "https://api.ombhrum.com",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, method: init.method, authorization: init.headers.Authorization, body: init.body });
+      return jsonResponse(200, {
+        deviceId: "device-fdn-1",
+        cellId: "cell-fdn-account-a",
+        nodeId: "100.64.0.10",
+        generation: 17,
+        expiresAt: 1_900_000_000,
+        connectionId: "official-mcp:connection-0001",
+        delegationId: "delegation-0001",
+        active: true,
+      });
+    },
+  });
+  const route = await client.getRemoteComputerNetworkRoute(serviceToken, {
+    deviceId: "device-fdn-1",
+    connectionId: "official-mcp:connection-0001",
+    delegationId: "delegation-0001",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://api.ombhrum.com/v1/computers/device-fdn-1/network-route");
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].authorization, `Bearer ${serviceToken}`);
+  assert.equal(calls[0].body, undefined);
+  assert.deepEqual(route, {
+    deviceId: "device-fdn-1",
+    cellId: "cell-fdn-account-a",
+    nodeId: "100.64.0.10",
+    generation: 17,
+    expiresAt: 1_900_000_000,
+    connectionId: "official-mcp:connection-0001",
+    delegationId: "delegation-0001",
+    active: true,
+  });
+});
+
+test("official MCP rejects controller network routes that leak target-only proof material", async () => {
+  const client = createFabushiAccountClient({
+    baseUrl: "https://api.ombhrum.com",
+    fetchImpl: async () => jsonResponse(200, {
+      deviceId: "device-fdn-1",
+      cellId: "cell-fdn-account-a",
+      nodeId: "100.64.0.10",
+      generation: 17,
+      expiresAt: 1_900_000_000,
+      connectionId: "official-mcp:connection-0001",
+      delegationId: "delegation-0001",
+      active: true,
+      proofSha256: "a".repeat(64),
+    }),
+  });
+  await assert.rejects(
+    () => client.getRemoteComputerNetworkRoute("s".repeat(64), {
+      deviceId: "device-fdn-1",
+      connectionId: "official-mcp:connection-0001",
+      delegationId: "delegation-0001",
+    }),
+    (error) => error instanceof FabushiAccountAuthError
+      && error.code === "remote_network_route_secret_leak",
+  );
+});

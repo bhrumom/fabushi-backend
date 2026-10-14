@@ -30,6 +30,15 @@ remain as a fallback transport, but only after canonical Core account/device and
 operation checks. Transport loss after dispatch is outcome_unknown and does not
 cause automatic replay of side effects.
 
+Before every private target stage that can authorize or execute work, the
+controller must re-resolve the service-bound Core network route. A previously
+resolved route is not a durable capability: expiry, revoke, generation rotation,
+connection switch, or delegation switch must fail the next private stage closed.
+Within one stage, the route used to construct request identity and the route
+handed to the transport must be the same snapshot to avoid a route-generation
+TOCTOU. Only cellId/nodeId/generation/expiresAt are routing hints; application
+authorization remains Core/Host-owned.
+
 ## Durable state
 
 Official MCP service refresh credentials and service-bound Remote Computer

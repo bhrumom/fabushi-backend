@@ -287,6 +287,58 @@ export function createFabushiAccountClient(options = {}) {
       return payload.computers;
     },
 
+    async getRemoteComputerNetworkRoute(serviceAccessToken, {
+      deviceId, connectionId, delegationId,
+    } = {}) {
+      const token = normalizeBearerToken(serviceAccessToken);
+      const device = normalizeRemoteIdentifier(deviceId, "device_id", 128);
+      const connection = normalizeRemoteIdentifier(connectionId, "connection_id", 200);
+      const delegation = normalizeRemoteIdentifier(delegationId, "delegation_id", 200);
+      const payload = await request(`/v1/computers/${encodeURIComponent(device)}/network-route`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (String(payload?.deviceId || "") !== device
+        || String(payload?.connectionId || "") !== connection
+        || String(payload?.delegationId || "") !== delegation
+        || payload?.active !== true) {
+        throw new FabushiAccountAuthError(
+          "remote_network_route_identity_mismatch",
+          "Remote Computer network route does not match the official MCP service binding.",
+        );
+      }
+      const cellId = normalizeRemoteIdentifier(payload?.cellId, "cell_id", 128);
+      const nodeId = normalizeRemoteIdentifier(payload?.nodeId, "node_id", 160);
+      const generation = Number(payload?.generation);
+      const expiresAt = Number(payload?.expiresAt);
+      if (!Number.isSafeInteger(generation) || generation <= 0
+        || !Number.isSafeInteger(expiresAt) || expiresAt <= 0) {
+        throw new FabushiAccountAuthError(
+          "invalid_remote_network_route",
+          "Remote Computer network route generation or expiry is invalid.",
+        );
+      }
+      if (Object.hasOwn(payload, "proofSha256")
+        || Object.hasOwn(payload, "deviceSecret")
+        || Object.hasOwn(payload, "proof_sha256")
+        || Object.hasOwn(payload, "device_secret")) {
+        throw new FabushiAccountAuthError(
+          "remote_network_route_secret_leak",
+          "Remote Computer controller route exposed target-only secret material.",
+        );
+      }
+      return {
+        deviceId: device,
+        cellId,
+        nodeId,
+        generation,
+        expiresAt,
+        connectionId: connection,
+        delegationId: delegation,
+        active: true,
+      };
+    },
+
     async pairRemoteComputer(serviceAccessToken, { pairingCode, label } = {}) {
       const token = normalizeBearerToken(serviceAccessToken);
       const code = String(pairingCode || "").trim().toUpperCase();
