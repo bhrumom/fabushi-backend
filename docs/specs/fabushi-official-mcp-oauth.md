@@ -108,3 +108,15 @@ Current status: AC-FDN-B1 is being implemented in this branch. AC-FDN-B2..B4 rem
 
 - AC-FDN-B8: Exact-head GitHub Actions prove the browser-completion ordinary token is absent from code/token/state payloads, service refresh plaintext is absent from persisted JSON, AAD binding survives state save/load, restart recovery rotates exactly once, and ambiguous Core refresh is not retried.
 - AC-FDN-B9: This slice does not yet claim G09/G16 or FDN-A04/A08/A16. Those remain pending until the persisted service identity is actually used by canonical Core device/session/operation routing and a deployed real Host call succeeds.
+
+
+### FDN-001 Core Remote Computer controller client — 2026-10-14
+
+- B-FDN-23: Backend may use the in-memory Core official-device-MCP service access credential only for controller-authorized Remote Computer endpoints that Core explicitly accepts for the same immutable service connection/delegation: device inventory, pairing, session create/reconcile, and controller operation create/query/cancel/outcome_unknown.
+- B-FDN-24: Every controller request is bounded and schema-explicit. DeviceId/clientId/sessionId/requestId/toolName and SHA-256 request digest are validated before HTTP dispatch. Pairing codes, clientToken and mobileToken are controller credentials and must never be inserted into target tool frames, tool descriptions, ordinary audit text, or public MCP responses.
+- B-FDN-25: The HTTP client never calls target-only tool-grant, activate, claim, result, transport, close, signal-drain, or device registration endpoints with a service credential. Those remain Target Host/device authority and must be integrated in the existing Desktop Host owner.
+- B-FDN-26: Operation create preserves the caller-provided stable requestId and requestSha256. Query/cancel/outcome_unknown always identify the same session, client and request. A network timeout is surfaced as ambiguous/fail-closed; the client performs no automatic retry for pairing/session mutation, operation create, cancel, or outcome_unknown.
+- B-FDN-27: Controller client methods verify bounded Core response identity (device/client/session/request/tool) before returning it. A mismatched Core response is an error and cannot be used to route a target call.
+- B-FDN-28: This client is an enabling dependency only. The existing reverse-WSS device executor remains non-canonical until Desktop Host performs target-side grant/claim/result and Backend operationJournal wiring is switched to the real Core controller client. No G09/G16 or FDN-A04/A08/A16 is passed by this slice.
+
+- AC-FDN-B10: Exact-head Actions prove service Authorization is used, request JSON/path identities are exact, malformed identifiers/digests fail before fetch, response identity mismatch fails closed, and target-only endpoints are absent from this service client.
