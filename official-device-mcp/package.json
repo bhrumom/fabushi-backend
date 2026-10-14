@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node bin/fabushi-remote-mcp.js",
-    "check": "node --check bin/fabushi-remote-mcp.js && node --check lib/fabushi-account-auth.js && node --check lib/core-device-transport.js && node --check lib/device-disk-safety.js && node --check lib/device-gateway.js && node --check lib/fabushi-remote-mcp-server.js && node --check lib/service-credential-vault.js",
-    "test": "node --test tests/fabushi-account-auth.test.js tests/core-device-transport.test.js tests/device-gateway-account.test.js tests/fabushi-remote-mcp-server.test.js tests/service-credential-vault.test.js"
+    "check": "node --check bin/fabushi-remote-mcp.js && node --check lib/fabushi-account-auth.js && node --check lib/core-device-transport.js && node --check lib/device-disk-safety.js && node --check lib/device-gateway.js && node --check lib/fabushi-remote-mcp-server.js && node --check lib/local-network-worker-transport.js && node --check lib/service-credential-vault.js",
+    "test": "node --test tests/fabushi-account-auth.test.js tests/core-device-transport.test.js tests/device-gateway-account.test.js tests/fabushi-remote-mcp-server.test.js tests/local-network-worker-transport.test.js tests/service-credential-vault.test.js"
   },
   "engines": {
     "node": ">=24"

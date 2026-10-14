@@ -4,13 +4,17 @@ on:
   pull_request:
     paths:
       - "official-device-mcp/**"
+      - "official-device-network-worker/**"
       - "docs/specs/fabushi-official-mcp-oauth.md"
+      - "docs/specs/fdn-001-official-device-mcp-core-cutover.md"
       - ".github/workflows/fdn-official-device-mcp.yml"
   push:
     branches: [main]
     paths:
       - "official-device-mcp/**"
+      - "official-device-network-worker/**"
       - "docs/specs/fabushi-official-mcp-oauth.md"
+      - "docs/specs/fdn-001-official-device-mcp-core-cutover.md"
       - ".github/workflows/fdn-official-device-mcp.yml"
   workflow_dispatch:
 
@@ -58,4 +62,76 @@ jobs:
           {
             echo "Canonical Backend SHA: $(git rev-parse HEAD)"
             echo "Legacy parity source: bhrumom/fabushi@7f2935500cec3a199caf7823557ce5d106e051f4"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  private-network-worker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: official-device-network-worker
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Bind exact tested HEAD
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            expected="${{ github.event.pull_request.head.sha }}"
+          else
+            expected="${{ github.sha }}"
+          fi
+          test "$actual" = "$expected"
+          echo "Exact tested HEAD: $actual" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+          cache-dependency-path: official-device-network-worker/go.sum
+      - name: Resolve locked module graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod tidy
+          grep -F 'tailscale.com v1.104.1' go.mod
+          go list -m all > module-list.txt
+          grep -F 'tailscale.com v1.104.1' module-list.txt
+      - name: Record Go dependency lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: fdn-controller-tsnet-go-lock-${{ github.sha }}
+          path: |
+            official-device-network-worker/go.mod
+            official-device-network-worker/go.sum
+            official-device-network-worker/module-list.txt
+          if-no-files-found: error
+          retention-days: 90
+      - name: Format
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -d .
+          test -z "$(gofmt -l .)"
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build ./...
+      - name: Verify exact Tailscale pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fx 'require tailscale.com v1.104.1' go.mod
+          if grep -Eq 'tailscale\.com v[^ ]+-(latest|master|main)' go.mod; then
+            exit 1
+          fi
+      - name: Record network provenance
+        shell: bash
+        run: |
+          {
+            echo "Canonical Backend SHA: $(git rev-parse HEAD)"
+            echo "Tailscale: v1.104.1"
+            echo "Headscale compatibility target: v0.29.5"
           } >> "$GITHUB_STEP_SUMMARY"
