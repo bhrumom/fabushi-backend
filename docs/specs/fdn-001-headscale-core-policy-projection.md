@@ -45,3 +45,21 @@ GitHub Actions only:
 - exact tested source SHA is recorded.
 
 This code/CI slice does not count as G02/G03/G05 production acceptance until a real approved coordinator deployment proves Core snapshot consumption, account isolation, revoke/generation rotation and real tool calls over WireGuard direct and DERP.
+
+## Runtime application and reload
+
+The deployment owner mounts the entire rendered `runtime/` directory read-only
+into Headscale and points `policy.path` at
+`/etc/headscale/fdn-runtime/policy.hujson`. The initial render copies the
+checked-in deny-all template into that directory.
+
+A policy sync has this strict order:
+
+1. fetch, validate and atomically replace the host-side runtime policy;
+2. run Headscale 0.29.5 policy validation against the new file;
+3. only after validation succeeds, send SIGHUP to the running Headscale service.
+
+A failed Core request, snapshot validation, write, Headscale policy validation or
+service lookup must not send SIGHUP. Atomic rename is intentionally performed
+inside a directory bind mount so the running container observes the new inode.
+The network-authority credential remains environment-only.
