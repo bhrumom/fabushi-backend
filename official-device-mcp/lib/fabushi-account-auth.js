@@ -287,6 +287,31 @@ export function createFabushiAccountClient(options = {}) {
       return payload.computers;
     },
 
+    async getRemoteComputerNetworkRoute(serviceAccessToken, { deviceId } = {}) {
+      const token = normalizeBearerToken(serviceAccessToken);
+      const device = normalizeRemoteIdentifier(deviceId, "device_id", 128);
+      const payload = await request(`/v1/computers/${encodeURIComponent(device)}/network-route`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      requireResponseIdentity(payload, { deviceId: device }, "remote_network_route_identity_mismatch");
+      const cellId = normalizeRemoteIdentifier(payload.cellId, "network_cell_id", 128, 8);
+      const nodeId = normalizeRemoteIdentifier(payload.nodeId, "network_node_id", 160, 8);
+      const generation = Number(payload.generation);
+      const expiresAt = Number(payload.expiresAt);
+      const connectionId = String(payload.connectionId || "").trim();
+      const delegationId = String(payload.delegationId || "").trim();
+      if (!Number.isSafeInteger(generation) || generation <= 0
+          || !Number.isSafeInteger(expiresAt) || expiresAt <= 0
+          || !connectionId || connectionId.length > 160 || /[\r\n]/u.test(connectionId)
+          || !delegationId || delegationId.length > 200 || /[\r\n]/u.test(delegationId)
+          || payload.active !== true
+          || "proofSha256" in payload || "deviceSecret" in payload) {
+        throw new FabushiAccountAuthError("invalid_remote_network_route", "Fabushi Remote Computer network route is invalid.");
+      }
+      return { deviceId: device, cellId, nodeId, generation, expiresAt, connectionId, delegationId, active: true };
+    },
+
     async pairRemoteComputer(serviceAccessToken, { pairingCode, label } = {}) {
       const token = normalizeBearerToken(serviceAccessToken);
       const code = String(pairingCode || "").trim().toUpperCase();
