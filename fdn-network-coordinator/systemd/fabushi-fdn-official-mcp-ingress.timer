@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically reconcile Fabushi official MCP private ingress node
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5m
+RandomizedDelaySec=30s
+Persistent=true
+Unit=fabushi-fdn-official-mcp-ingress.service
+
+[Install]
+WantedBy=timers.target
