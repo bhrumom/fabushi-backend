@@ -12,7 +12,7 @@ services:
       - "3478:3478/udp"
     volumes:
       - ./runtime/config.yaml:/etc/headscale/config.yaml:ro
-      - ./policy.hujson:/etc/headscale/policy.hujson:ro
+      - ./runtime:/etc/headscale/fdn-runtime:ro
       - headscale-state:/var/lib/headscale
     healthcheck:
       test: ["CMD", "headscale", "health"]
