@@ -5,6 +5,7 @@ import WebSocket from "ws";
 import {
   attachDeviceGateway,
   callRegisteredDevice,
+  createAuthenticatedReverseWebSocketPrivateTransport,
   listRegisteredDevices,
   registerDeviceTools,
   resetDeviceGatewayStateForTests,
@@ -572,4 +573,99 @@ test("operation request digest is canonical across object key order", () => {
     nested: { a: 1, b: 3 },
     z: 1,
   }, preflightA));
+});
+
+
+test("authenticated reverse-WebSocket FDN fallback is account-scoped and requires explicit target opt-in", async (t) => {
+  resetDeviceGatewayStateForTests();
+  const server = createServer((_req, res) => res.writeHead(404).end());
+  const gateway = attachDeviceGateway(server, {
+    resolveAccount: async (token) => ({
+      "token-fdn-a": { userId: "account:fdn-a" },
+      "token-fdn-b": { userId: "account:fdn-b" },
+    })[token] ?? null,
+    defaultLeaseSeconds: 60,
+  });
+  const port = await listen(server);
+  const optedIn = new WebSocket(`ws://127.0.0.1:${port}/agent`, {
+    headers: { Authorization: "Bearer token-fdn-a" },
+  });
+  const ordinary = new WebSocket(`ws://127.0.0.1:${port}/agent`, {
+    headers: { Authorization: "Bearer token-fdn-a" },
+  });
+  t.after(async () => {
+    optedIn.terminate();
+    ordinary.terminate();
+    await closeServer(server, gateway);
+    resetDeviceGatewayStateForTests();
+  });
+  await Promise.all([opened(optedIn), opened(ordinary)]);
+  optedIn.send(JSON.stringify({
+    type: "register",
+    deviceId: "fdn-target-1",
+    name: "FDN target",
+    platform: "linux",
+    capabilities: ["fabushi-fdn-private-transport"],
+    tools: [],
+    leaseSeconds: 60,
+  }));
+  ordinary.send(JSON.stringify({
+    type: "register",
+    deviceId: "ordinary-target-1",
+    name: "Ordinary target",
+    platform: "linux",
+    capabilities: ["computer_state"],
+    tools: [],
+    leaseSeconds: 60,
+  }));
+  await Promise.all([nextJson(optedIn), nextJson(ordinary)]);
+
+  let privateDispatches = 0;
+  optedIn.on("message", (raw) => {
+    const message = JSON.parse(raw.toString("utf8"));
+    if (message.type !== "fdnPrivate") return;
+    privateDispatches += 1;
+    optedIn.send(JSON.stringify({
+      type: "fdnPrivateResult",
+      requestId: message.requestId,
+      ok: true,
+      result: {
+        type: "controllerGranted",
+        deviceId: "fdn-target-1",
+        networkGeneration: message.payload.networkGeneration,
+      },
+    }));
+  });
+
+  const transport = createAuthenticatedReverseWebSocketPrivateTransport();
+  const result = await transport.request({
+    accountId: "account:fdn-a",
+    deviceId: "fdn-target-1",
+    networkGeneration: 9,
+    payload: { type: "grantController", networkGeneration: 9 },
+    timeoutSeconds: 5,
+  });
+  assert.equal(result.type, "controllerGranted");
+  assert.equal(result.deviceId, "fdn-target-1");
+  assert.equal(result.networkGeneration, 9);
+  assert.equal(privateDispatches, 1);
+
+  await assert.rejects(
+    () => transport.request({
+      accountId: "account:fdn-b",
+      deviceId: "fdn-target-1",
+      payload: { type: "grantController", networkGeneration: 9 },
+      timeoutSeconds: 5,
+    }),
+    /Unknown device/u,
+  );
+  await assert.rejects(
+    () => transport.request({
+      accountId: "account:fdn-a",
+      deviceId: "ordinary-target-1",
+      payload: { type: "grantController", networkGeneration: 9 },
+      timeoutSeconds: 5,
+    }),
+    /has not opted into the authenticated FDN reverse-WebSocket fallback/u,
+  );
 });
