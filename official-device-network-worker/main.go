@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	privateRequestPath = "/v1/fdn/private-request"
+	privateRequestPath  = "/v1/fdn/private-request"
 	defaultBind         = "127.0.0.1:8791"
 	defaultTargetPort   = 8792
 	maxRequestBytes     = 64 * 1024
@@ -175,9 +175,9 @@ func handler(expectedCell string, fixedPort int, dial dialFunc, now func() time.
 		defer cancel()
 		result, err := dispatchPrivateRequest(ctx, dial, req, fixedPort)
 		response := workerResponse{
-			RequestID: req.RequestID,
-			DeviceID: req.DeviceID,
-			NodeID: req.NodeID,
+			RequestID:  req.RequestID,
+			DeviceID:   req.DeviceID,
+			NodeID:     req.NodeID,
 			Generation: req.Generation,
 		}
 		if err != nil {
