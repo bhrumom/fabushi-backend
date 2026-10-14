@@ -1,0 +1,27 @@
+name: Review exact Global Dandelion offline preview
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  review:
+    environment: production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require canonical main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate source, scan and real packaged gates before one review write
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
+        run: python3 .github/scripts/review-dandelion-release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dandelion-release-review-${{ github.sha }}
+          path: release-review-evidence.json
