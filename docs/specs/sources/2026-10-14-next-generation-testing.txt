@@ -1,0 +1,251 @@
+# Fabushi 下一代自动化测试体系改造方案
+
+推荐方案：分层测试 + 隔离测试账号 + 真实跨设备 E2E + 零信任 CI/CD
+
+我的建议是：把 Fabushi 改造成以 GitHub Actions 为唯一执行平台、以真实用户行为为验收标准、以自动创建的隔离账号为基础、以安全性和发布证据为强制门禁的工程测试体系。
+
+不是简单增加单元测试，也不是要求每次提交都运行几小时的全量测试，而是结合 Google Testing Blog、Martin Fowler 测试实践、业界持续交付和安全工程经验，建立一套高可靠、可复现、可追溯、可持续扩展的方案。
+
+## 一、首先必须修正 Fabushi 现有测试体系中的两个问题
+
+我读取了 GitHub 当前仓库的工作流，发现两个非常重要的现状。
+
+问题 1：主仓库的 CI 明确禁止运行产品测试
+
+[`bhrumom/fabushi/.github/workflows/ci.yml`](https://github.com/bhrumom/fabushi/blob/main/.github/workflows/ci.yml) 定义了 `FCM-023 no-test policy`，明确不运行产品测试、E2E、模拟器或原生测试。
+
+因此，这个工作流显示 `success`，并不代表软件通过了功能验证。
+
+问题 2：现有 MCP 测试账号写入生产数据库
+
+[`provision-mcp-ci-test-account.yml`](https://github.com/bhrumom/fabushi/blob/main/.github/workflows/provision-mcp-ci-test-account.yml) 使用固定测试身份，在 `production` 环境中直接修改 Cloudflare D1 的 `ACCOUNT_DB`，随后调用真实生产登录接口验证。
+
+这种方式适合受控的特殊生产验收，但不适合作为日常自动化测试账号的创建机制。
+
+Fabushi 也并非没有测试基础。例如 Desktop 的 `rust-desktop-runtime.yml` 已有 Rust、TypeScript、架构边界和 exact SHA 检查，Backend 的 `fdn-official-device-mcp.yml` 已运行 Node 与 Go 测试。
+
+正确的改造方向是保留这些有价值的测试，废除“CI 绿色却没有运行行为测试”的错误完成信号，并补齐各项目之间的真实集成测试。
+
+这项改造涉及变更 FCM-023 原有发布治理规则，必须作为显式的工程政策迁移处理，不能只是绕过旧门禁。
+
+## 二、采用六层测试架构
+
+现代测试体系不应该依赖少量大型 E2E 测试发现全部问题。推荐使用大量快速确定性测试、适量真实服务集成测试、少量覆盖关键路径的完整应用测试，并增加针对安全和跨设备系统的专项验证。这也符合实用测试金字塔的核心原则。
+
+[image](https://www.google.com/s2/favicons?domain=https://www.martinfowler.com\&sz=32)
+
+martinfowler.com
+
+
+
+| 测试层级       | Fabushi 测试内容                                 | 运行策略    |
+| ---------- | -------------------------------------------- | ------- |
+| L1 单元与属性测试 | Rust/Go/Swift/Kotlin/TypeScript 业务逻辑、状态机、序列化 | PR 快速门禁 |
+| L2 契约测试    | API、MCP、消息格式、版本兼容、权限契约                       | PR 快速门禁 |
+| L3 集成测试    | 真实认证、D1、数据库迁移、Gateway、网络协调                   | 合并后及按需  |
+| L4 应用组件测试  | Electron、iOS、Android 的实际生命周期与 UI             | 按变更选择   |
+| L5 完整 E2E  | 真实安装包登录、跨设备、消息、MCP、升级                        | 正式发布前   |
+| L6 故障与安全测试 | 网络中断、令牌撤销、跨账号攻击、性能压力                         | 定期及安全变更 |
+
+针对 Fabushi 还必须增加三种横向验证能力：属性测试（Property-Based Testing）、状态机模型测试（Model-Based Testing）和故障注入（Fault Injection）。
+
+例如，远程控制会话的安全性不只是验证一次连接成功，还要覆盖授权、建立、断线、恢复、撤销、超时和账号切换的任意合法状态转换。
+
+这些测试应该验证明确的不变量，例如：授权被撤销后，旧会话不能重新获得控制权。
+
+## 三、全面改造测试账号系统
+
+### 1. 建立统一的 CI Account Factory
+
+不再让不同工作流分别使用固定账号、生产 D1 写入脚本和特殊测试 Token。
+
+建议在现有 Backend/认证系统旁建立一个仅测试环境可用的 `CI Test Fixture Service`。
+
+GitHub Actions
+
+提交 SHA / Run ID / OIDC 身份
+
+CI Fixture Service
+
+验证工作流身份与测试环境权限
+
+通过正常认证业务创建隔离用户
+
+为本次运行分配唯一账号、会话、设备身份
+
+User A 同账号多设备
+
+User B 跨账号隔离
+
+User C 撤销/过期
+
+测试完成后撤销、删除、校验清理
+
+失败、超时、取消也执行清理；TTL 兜底
+
+创建账号时应经过真实注册和认证业务逻辑。可以为测试环境提供邮件验证码接收器、可控时钟和必要的测试数据注入能力，但不能绕过实际需要验证的密码、会话和授权算法。
+
+每个账号及数据资源绑定 `run_id + run_attempt + scenario_id`。并行测试互不干扰，测试凭据为短期有效，CI 仅接收本次测试所需权限。
+
+### 2. 原有测试账号逐步迁移
+
+实际仓库中还存在 [`TestAccount`](https://github.com/bhrumom/fabushi/blob/main/docs/mahayana-test-account.md) 特殊身份：它使用专用 Token、拥有特殊会员能力，并可绕过普通 JWT 用户查询路径。
+
+建议保留其必要的历史兼容用途，但从标准自动化测试中剥离；对生产入口中的特权测试身份进行独立安全审查，再决定迁移或关闭。
+
+`provision-mcp-ci-test-account.yml` 也应迁移为隔离环境的账号预置工具。生产账号验证保留独立、受审批、受审计的流程，不再承担普通 CI 的数据准备任务。
+
+## 四、建立真实跨平台测试矩阵
+
+Fabushi 的核心优势是同账号设备、聊天、Agent、MCP 和 Computer Use 的跨平台协作，因此测试必须覆盖设备之间的真实关系。
+
+| 核心场景         | 必须验证的行为                                |
+| ------------ | -------------------------------------- |
+| 登录与会话        | 注册、登录、刷新、退出、账号切换、令牌过期                  |
+| 同账号设备        | Mac、Windows、Android、iOS 设备注册及发现        |
+| 跨账号安全        | A 不能控制、读取或冒充 B 的设备                     |
+| 消息系统         | 顺序、去重、离线恢复、分页、草稿、附件                    |
+| 官方 MCP       | initialize、tools/list、tools/call、权限及分页 |
+| Computer Use | 用户授权、屏幕读取、输入控制、结束与撤销                   |
+| 设备网络         | NAT、网络切换、断线重连、连接竞争、过期租约                |
+| 更新安装         | 全新安装、增量升级、旧版本数据迁移、回滚                   |
+| 第三方 OAuth    | 授权、回调、重连、撤销、过期、账号隔离                    |
+| 移动系统能力       | APNs、VoIP、CallKit、系统权限及后台生命周期          |
+
+其中 Android Emulator、iOS Simulator 和桌面虚拟显示环境可在合适的 GitHub-hosted Runner 上执行。
+
+APNs、VoIP、真实摄像头、硬件权限等无法由模拟器完整证明的项目，应增加真实设备验收。无法执行时明确标记 `NOT_VERIFIED`，而不是通过 Mock 获得绿色结果。
+
+### 重点：正式验收使用真实 Fabushi 应用和官方 MCP
+
+现有 [`interactive-runner-mcp.yml`](https://github.com/bhrumom/fabushi/blob/main/.github/workflows/interactive-runner-mcp.yml) 已具备有价值的基础：运行打包后的应用、由应用注册设备、通过官方 MCP 远程控制并收集录像及调用记录。
+
+但当前工作流的最后一道完成检查主要验证是否发生 `ci_session_finish`。远程会话正常结束并不能独立证明所有业务测试成功。
+
+应为它增加确定性的验收报告：
+
+```
+{
+  "suite": "fdn-same-account-v1",
+  "sourceSha": "<exact-commit-sha>",
+  "artifactSha256": "<actual-package-digest>",
+  "results": {
+    "deviceDiscovery": "PASS",
+    "crossAccountIsolation": "PASS",
+    "explicitConsent": "PASS",
+    "revocation": "PASS",
+    "sessionCleanup": "PASS"
+  },
+  "overall": "PASS"
+}
+```
+
+这里展示的是建议新增的报告格式，并非当前已存在的测试结果。
+
+实际门禁由独立验证器检查服务端状态、协议响应、设备证据与预期断言。ChatGPT 可以负责探索性测试及真实操作，但不能仅凭模型自己宣布成功。
+
+## 五、重新设计 GitHub Actions 发布流水线
+
+需要明确处理现有 [FCM-023](https://github.com/bhrumom/fabushi/blob/main/projects/fabushi-cicd-merge-governance/source/2026-09-03-fcm-023-test-formal-release-lanes.md) 和 [FCM-024](https://github.com/bhrumom/fabushi/blob/main/projects/fabushi-cicd-merge-governance/source/2026-09-16-zero-test-all-platform-prerelease.md) 政策。
+
+这些并非偶然缺失测试，而是此前明确制定的轻量预发布策略。建议以新的测试治理版本显式取代其中禁止自动质量测试的条款，同时保留快速测试安装包和严格正式发布之间的区别。
+
+| 阶段                | 运行时机     | 建议要求                   |
+| ----------------- | -------- | ---------------------- |
+| PR Fast Gate      | 每次 PR 更新 | 自动运行受影响的快速测试           |
+| Merge Integration | 合并后      | 跨模块契约、数据迁移、关键集成        |
+| Test Artifact     | 需要安装包时   | 快速构建发布，明确未完成正式验收       |
+| Nightly           | 每日定时     | 全量回归、故障注入、依赖安全检查       |
+| Formal Acceptance | 准备正式发布时  | 手动启动真实安装包和官方 MCP 端到端验收 |
+| Production Canary | 上线后      | 受控探针、健康指标、自动回滚条件       |
+
+建议将 PR 快速门禁的 P95 目标设为 10 分钟以内，把最耗时的完整 E2E 放到正式验收阶段。以上是拟定的性能目标，需要先测量当前耗时后调整。
+
+每个阶段使用 GitHub Actions；不在 bhrum2、Mac 或 Windows 个人设备上构建或缓存测试产物。
+
+## 六、统一六个仓库的验收证据
+
+Fabushi 不是单仓库产品，应建立一个跨仓库 Release Candidate Manifest，锁定以下工程边界：
+
+| 仓库                              | 验收责任                              |
+| ------------------------------- | --------------------------------- |
+| `bhrumom/fabushi`               | 测试调度、发布门禁、证据聚合                    |
+| `bhrumom/fabushi-desktop`       | Electron、Rust Host、Desktop 设备和安装包 |
+| `bhrumom/fabushi-backend`       | 认证、消息、网络协调、服务端权限                  |
+| `bhrumom/fabushi-platform-core` | 官方 MCP、Worker、协议和 OAuth           |
+| `fabushi-ios/fabushi-ios`       | iOS 原生功能及系统生命周期                   |
+| `fabu-android/fabushi-android`  | Android 原生功能及系统生命周期               |
+
+每次正式验收必须绑定各仓库 exact SHA、协议版本、测试套件版本、安装包 SHA-256 和 Actions Run ID。
+
+如果依赖仓库发生变化，涉及的兼容性测试应重新运行；旧 HEAD 的成功证据不能自动沿用。
+
+同时为产物添加 GitHub Artifact Attestation、依赖清单（SBOM）及签名验证。GitHub 官方支持基于构建来源生成和验证产物证明。
+
+[image](https://www.google.com/s2/favicons?domain=https://docs.github.com\&sz=32)
+
+GitHub Docs
+
+
+
+安全方面使用 OIDC 短期凭据和最小权限，不允许来自不可信 PR 的代码接触生产 Secrets。Actions 依赖优先使用受验证的工作流依赖锁定方案，或完整 commit SHA 固定。
+
+[image](https://www.google.com/s2/favicons?domain=https://docs.github.com\&sz=32)
+
+GitHub Docs
+
++1
+
+
+
+## 七、实施优先级与交付验收
+
+建议分五个可独立合并的阶段推进，不需要等待全部准备完毕才取得收益。
+
+1. P0：重建测试治理与可信门禁。 让 `CI result` 明确反映真实测试结果；更新 FCM-024 政策；建立独立质量聚合器，确保缺失、取消、失败的必需测试不会被报告为通过。
+2. P1：建立测试环境和 Account Factory。 自动创建与销毁账号、设备身份、会话和数据；去除普通 CI 对生产 D1 的直接写入；增加安全清理及资源配额检查。
+3. P2：统一核心契约与安全测试。 优先覆盖登录、消息、同账号设备、跨账号隔离、授权撤销和 MCP 工具权限；引入状态机、属性测试与故障注入。
+4. P3：完善真实应用 E2E。 复用现有 Interactive Runner，由真实打包应用注册设备，使用官方 MCP 操作，生成机器可核验的逐项验收结果。
+5. P4：建立跨平台发布证据链。 串联 exact SHA、真实安装包、签名、升级、设备验证和正式发布门禁，支持安全回滚。
+
+### 最终质量标准
+
+必需测试缺失而仍报告通过
+
+# 0
+
+普通 CI 直接写生产用户数据
+
+# 0
+
+正式发布的产物来源匹配
+
+# 100%
+
+关键安全断言通过率
+
+# 100%
+
+以上是目标验收标准，不是对 Fabushi 当前测试完成度的统计。测试稳定性、执行时长和覆盖率还需建立真实基线。
+
+安全测试范围推荐对齐 [OWASP ASVS 5.0](https://github.com/OWASP/ASVS)，尤其是身份认证、会话管理、对象级授权与权限撤销。
+
+[image](https://www.google.com/s2/favicons?domain=https://github.com\&sz=32)
+
+GitHub
+
+
+
+## 最终建议
+
+Fabushi 最值得投入的不是增加大量 UI 点击测试，而是建立三项基础设施：
+
+第一，真实但隔离的测试身份与环境。 不共享生产账号，不伪造普通身份认证。
+
+第二，跨仓库、跨平台、以明确不变量为依据的确定性测试。 重点保护账号隔离、设备权限、消息一致性和 MCP 控制。
+
+第三，以 exact SHA 和真实安装包为依据的发布验收。 测试环境通过不等于生产可发布，远程会话结束也不等于功能验收完成。
+
+这样才能同时获得快速开发反馈、高安全性和可信的正式发布证据。
+
+本轮完成的是基于 GitHub 仓库现状的测试体系设计与改造建议；尚未修改工作流、提交代码或执行新的测试，因此不能视为改造已经上线。
