@@ -91,9 +91,34 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.27.1"
-          cache-dependency-path: official-device-network-worker/go.mod
+          cache-dependency-path: official-device-network-worker/go.sum
+      - name: Resolve locked module graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod tidy
+          grep -F 'tailscale.com v1.104.1' go.mod
+          go list -m all > module-list.txt
+          grep -F 'tailscale.com v1.104.1' module-list.txt
+      - name: Record Go dependency lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: fdn-controller-tsnet-go-lock-${{ github.sha }}
+          path: |
+            official-device-network-worker/go.mod
+            official-device-network-worker/go.sum
+            official-device-network-worker/module-list.txt
+          if-no-files-found: error
+          retention-days: 90
+      - name: Format
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -d .
+          test -z "$(gofmt -l .)"
       - run: go test ./...
       - run: go vet ./...
+      - run: go build ./...
       - name: Verify exact Tailscale pin
         shell: bash
         run: |
