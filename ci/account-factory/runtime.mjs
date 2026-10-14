@@ -108,6 +108,12 @@ try {
   assert.equal((await fixtureRequest('/v1/leases', 'POST', { scenarioId: 'actual-worker' }, 'invalid')).status, 401);
   assertions.oidcInvalidRejected = 'PASS';
   const created = await fixtureRequest('/v1/leases', 'POST', { scenarioId: 'actual-worker' });
+  if (created.status === 401) {
+    // Diagnostic allowlist only; decoded claims never authorize the request.
+    const h = JSON.parse(Buffer.from(oidc.split('.')[0], 'base64url'));
+    const p = JSON.parse(Buffer.from(oidc.split('.')[1], 'base64url'));
+    console.error(JSON.stringify({ oidcDiagnostic: { alg: h.alg, hasJku: !!h.jku, hasX5u: !!h.x5u, hasCrit: !!h.crit, iss: p.iss, aud: p.aud, repository: p.repository, repository_id: p.repository_id, repository_owner_id: p.repository_owner_id, workflow_ref: p.workflow_ref, ref: p.ref, sub: p.sub, event_name: p.event_name, run_id: p.run_id, run_attempt: p.run_attempt, sha: p.sha, lifetimeSeconds: p.exp - p.iat, issuedAgoSeconds: Math.floor(Date.now() / 1000) - p.iat } }));
+  }
   const payload = await created.json(); assert.equal(created.status, 201, `fixture allocation failed: ${payload.error || 'unknown'}`); lease = payload;
   assertions.realRegistrationAndLogin = 'PASS';
   const api = (path, session, body) => fetch(`${config.authOrigin}${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${session.accessToken}`, 'content-type': 'application/json' }, body: body && JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(15000) });
