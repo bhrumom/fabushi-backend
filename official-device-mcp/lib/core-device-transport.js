@@ -61,7 +61,6 @@ export function createCoreDeviceTransport(options = {}) {
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
 
   async function resolveNetworkRoute(context) {
-    if (context.networkRoute) return context.networkRoute;
     const route = await accountClient.getRemoteComputerNetworkRoute(
       context.coreServiceAccessToken,
       {
@@ -76,23 +75,24 @@ export function createCoreDeviceTransport(options = {}) {
       || String(route.delegationId || "") !== context.delegationId
       || !Number.isSafeInteger(Number(route.generation))
       || Number(route.generation) <= 0
+      || !Number.isSafeInteger(Number(route.expiresAt))
+      || Number(route.expiresAt) <= now()
       || !String(route.cellId || "").trim()
       || !String(route.nodeId || "").trim()) {
       throw new Error("Canonical Core network route failed identity correlation.");
     }
-    context.networkRoute = route;
     return route;
   }
 
-  async function privateRequest(context, payload, timeoutSeconds) {
-    const route = await resolveNetworkRoute(context);
+  async function privateRequest(context, payload, timeoutSeconds, route = null) {
+    const currentRoute = route ?? await resolveNetworkRoute(context);
     const response = await privateTransport.request({
       accountId: context.accountId,
       deviceId: context.deviceId,
-      cellId: route.cellId,
-      nodeId: route.nodeId,
-      networkGeneration: Number(route.generation),
-      networkExpiresAt: Number(route.expiresAt),
+      cellId: currentRoute.cellId,
+      nodeId: currentRoute.nodeId,
+      networkGeneration: Number(currentRoute.generation),
+      networkExpiresAt: Number(currentRoute.expiresAt),
       payload,
       timeoutSeconds,
     });
@@ -124,7 +124,7 @@ export function createCoreDeviceTransport(options = {}) {
       delegationId: context.delegationId,
       requestId: grantRequestId,
       label: "Fabushi Official MCP",
-    }, Math.min(context.timeoutSeconds, 30));
+    }, Math.min(context.timeoutSeconds, 30), route);
     if (granted.type !== "controllerGranted"
       || String(granted.deviceId) !== context.deviceId
       || String(granted.connectionId) !== context.connectionId
@@ -173,7 +173,7 @@ export function createCoreDeviceTransport(options = {}) {
       clientId: grant.clientId,
       toolName: context.toolName,
       expiresAt: requestedExpiresAt,
-    }, Math.min(context.timeoutSeconds, 30));
+    }, Math.min(context.timeoutSeconds, 30), route);
     if (authorized.type !== "toolAuthorized"
       || String(authorized.deviceId) !== context.deviceId
       || String(authorized.sessionId) !== String(session.sessionId)
@@ -250,7 +250,7 @@ export function createCoreDeviceTransport(options = {}) {
       requestId,
       label: "Fabushi Official MCP",
       toolName: context.toolName,
-    }, 30);
+    }, 30, route);
     if (response.type !== "toolDescription"
       || String(response.deviceId) !== context.deviceId
       || String(response.connectionId) !== context.connectionId
@@ -341,11 +341,13 @@ export function createCoreDeviceTransport(options = {}) {
       }
 
       let targetReply;
+      let operationRoute;
       try {
+        operationRoute = await resolveNetworkRoute(context);
         targetReply = await privateRequest(context, {
           type: "operation",
           deviceId: context.deviceId,
-          networkGeneration: Number((await resolveNetworkRoute(context)).generation),
+          networkGeneration: Number(operationRoute.generation),
           sessionId: session.sessionId,
           clientId: grant.clientId,
           requestId: context.requestId,
@@ -354,7 +356,7 @@ export function createCoreDeviceTransport(options = {}) {
           grantGeneration,
           arguments: context.args ?? {},
           diskPreflight: context.diskPreflight ?? {},
-        }, timeoutSeconds);
+        }, timeoutSeconds, operationRoute);
       } catch (error) {
         return markOutcomeUnknown(
           context,
@@ -372,7 +374,7 @@ export function createCoreDeviceTransport(options = {}) {
         || String(targetReply.sessionId) !== String(session.sessionId)
         || String(targetReply.requestId) !== context.requestId
         || String(targetReply.requestSha256) !== context.requestSha256
-        || Number(targetReply.networkGeneration) !== Number((await resolveNetworkRoute(context)).generation)
+        || Number(targetReply.networkGeneration) !== Number(operationRoute.generation)
         || !["completed", "failed"].includes(String(targetReply.status))) {
         return markOutcomeUnknown(context, session, grant, "Target result failed identity correlation after dispatch.");
       }
