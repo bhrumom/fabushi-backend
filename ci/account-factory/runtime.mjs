@@ -49,7 +49,11 @@ const proxy = httpsServer({ key: readFileSync(join(dir, 'tls-key.pem')), cert: r
   try {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const response = await fetch(`http://127.0.0.1:8787${req.url}`, { method: req.method, headers: req.headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : Buffer.concat(chunks), redirect: 'manual', signal: AbortSignal.timeout(15000) });
-    res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(Buffer.from(await response.arrayBuffer()));
+    const responseHeaders = Object.fromEntries(response.headers);
+    // fetch() already decompresses the upstream body. Do not instruct the
+    // downstream client to decompress again or trust the compressed length.
+    for (const name of ['content-encoding', 'content-length', 'transfer-encoding']) delete responseHeaders[name];
+    res.writeHead(response.status, responseHeaders); res.end(Buffer.from(await response.arrayBuffer()));
   } catch { res.writeHead(502).end('proxy_failed'); }
 });
 proxy.fixturePort = 9443; servers.push(proxy);
