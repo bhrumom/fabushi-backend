@@ -176,4 +176,3 @@ func TestStatusSurfaceIsLoopbackMetadataOnlyAndDoesNotDial(t *testing.T) {
 		}
 	}
 }
-
