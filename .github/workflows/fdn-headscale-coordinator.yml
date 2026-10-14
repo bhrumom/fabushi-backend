@@ -136,6 +136,8 @@ jobs:
           grep -F 'NoNewPrivileges=true' systemd/fabushi-fdn-enrollment.service
           grep -F 'ProtectSystem=strict' systemd/fabushi-fdn-enrollment.service
           grep -F 'PrivateDevices=true' systemd/fabushi-fdn-enrollment.service
+          grep -F 'StateDirectory=fabushi-fdn' systemd/fabushi-fdn-enrollment.service
+          grep -F 'StateDirectoryMode=0700' systemd/fabushi-fdn-enrollment.service
           grep -F 'ReadWritePaths=/var/lib/fabushi-fdn' systemd/fabushi-fdn-enrollment.service
           grep -F 'umask 077' run-enrollment-service.sh
           grep -F 'unix:///run/user/*/docker.sock' run-enrollment-service.sh
