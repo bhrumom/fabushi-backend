@@ -146,7 +146,7 @@ function rejectPendingForSocket(socket, reason) {
     if (pending.socket !== socket) continue;
     pendingCalls.delete(requestId);
     clearTimeout(pending.timer);
-    pending.reject(new Error(reason));
+    pending.reject(new DeviceCallOutcomeUnknownError(`${reason} Execution outcome is unknown.`, requestId));
   }
 }
 
@@ -659,7 +659,7 @@ export function registerDeviceTools(server, options = {}) {
         args = JSON.parse(argumentsJson || "{}");
         if (!args || Array.isArray(args) || typeof args !== "object") throw new Error("not an object");
       } catch (error) {
-        const result = { deviceId, toolName, status: "failed", resultJson: JSON.stringify({ error: `Invalid argumentsJson: ${error.message}` }) };
+        const result = { deviceId, toolName, requestId: "", status: "failed", resultJson: JSON.stringify({ error: `Invalid argumentsJson: ${error.message}` }) };
         return { isError: true, structuredContent: result, content: [{ type: "text", text: result.resultJson }] };
       }
 
@@ -683,17 +683,24 @@ export function registerDeviceTools(server, options = {}) {
         try {
           const response = await callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds, normalizedPreflight, { requestId });
           if (operationJournal) {
-            await operationJournal.complete({
-              accountId,
-              deviceId,
-              toolName,
-              requestId,
-              requestSha256,
-              journalContext,
-              ok: response.ok !== false,
-              result: response.result ?? null,
-              error: response.error ?? null,
-            });
+            try {
+              await operationJournal.complete({
+                accountId,
+                deviceId,
+                toolName,
+                requestId,
+                requestSha256,
+                journalContext,
+                ok: response.ok !== false,
+                result: response.result ?? null,
+                error: response.error ?? null,
+              });
+            } catch {
+              throw new DeviceCallOutcomeUnknownError(
+                "Device returned a terminal result but canonical Core journal persistence failed; execution outcome must be reconciled.",
+                requestId,
+              );
+            }
           }
           const result = {
             deviceId,
@@ -707,15 +714,19 @@ export function registerDeviceTools(server, options = {}) {
         } catch (error) {
           if (error?.outcomeUnknown) {
             if (operationJournal) {
-              await operationJournal.outcomeUnknown({
-                accountId,
-                deviceId,
-                toolName,
-                requestId,
-                requestSha256,
-                journalContext,
-                reason: error instanceof Error ? error.message : String(error),
-              });
+              try {
+                await operationJournal.outcomeUnknown({
+                  accountId,
+                  deviceId,
+                  toolName,
+                  requestId,
+                  requestSha256,
+                  journalContext,
+                  reason: error instanceof Error ? error.message : String(error),
+                });
+              } catch {
+                // Preserve outcome_unknown for the caller even if the journal is temporarily unavailable.
+              }
             }
             const result = {
               deviceId,
