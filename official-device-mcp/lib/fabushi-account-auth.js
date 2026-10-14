@@ -41,6 +41,51 @@ function accountFromUserInfo(user) {
   return { userId, label, user };
 }
 
+function normalizeBearerToken(token, code = "invalid_service_token") {
+  const normalized = String(token || "").trim();
+  if (normalized.length < 24 || normalized.length > MAX_TOKEN_CHARS || /[\r\n]/u.test(normalized)) {
+    throw new FabushiAccountAuthError(code, "Fabushi delegated credential is invalid.", 401);
+  }
+  return normalized;
+}
+
+function normalizeServiceBinding({ connectionId, externalClientId, resource, scopes } = {}) {
+  const normalizedConnectionId = String(connectionId || "").trim();
+  const normalizedExternalClientId = String(externalClientId || "").trim();
+  if (!/^[A-Za-z0-9_.:-]{8,160}$/u.test(normalizedConnectionId)) {
+    throw new FabushiAccountAuthError("invalid_connection_id", "Official MCP connection id is invalid.");
+  }
+  if (!normalizedExternalClientId || normalizedExternalClientId.length > 256 || /[\r\n]/u.test(normalizedExternalClientId)) {
+    throw new FabushiAccountAuthError("invalid_external_client", "External MCP client id is invalid.");
+  }
+  const parsedResource = new URL(String(resource || ""));
+  if (parsedResource.protocol !== "https:" || parsedResource.hostname !== "api.ombhrum.com" || parsedResource.username || parsedResource.password || parsedResource.hash) {
+    throw new FabushiAccountAuthError("invalid_resource", "Official MCP resource must use api.ombhrum.com HTTPS.");
+  }
+  const normalizedScopes = [...new Set(Array.isArray(scopes) ? scopes.map(String) : [])].sort();
+  if (!normalizedScopes.includes("devices.read") || normalizedScopes.some((scope) => !["devices.read", "devices.control"].includes(scope))) {
+    throw new FabushiAccountAuthError("invalid_scope", "Official MCP delegation requires devices.read and may include devices.control.");
+  }
+  return {
+    connectionId: normalizedConnectionId,
+    externalClientId: normalizedExternalClientId,
+    resource: parsedResource.toString(),
+    scopes: normalizedScopes,
+  };
+}
+
+function normalizeServiceDelegation(payload) {
+  const accessToken = normalizeBearerToken(payload?.accessToken);
+  const refreshToken = normalizeBearerToken(payload?.refreshToken, "invalid_service_refresh_token");
+  const delegationId = String(payload?.delegationId || "").trim();
+  const accessTokenExpiresAt = Number(payload?.accessTokenExpiresAt || 0);
+  const refreshTokenExpiresAt = Number(payload?.refreshTokenExpiresAt || 0);
+  if (!delegationId || delegationId.length > 200 || !Number.isFinite(accessTokenExpiresAt) || !Number.isFinite(refreshTokenExpiresAt) || accessTokenExpiresAt <= 0 || refreshTokenExpiresAt <= 0) {
+    throw new FabushiAccountAuthError("invalid_service_delegation", "Fabushi service delegation response is incomplete.");
+  }
+  return { accessToken, refreshToken, delegationId, accessTokenExpiresAt, refreshTokenExpiresAt };
+}
+
 async function responseJson(response) {
   const text = await response.text();
   if (!text) return {};
@@ -109,6 +154,55 @@ export function createFabushiAccountClient(options = {}) {
       const account = accountFromUserInfo(user);
       if (cacheTtlMs > 0) cache.set(key, { account, expiresAt: now() + cacheTtlMs });
       return account;
+    },
+
+    async createOfficialMcpServiceDelegation({ accountAccessToken, connectionId, externalClientId, resource, scopes } = {}) {
+      const accountToken = normalizeBearerToken(accountAccessToken, "invalid_account_token");
+      const binding = normalizeServiceBinding({ connectionId, externalClientId, resource, scopes });
+      const payload = await request("/v1/auth/service-token", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accountToken}` },
+        body: JSON.stringify({
+          serviceId: "official-device-mcp",
+          connectionId: binding.connectionId,
+          externalClientId: binding.externalClientId,
+          resource: binding.resource,
+          scopes: binding.scopes,
+        }),
+      });
+      return { ...normalizeServiceDelegation(payload), ...binding };
+    },
+
+    async refreshOfficialMcpServiceDelegation({ delegationId, refreshToken, connectionId, externalClientId, resource } = {}) {
+      const normalizedDelegationId = String(delegationId || "").trim();
+      if (!normalizedDelegationId || normalizedDelegationId.length > 200) {
+        throw new FabushiAccountAuthError("invalid_service_delegation", "Service delegation id is invalid.");
+      }
+      const normalizedRefreshToken = normalizeBearerToken(refreshToken, "invalid_service_refresh_token");
+      const binding = normalizeServiceBinding({ connectionId, externalClientId, resource, scopes: ["devices.read"] });
+      const payload = await request("/v1/auth/service-token/refresh", {
+        method: "POST",
+        body: JSON.stringify({
+          delegationId: normalizedDelegationId,
+          refreshToken: normalizedRefreshToken,
+          connectionId: binding.connectionId,
+          externalClientId: binding.externalClientId,
+          resource: binding.resource,
+        }),
+      });
+      return { ...normalizeServiceDelegation(payload), connectionId: binding.connectionId, externalClientId: binding.externalClientId, resource: binding.resource };
+    },
+
+    async listRemoteComputers(serviceAccessToken) {
+      const token = normalizeBearerToken(serviceAccessToken);
+      const payload = await request("/v1/computers", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!Array.isArray(payload?.computers) || payload.computers.length > 64) {
+        throw new FabushiAccountAuthError("invalid_computer_inventory", "Fabushi Remote Computer inventory is invalid.");
+      }
+      return payload.computers;
     },
 
     async startBrowserLogin({ deviceId, platform = "web" } = {}) {
