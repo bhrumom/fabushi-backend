@@ -112,6 +112,11 @@ function jwt(overrides = {}, headerOverrides = {}) {
   return `${h}.${p}.${sign('RSA-SHA256', Buffer.from(`${h}.${p}`), privateKey).toString('base64url')}`;
 }
 test('OIDC verifies real RSA signature and immutable workflow/run identity', async () => assert.deepEqual(await verifyActionsIdentity(jwt(), policy, oidcOptions), identity));
+test('OIDC accepts exact GitHub immutable-ID subject and rejects a different repository ID in that subject', async () => {
+  const subject = 'repo:bhrumom@98765/fabushi-backend@123456:environment:ci-isolated';
+  assert.deepEqual(await verifyActionsIdentity(jwt({ sub: subject }), policy, oidcOptions), identity);
+  await assert.rejects(verifyActionsIdentity(jwt({ sub: subject.replace('@123456:', '@999999:') }), policy, oidcOptions), /oidc_denied/);
+});
 for (const overrides of [{ repository_id: 'other' }, { repository_owner_id: 'other' }, { repository: 'fork/repo' }, { aud: 'production' }, { iss: 'https://attacker.invalid' }, { workflow_ref: 'untrusted' }, { ref: 'refs/pull/1/merge' }, { event_name: 'pull_request_target' }, { event_name: 'pull_request' }, { exp: 1100 }, { nbf: 1200 }, { iat: 1200 }, { iat: 1 }, { run_attempt: '0' }, { sha: 'bad' }, { sub: 'repo:other:environment:ci-isolated' }]) {
   test(`OIDC denies claim mismatch ${JSON.stringify(overrides)}`, async () => assert.rejects(verifyActionsIdentity(jwt(overrides), policy, oidcOptions), /oidc_denied/));
 }

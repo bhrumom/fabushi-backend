@@ -24,10 +24,17 @@ export async function verifyActionsIdentity(token, policy, { fetchImpl = fetch, 
   } catch { deny(); }
   const seconds = Math.floor(now / 1000);
   if (!policy?.audience || !policy.repository || !policy.repositoryId || !policy.ownerId || !Array.isArray(policy.workflowRefs) || !policy.workflowRefs.length || !Array.isArray(policy.refs) || !policy.refs.length) deny();
+  const [owner, repositoryName] = policy.repository.split('/');
+  // GitHub's immutable-ID subject format is now emitted by the real runner.
+  // Both formats still require the separately verified immutable ID claims.
+  const subjects = [
+    `repo:${policy.repository}:environment:ci-isolated`,
+    `repo:${owner}@${policy.ownerId}/${repositoryName}@${policy.repositoryId}:environment:ci-isolated`,
+  ];
   if (claims.iss !== issuer || claims.aud !== policy.audience || claims.repository !== policy.repository ||
       claims.repository_id !== policy.repositoryId || claims.repository_owner_id !== policy.ownerId ||
       !policy.workflowRefs.includes(claims.workflow_ref) || !policy.refs.includes(claims.ref) ||
-      claims.sub !== `repo:${policy.repository}:environment:ci-isolated` ||
+      !subjects.includes(claims.sub) ||
       !['push', 'workflow_dispatch', 'schedule'].includes(claims.event_name) ||
       !/^[a-f0-9]{40}$/.test(claims.sha || '') ||
       !/^[1-9][0-9]{0,19}$/.test(claims.run_id || '') || !/^[1-9][0-9]{0,5}$/.test(claims.run_attempt || '') ||
