@@ -14,3 +14,21 @@ This directory is the deployment boundary for one isolated Fabushi FDN network c
 - This deployment template alone is **not** G02/G03/G05 acceptance. Production
   deployment, Core-driven grant projection, two-account negative tests, real
   WireGuard direct calls and real DERP-relayed calls still require exact-SHA evidence.
+
+## Core-driven policy projection
+
+`project-core-policy.mjs` consumes the Platform Core network-authority-only live
+cell snapshot and atomically replaces the Headscale policy. It rejects mixed
+Fabushi accounts, expired/malformed/duplicate/non-tailnet nodes, unexpected
+fields and oversized snapshots. Empty snapshots remain deny-all. A valid
+single-account cell permits only `tcp:8792` to current Core-projected target
+nodes; application-layer execution is still authorized by Core/Host.
+
+Production must provide `FABUSHI_CORE_API_BASE_URL`,
+`FDN_NETWORK_AUTHORITY_TOKEN`, `FABUSHI_FDN_CELL_ID`, and a writable
+`FABUSHI_FDN_POLICY_PATH`. The authority token must be injected as a secret and
+must never be placed in command arguments, policy files or logs.
+
+This projection code and CI are prerequisites only. G02/G03/G05 still require
+approved production deployment, generation/revoke propagation, two-account
+negative evidence and real WireGuard/DERP tool calls.
