@@ -16,6 +16,7 @@ import {
 } from "./device-gateway.js";
 import { createFabushiAccountClient } from "./fabushi-account-auth.js";
 import { createCoreDeviceTransport } from "./core-device-transport.js";
+import { createLocalNetworkWorkerPrivateTransport } from "./local-network-worker-transport.js";
 import { createServiceCredentialVault } from "./service-credential-vault.js";
 import { DEVICE_DISK_SAFETY_INSTRUCTIONS } from "./device-disk-safety.js";
 
@@ -327,7 +328,18 @@ export function createFabushiRemoteMcpServer(options = {}) {
   const now = options.now ?? Date.now;
   const allowAuthenticatedReverseWebSocketFallback = options.allowAuthenticatedReverseWebSocketFallback
     ?? process.env.FABUSHI_FDN_AUTHENTICATED_REVERSE_WS_FALLBACK === "1";
+  const networkWorkerEndpoint = String(
+    options.networkWorkerEndpoint ?? process.env.FABUSHI_FDN_NETWORK_WORKER_ENDPOINT ?? "",
+  ).trim();
+  const preferredNetworkWorkerTransport = networkWorkerEndpoint
+    ? createLocalNetworkWorkerPrivateTransport({
+        endpoint: networkWorkerEndpoint,
+        remotePort: options.remoteTargetPort,
+        fetchImpl: options.networkWorkerFetch,
+      })
+    : null;
   const coreDevicePrivateTransport = options.coreDevicePrivateTransport
+    ?? preferredNetworkWorkerTransport
     ?? (allowAuthenticatedReverseWebSocketFallback
       ? createAuthenticatedReverseWebSocketPrivateTransport()
       : null);
