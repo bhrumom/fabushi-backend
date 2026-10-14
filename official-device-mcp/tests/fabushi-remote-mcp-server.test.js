@@ -172,9 +172,25 @@ test("Fabushi remote MCP binds ChatGPT OAuth and Runner devices to one account",
       }));
     }
   });
-  const called = await client.callTool({
+  const missingPreflight = await client.callTool({
     name: "device_call",
     arguments: { deviceId: "gha-runner-123", toolName: "computer_state", argumentsJson: "{}" },
+  });
+  assert.equal(missingPreflight.isError, true);
+  assert.equal(missingPreflight.structuredContent, undefined);
+
+  const called = await client.callTool({
+    name: "device_call",
+    arguments: {
+      deviceId: "gha-runner-123",
+      toolName: "computer_state",
+      argumentsJson: "{}",
+      diskPreflight: {
+        impact: "none",
+        reason: "computer_state reads current application state and does not materially grow device storage.",
+        targets: [],
+      },
+    },
   });
   assert.equal(called.structuredContent.status, "completed");
   assert.deepEqual(JSON.parse(called.structuredContent.resultJson), { activeApp: "Fabushi" });
