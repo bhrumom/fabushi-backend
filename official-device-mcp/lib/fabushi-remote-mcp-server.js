@@ -737,7 +737,7 @@ export function createFabushiRemoteMcpServer(options = {}) {
       const lastSeenSeconds = Number(computer?.lastSeenAt || 0);
       const networkExpiresSeconds = Number(computer?.networkExpiresAt || 0);
       const coreOnline = computer?.online === true;
-      const fallbackTools = coreOnline && fallback ? fallback.capabilities : [];
+      const fallbackTools = !requireCoreDeviceAuthority && coreOnline && fallback ? fallback.capabilities : [];
       return {
         id: String(computer.deviceId),
         name: String(computer.label || computer.deviceId),
