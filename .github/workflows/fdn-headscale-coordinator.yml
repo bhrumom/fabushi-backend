@@ -1,0 +1,74 @@
+name: FDN Headscale coordinator
+
+on:
+  pull_request:
+    paths:
+      - "fdn-network-coordinator/**"
+      - ".github/workflows/fdn-headscale-coordinator.yml"
+  push:
+    branches: [main]
+    paths:
+      - "fdn-network-coordinator/**"
+      - ".github/workflows/fdn-headscale-coordinator.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  config-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Bind exact tested HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            expected="${{ github.event.pull_request.head.sha }}"
+          else
+            expected="${{ github.sha }}"
+          fi
+          test "$actual" = "$expected"
+      - name: Render CI configuration
+        working-directory: fdn-network-coordinator
+        shell: bash
+        env:
+          FABUSHI_FDN_HEADSCALE_SERVER_URL: https://fdn-ci.example.invalid
+        run: bash ./render-config.sh
+      - name: Enforce fail-closed policy and exact version
+        working-directory: fdn-network-coordinator
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'image: docker.io/headscale/headscale:0.29.5' docker-compose.yml
+          grep -F '"grants": []' policy.hujson
+          grep -F 'verify_clients: true' runtime/config.yaml
+          grep -F 'urls: []' runtime/config.yaml
+          grep -F 'magic_dns: false' runtime/config.yaml
+          if grep -Eq 'headscale:(latest|stable|main)' docker-compose.yml; then
+            exit 1
+          fi
+      - name: Validate compose
+        working-directory: fdn-network-coordinator
+        run: docker compose config --quiet
+      - name: Validate Headscale 0.29.5 config
+        working-directory: fdn-network-coordinator
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm             -v "$PWD/runtime/config.yaml:/etc/headscale/config.yaml:ro"             -v "$PWD/policy.hujson:/etc/headscale/policy.hujson:ro"             docker.io/headscale/headscale:0.29.5             configtest
+      - name: Record coordinator provenance
+        shell: bash
+        run: |
+          {
+            echo "Backend SHA: $(git rev-parse HEAD)"
+            echo "Headscale: 0.29.5"
+            echo "Policy default: deny-all grants"
+            echo "Embedded DERP verify_clients: true"
+          } >> "$GITHUB_STEP_SUMMARY"
