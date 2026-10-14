@@ -43,6 +43,23 @@ function registryKey(accountId, deviceId) {
   return `${accountId}\0${deviceId}`;
 }
 
+function stableCallDigest(toolName, args, diskPreflight) {
+  return createHash("sha256").update(JSON.stringify({
+    toolName: String(toolName),
+    arguments: args,
+    diskPreflight: normalizeDiskPreflight(diskPreflight),
+  })).digest("hex");
+}
+
+export class DeviceCallOutcomeUnknownError extends Error {
+  constructor(message, requestId) {
+    super(message);
+    this.name = "DeviceCallOutcomeUnknownError";
+    this.requestId = requestId;
+    this.outcomeUnknown = true;
+  }
+}
+
 function publicToolDescriptor(tool) {
   const name = String(tool?.name ?? "");
   if (!/^[a-zA-Z0-9._-]{1,128}$/u.test(name) || name === "secure_input_submit") return null;
@@ -492,7 +509,7 @@ export function describeRegisteredDeviceTool(accountId, deviceId, toolName) {
   };
 }
 
-export async function callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds = DEFAULT_CALL_TIMEOUT_SECONDS, diskPreflight = { impact: "none", reason: "Internal low-level caller classified this operation as no material disk growth.", targets: [] }) {
+export async function callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds = DEFAULT_CALL_TIMEOUT_SECONDS, diskPreflight = { impact: "none", reason: "Internal low-level caller classified this operation as no material disk growth.", targets: [] }, options = {}) {
   const key = registryKey(accountId, deviceId);
   const device = devices.get(key);
   if (!device) throw new Error(`Unknown device: ${deviceId}. Call list_devices first.`);
@@ -505,19 +522,20 @@ export async function callRegisteredDevice(accountId, deviceId, toolName, args, 
   if (pendingCalls.size >= MAX_PENDING_CALLS_TOTAL || pendingForDevice >= MAX_PENDING_CALLS_PER_DEVICE) {
     throw new Error(`Device ${deviceId} already has too many pending calls.`);
   }
-  const requestId = randomBytes(16).toString("hex");
+  const requestId = String(options.requestId || randomBytes(16).toString("hex"));
+  if (!/^[A-Za-z0-9._:-]{8,160}$/u.test(requestId)) throw new Error("Invalid stable device requestId.");
   const timeoutMs = Math.min(Math.max(Number(timeoutSeconds) || DEFAULT_CALL_TIMEOUT_SECONDS, 1), MAX_CALL_TIMEOUT_SECONDS) * 1000;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingCalls.delete(requestId);
-      reject(new Error(`Device call timed out after ${timeoutMs / 1000} seconds.`));
+      reject(new DeviceCallOutcomeUnknownError(`Device call timed out after ${timeoutMs / 1000} seconds; execution outcome is unknown.`, requestId));
     }, timeoutMs);
     pendingCalls.set(requestId, { registryKey: key, socket: device.socket, resolve, reject, timer });
     device.socket.send(JSON.stringify({ type: "call", requestId, toolName, arguments: args, diskPreflight: normalizeDiskPreflight(diskPreflight) }), (error) => {
       if (!error) return;
       pendingCalls.delete(requestId);
       clearTimeout(timer);
-      reject(error);
+      reject(new DeviceCallOutcomeUnknownError("Device call transport failed after dispatch; execution outcome is unknown.", requestId));
     });
   });
 }
@@ -563,7 +581,8 @@ const describeDeviceToolShape = {
 export const deviceToolOutputShape = {
   deviceId: z.string(),
   toolName: z.string(),
-  status: z.enum(["completed", "failed"]),
+  requestId: z.string(),
+  status: z.enum(["completed", "failed", "outcome_unknown"]),
   resultJson: z.string(),
 };
 
@@ -575,6 +594,8 @@ export function registerDeviceTools(server, options = {}) {
   const readSecuritySchemes = options.readSecuritySchemes ?? [{ type: "noauth" }];
   const writeSecuritySchemes = options.writeSecuritySchemes ?? [{ type: "oauth2", scopes: ["vps.write"] }];
   const accountId = options.accountId ?? (() => "");
+  const operationJournal = options.operationJournal ?? null;
+  const requireOperationJournal = options.requireOperationJournal === true;
   const requiredAccountId = () => String(typeof accountId === "function" ? accountId() : accountId || "").trim();
 
   server.registerTool(
@@ -645,17 +666,70 @@ export function registerDeviceTools(server, options = {}) {
       try {
         const accountId = requiredAccountId();
         if (!accountId) return writeAuthError();
-        const response = await callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds, normalizeDiskPreflight(diskPreflight));
-        const result = {
-          deviceId,
-          toolName,
-          status: response.ok === false ? "failed" : "completed",
-          resultJson: JSON.stringify(response.result?.structuredContent ?? response.result ?? { error: response.error }),
-        };
-        const content = Array.isArray(response.result?.content) ? response.result.content : [{ type: "text", text: result.resultJson }];
-        return { isError: response.ok === false, structuredContent: result, content };
+        if (requireOperationJournal && !operationJournal) throw new Error("Canonical Core operation journal is required but unavailable.");
+        const normalizedPreflight = normalizeDiskPreflight(diskPreflight);
+        const requestId = randomBytes(16).toString("hex");
+        const requestSha256 = stableCallDigest(toolName, args, normalizedPreflight);
+        let journalContext = null;
+        if (operationJournal) {
+          journalContext = await operationJournal.create({
+            accountId,
+            deviceId,
+            toolName,
+            requestId,
+            requestSha256,
+          });
+        }
+        try {
+          const response = await callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds, normalizedPreflight, { requestId });
+          if (operationJournal) {
+            await operationJournal.complete({
+              accountId,
+              deviceId,
+              toolName,
+              requestId,
+              requestSha256,
+              journalContext,
+              ok: response.ok !== false,
+              result: response.result ?? null,
+              error: response.error ?? null,
+            });
+          }
+          const result = {
+            deviceId,
+            toolName,
+            requestId,
+            status: response.ok === false ? "failed" : "completed",
+            resultJson: JSON.stringify(response.result?.structuredContent ?? response.result ?? { error: response.error }),
+          };
+          const content = Array.isArray(response.result?.content) ? response.result.content : [{ type: "text", text: result.resultJson }];
+          return { isError: response.ok === false, structuredContent: result, content };
+        } catch (error) {
+          if (error?.outcomeUnknown) {
+            if (operationJournal) {
+              await operationJournal.outcomeUnknown({
+                accountId,
+                deviceId,
+                toolName,
+                requestId,
+                requestSha256,
+                journalContext,
+                reason: error instanceof Error ? error.message : String(error),
+              });
+            }
+            const result = {
+              deviceId,
+              toolName,
+              requestId,
+              status: "outcome_unknown",
+              resultJson: JSON.stringify({ error: error instanceof Error ? error.message : String(error), outcomeUnknown: true }),
+            };
+            return { isError: true, structuredContent: result, content: [{ type: "text", text: result.resultJson }] };
+          }
+          throw error;
+        }
       } catch (error) {
-        const result = { deviceId, toolName, status: "failed", resultJson: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) };
+        const result = { deviceId, toolName, requestId: error?.requestId || "", status: "failed", resultJson: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) };
         return { isError: true, structuredContent: result, content: [{ type: "text", text: result.resultJson }] };
       }
     }
@@ -738,10 +812,10 @@ export function buildDeviceToolDescriptors(options = {}) {
       outputSchema: {
         type: "object",
         properties: {
-          deviceId: { type: "string" }, toolName: { type: "string" },
-          status: { type: "string", enum: ["completed", "failed"] }, resultJson: { type: "string" },
+          deviceId: { type: "string" }, toolName: { type: "string" }, requestId: { type: "string" },
+          status: { type: "string", enum: ["completed", "failed", "outcome_unknown"] }, resultJson: { type: "string" },
         },
-        required: ["deviceId", "toolName", "status", "resultJson"],
+        required: ["deviceId", "toolName", "requestId", "status", "resultJson"],
         additionalProperties: false,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
