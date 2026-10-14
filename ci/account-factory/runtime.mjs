@@ -55,6 +55,11 @@ const proxy = httpsServer({ key: readFileSync(join(dir, 'tls-key.pem')), cert: r
 proxy.fixturePort = 9443; servers.push(proxy);
 let worker, journal, factory, handler, oidc, lease;
 let startupOutput = '';
+function printRuntimeErrors() {
+  let redacted = startupOutput;
+  for (const value of Object.values(workerVars)) redacted = redacted.replaceAll(value, '[redacted]').replaceAll(JSON.stringify(value), '[redacted]');
+  console.error(redacted.split('\n').filter(line => /error|invalid|failed|cannot|could|ENOENT/i.test(line) && !/PRIVATE_KEY|BRIDGE_SECRET|PUBLIC_KEY/.test(line)).slice(-30).join('\n'));
+}
 const assertions = {};
 const evidence = { kind: 'canonical-worker-runtime-integration', backendSha: process.env.GITHUB_SHA, coreSha: process.env.CORE_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, d1Mode: 'emulated-local', hostedFixtureService: 'NOT_VERIFIED', packagedCrossDeviceE2E: 'NOT_VERIFIED', assertions, overall: 'FAIL' };
 try {
@@ -71,8 +76,7 @@ try {
     await new Promise(r => setTimeout(r, 1000));
   }
   if (!ready) {
-    for (const value of Object.values(workerVars)) { startupOutput = startupOutput.replaceAll(value, '[redacted]').replaceAll(JSON.stringify(value), '[redacted]'); }
-    console.error(startupOutput.split('\n').filter(line => /error|invalid|failed|cannot|could|ENOENT|binding/i.test(line) && !/PRIVATE_KEY|BRIDGE_SECRET|PUBLIC_KEY/.test(line)).slice(-30).join('\n'));
+    printRuntimeErrors();
   }
   assert.ok(ready, 'canonical Worker did not start');
   const config = { environment: 'ci-isolated', authOrigin: 'https://127.0.0.1:9443', allowedAuthOrigin: 'https://127.0.0.1:9443', accountDbId: workerConfig.d1_databases[0].database_id, platformDbId: workerConfig.d1_databases[1].database_id, mailboxResourceId: 'runner-only-mailbox', productionResourceIds: ['production-resources-denied'] };
@@ -95,7 +99,11 @@ try {
       return { remaining: tables.reduce((sum, table) => sum + sql(`SELECT count(*) AS n FROM ${table}`)[0].n, emails.size) };
     },
   };
-  const auth = new CanonicalAuthAdapter({ config, mailbox: { async receive({ email }) { const code = emails.get(email); if (!code) throw Error('mail_not_delivered'); emails.delete(email); return code; } } });
+  const auth = new CanonicalAuthAdapter({ config, mailbox: { async receive({ email }) { const code = emails.get(email); if (!code) throw Error('mail_not_delivered'); emails.delete(email); return code; } }, fetchImpl: async (url, options) => {
+    const path = new URL(url).pathname;
+    try { const r = await fetch(url, options); console.log(`Canonical auth route ${path}: HTTP ${r.status}`); return r; }
+    catch { console.error(`Canonical auth route ${path}: transport_failed`); throw Error('transport_failed'); }
+  } });
   journal = new LeaseJournal(join(dir, 'leases.sqlite'));
   let factoryTime = Date.now();
   factory = new AccountFactory({ config, journal, auth, janitor, now: () => factoryTime });
@@ -114,7 +122,7 @@ try {
     const p = JSON.parse(Buffer.from(oidc.split('.')[1], 'base64url'));
     console.error(JSON.stringify({ oidcDiagnostic: { alg: h.alg, hasJku: !!h.jku, hasX5u: !!h.x5u, hasCrit: !!h.crit, iss: p.iss, aud: p.aud, repository: p.repository, repository_id: p.repository_id, repository_owner_id: p.repository_owner_id, workflow_ref: p.workflow_ref, ref: p.ref, sub: p.sub, event_name: p.event_name, run_id: p.run_id, run_attempt: p.run_attempt, sha: p.sha, lifetimeSeconds: p.exp - p.iat, issuedAgoSeconds: Math.floor(Date.now() / 1000) - p.iat } }));
   }
-  const payload = await created.json(); assert.equal(created.status, 201, `fixture allocation failed: ${payload.error || 'unknown'}`); lease = payload;
+  const payload = await created.json(); if (!created.ok) printRuntimeErrors(); assert.equal(created.status, 201, `fixture allocation failed: ${payload.error || 'unknown'}`); lease = payload;
   assertions.realRegistrationAndLogin = 'PASS';
   const api = (path, session, body) => fetch(`${config.authOrigin}${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${session.accessToken}`, 'content-type': 'application/json' }, body: body && JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(15000) });
   const [a, b, c] = lease.accounts;
