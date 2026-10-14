@@ -19,7 +19,9 @@ const workerVars = JSON.parse(readFileSync(join(dir, 'worker-vars.json')));
 const wrangler = join(process.env.RUNNER_TEMP, 'fixture-tools/node_modules/.bin/wrangler');
 const state = join(dir, 'state');
 function sql(command) {
-  const output = execFileSync(wrangler, ['d1', 'execute', 'ACCOUNT_DB', '--local', '--persist-to', state, '--config', configPath, '--json', '--command', command], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 });
+  const sqlPath = join(dir, 'operation.sql');
+  writeFileSync(sqlPath, command, { mode: 0o600 });
+  const output = execFileSync(wrangler, ['d1', 'execute', 'ACCOUNT_DB', '--local', '--persist-to', state, '--config', configPath, '--json', '--file', sqlPath], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 });
   const results = JSON.parse(output);
   assert.ok(results.every(r => r.success));
   return results.flatMap(r => r.results);
@@ -103,6 +105,7 @@ try {
   const api = (path, session, body) => fetch(`${config.authOrigin}${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${session.accessToken}`, 'content-type': 'application/json' }, body: body && JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(15000) });
   const [a, b, c] = lease.accounts;
   const aUsers = await Promise.all(a.sessions.map(async s => { const r = await api('/api/auth/user-info', s); assert.equal(r.status, 200); return r.json(); }));
+  assert.ok((aUsers[0].user?.id ?? aUsers[0].id) != null && (aUsers[1].user?.id ?? aUsers[1].id) != null);
   assert.equal(String(aUsers[0].user?.id ?? aUsers[0].id), String(aUsers[1].user?.id ?? aUsers[1].id));
   const bResponse = await api('/api/auth/user-info', b.sessions[0]); assert.equal(bResponse.status, 200);
   const bUser = await bResponse.json();
@@ -112,12 +115,13 @@ try {
   const passwords = sql('SELECT password_phc FROM account_password_credentials'); assert.ok(passwords.every(u => u.password_phc.startsWith('$argon2id$')));
   assertions.canonicalArgon2id = 'PASS';
   const header = JSON.parse(Buffer.from(a.sessions[0].accessToken.split('.')[0], 'base64url')); assert.equal(header.alg, 'RS256'); assertions.canonicalRS256 = 'PASS';
-  const wrongPassword = await auth.request('/api/auth/login', { username: b.username, password: a.password, deviceId: a.deviceIds[0] }).then(() => false, () => true); assert.ok(wrongPassword); assertions.crossAccountPasswordDenied = 'PASS';
+  const wrongPassword = await fetch(`${config.authOrigin}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: b.username, password: a.password, deviceId: a.deviceIds[0] }), redirect: 'error' }); assert.equal(wrongPassword.status, 401); assertions.crossAccountPasswordDenied = 'PASS';
   const rotatedResponse = await api('/api/auth/refresh', c.sessions[0], { refreshToken: c.sessions[0].refreshToken }); assert.equal(rotatedResponse.status, 200);
-  const rotated = await rotatedResponse.json(); assert.notEqual(rotated.refreshToken, c.sessions[0].refreshToken); assertions.refreshRotation = 'PASS';
+  const rotated = await rotatedResponse.json(); assert.ok(rotated.refreshToken !== c.sessions[0].refreshToken); assertions.refreshRotation = 'PASS';
   const logout = await api('/api/auth/logout', rotated, {}); assert.equal(logout.status, 200);
   const afterLogout = await api('/api/auth/user-info', rotated); assert.equal(afterLogout.status, 401);
   const revokedRefresh = await api('/api/auth/refresh', rotated, { refreshToken: rotated.refreshToken }); assert.equal(revokedRefresh.status, 401); assertions.sessionRevocation = 'PASS';
+  assert.equal((await api('/api/auth/user-info', a.sessions[1])).status, 200); assertions.otherSessionRetained = 'PASS';
   const cleanup = await fixtureRequest(`/v1/leases/${lease.leaseId}`, 'DELETE'); assert.equal(cleanup.status, 200); assert.equal((await cleanup.json()).remaining, 0); assertions.zeroResidualCleanup = 'PASS';
   const stale = await api('/api/auth/user-info', a.sessions[0]); assert.equal(stale.status, 401); assertions.deletedSessionDenied = 'PASS';
   evidence.wasmSha256 = createHash('sha256').update(readFileSync(resolve('core/deploy/platform-worker/build/worker/index.wasm'))).digest('hex');
