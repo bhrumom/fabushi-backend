@@ -126,6 +126,7 @@ test('factory endpoint requires signed OIDC and does not expose exception secret
   const { factory, journal } = fixture();
   const handler = fixtureHandler({ factory, policy, oidcOptions });
   assert.equal((await handler(new Request('https://fixture.invalid/v1/leases', { method: 'POST' }))).status, 401);
+  assert.equal((await handler(new Request('https://fixture.invalid/v1/leases', { method: 'POST', headers: { authorization: `Bearer ${jwt()}` }, body: 'x'.repeat(513) }))).status, 400);
   const response = await handler(new Request('https://fixture.invalid/v1/leases', { method: 'POST', headers: { authorization: `Bearer ${jwt()}` }, body: JSON.stringify({ scenarioId: 'http' }) }));
   assert.equal(response.status, 201);
   assert.equal(response.headers.get('cache-control'), 'no-store');

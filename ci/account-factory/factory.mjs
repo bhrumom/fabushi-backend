@@ -7,7 +7,8 @@ export function requireIsolation(config) {
   if (config?.environment !== 'ci-isolated' || !Array.isArray(config.productionResourceIds) || !config.productionResourceIds.length) throw new Error('not_configured');
   const url = new URL(config.authOrigin);
   if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
-      url.origin !== config.allowedAuthOrigin || url.hostname === 'ombhrum.com' || url.hostname.endsWith('.ombhrum.com')) throw new Error('unsafe_test_origin');
+      url.origin !== config.allowedAuthOrigin || url.hostname === 'ombhrum.com' || url.hostname.endsWith('.ombhrum.com') ||
+      ['mahayana-platform.bhrumom.workers.dev', 'fabushi-flutter-web-prod.bhrumom.workers.dev'].includes(url.hostname)) throw new Error('unsafe_test_origin');
   const ids = [config.accountDbId, config.platformDbId, config.mailboxResourceId];
   const production = new Set([...knownProduction, ...config.productionResourceIds]);
   if (ids.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(id) || production.has(id)) || new Set(ids).size !== ids.length) throw new Error('unsafe_test_resources');

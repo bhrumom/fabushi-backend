@@ -11,8 +11,18 @@ export function fixtureHandler({ factory, policy, oidcOptions }) {
       const identity = await verifyActionsIdentity(authorization.slice(7), policy, oidcOptions);
       const path = new URL(request.url).pathname;
       if (request.method === 'POST' && path === '/v1/leases') {
-        const raw = await request.text();
-        if (raw.length > 512) return json({ error: 'invalid_request' }, 400);
+        const reader = request.body?.getReader();
+        const chunks = [];
+        let size = 0;
+        if (!reader) return json({ error: 'invalid_request' }, 400);
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 512) { await reader.cancel(); return json({ error: 'invalid_request' }, 400); }
+          chunks.push(value);
+        }
+        const raw = new TextDecoder().decode(Buffer.concat(chunks));
         const body = JSON.parse(raw);
         if (Object.keys(body).length !== 1 || typeof body.scenarioId !== 'string') return json({ error: 'invalid_request' }, 400);
         return json(await factory.create(identity, body.scenarioId), 201);
