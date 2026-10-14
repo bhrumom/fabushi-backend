@@ -200,7 +200,11 @@ jobs:
             return owner && String(owner.id ?? "") === id;
           });
           if (owned.length !== 1) throw new Error("expected exactly one CI enrollment key");
-          if (owned[0].reusable !== false) throw new Error("enrollment key must not be reusable");
+          // Headscale 0.29.5 uses encoding/json over generated proto structs.
+          // Default false proto3 booleans carry json:",omitempty", so absence is
+          // the pinned version's normal representation of false.
+          if (owned[0].reusable === true) throw new Error("enrollment key must not be reusable");
+          if (owned[0].ephemeral === true) throw new Error("enrollment key must not be ephemeral");
           if (owned[0].used === true) throw new Error("fresh enrollment key must be unused");
           if (!owned[0].expiration) throw new Error("enrollment key must expire");
           NODE
