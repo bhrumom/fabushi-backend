@@ -1,0 +1,59 @@
+name: Canonical Account Worker Runtime
+on:
+  push:
+    branches: [codex/isolated-ci-account-factory]
+    paths: ['ci/account-factory/**', '.github/workflows/ci-account-factory-runtime.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: ci-isolated
+    env:
+      CORE_SHA: 0ba62a11bd20c36785fb8bb1c982ae6fcdba2d16
+      REPOSITORY_ID: ${{ github.repository_id }}
+      REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: bhrumom/fabushi-platform-core
+          ref: ${{ env.CORE_SHA }}
+          path: core
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Compile exact canonical wasm account Worker on disposable runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C core rev-parse HEAD)" = "$CORE_SHA"
+          mkdir -p evidence
+          rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
+          rustup default 1.97.1
+          cargo install worker-build --version 0.8.5 --locked
+          cd core/deploy/platform-worker
+          worker-build --release --no-panic-recovery --locked
+      - name: Prepare isolated local D1 and ephemeral keys without Cloudflare credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/fixture-tools" --no-audit --no-fund wrangler@4.110.0
+          node ci/account-factory/prepare-runtime.mjs
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$RUNNER_TEMP/account-worker/tls-key.pem" -out "$RUNNER_TEMP/account-worker/tls-cert.pem" -days 1 -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1' >/dev/null 2>&1
+          chmod 600 "$RUNNER_TEMP/account-worker/tls-key.pem"
+      - name: Exercise real OIDC, registration, login, refresh, revoke and zero-residual cleanup
+        shell: bash
+        run: NODE_EXTRA_CA_CERTS="$RUNNER_TEMP/account-worker/tls-cert.pem" node ci/account-factory/runtime.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: canonical-account-runtime-${{ github.sha }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
