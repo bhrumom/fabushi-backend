@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   attachDeviceGateway,
   callRegisteredDevice,
+  createAuthenticatedReverseWebSocketPrivateTransport,
   describeRegisteredDeviceTool,
   listRegisteredDevices,
   registerDeviceTools,
@@ -324,11 +325,17 @@ export function createFabushiRemoteMcpServer(options = {}) {
   const serviceCredentialVault = options.serviceCredentialVault
     ?? (requireCoreServiceState ? createServiceCredentialVault({ key: options.serviceVaultKey }) : null);
   const now = options.now ?? Date.now;
+  const allowAuthenticatedReverseWebSocketFallback = options.allowAuthenticatedReverseWebSocketFallback
+    ?? process.env.FABUSHI_FDN_AUTHENTICATED_REVERSE_WS_FALLBACK === "1";
+  const coreDevicePrivateTransport = options.coreDevicePrivateTransport
+    ?? (allowAuthenticatedReverseWebSocketFallback
+      ? createAuthenticatedReverseWebSocketPrivateTransport()
+      : null);
   const configuredCoreDeviceTransport = options.coreDeviceTransport
-    ?? (options.coreDevicePrivateTransport
+    ?? (coreDevicePrivateTransport
       ? createCoreDeviceTransport({
           accountClient,
-          privateTransport: options.coreDevicePrivateTransport,
+          privateTransport: coreDevicePrivateTransport,
           now: () => Math.floor(now() / 1000),
         })
       : null);

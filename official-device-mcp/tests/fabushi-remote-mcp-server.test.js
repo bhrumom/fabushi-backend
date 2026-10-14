@@ -465,7 +465,10 @@ test("Core-authority production server cannot fall back to direct in-memory devi
   const source = await readFile(new URL("../lib/fabushi-remote-mcp-server.js", import.meta.url), "utf8");
   assert.match(source, /const configuredCoreDeviceTransport = options\.coreDeviceTransport/u);
   assert.match(source, /createCoreDeviceTransport\(\{/u);
-  assert.match(source, /privateTransport: options\.coreDevicePrivateTransport/u);
+  assert.match(source, /const coreDevicePrivateTransport = options\.coreDevicePrivateTransport/u);
+  assert.match(source, /FABUSHI_FDN_AUTHENTICATED_REVERSE_WS_FALLBACK/u);
+  assert.match(source, /createAuthenticatedReverseWebSocketPrivateTransport\(\)/u);
+  assert.match(source, /privateTransport: coreDevicePrivateTransport/u);
   assert.match(source, /const coreDeviceTransport = configuredCoreDeviceTransport;/u);
   assert.match(source, /if \(requireCoreDeviceAuthority\) \{\s*throw new Error\("Canonical Core-authorized target transport is required; direct registry execution is disabled\."\);\s*\}/u);
   assert.match(source, /if \(coreDeviceTransport\?\.callDevice\)/u);
