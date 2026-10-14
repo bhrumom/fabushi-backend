@@ -6,7 +6,13 @@ import { dirname, resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { attachDeviceGateway, registerDeviceTools } from "./device-gateway.js";
+import {
+  attachDeviceGateway,
+  callRegisteredDevice,
+  describeRegisteredDeviceTool,
+  listRegisteredDevices,
+  registerDeviceTools,
+} from "./device-gateway.js";
 import { createFabushiAccountClient } from "./fabushi-account-auth.js";
 import { createServiceCredentialVault } from "./service-credential-vault.js";
 import { DEVICE_DISK_SAFETY_INSTRUCTIONS } from "./device-disk-safety.js";
@@ -707,6 +713,50 @@ export function createFabushiRemoteMcpServer(options = {}) {
       isError: true,
       content: [{ type: "text", text: `The Fabushi MCP token does not grant ${scope}.` }],
     });
+    const coreServiceAccessToken = String(account.coreServiceAccessToken || "").trim();
+    const requireCoreDeviceAuthority = requireCoreServiceState || options.requireCoreDeviceAuthority === true;
+
+    const loadCoreInventory = async () => {
+      if (!coreServiceAccessToken) {
+        if (requireCoreDeviceAuthority) throw new Error("Canonical Core device authority is required but unavailable.");
+        return null;
+      }
+      return accountClient.listRemoteComputers(coreServiceAccessToken);
+    };
+
+    const findCoreComputer = async (deviceId) => {
+      const computers = await loadCoreInventory();
+      if (!computers) return null;
+      const device = computers.find((entry) => String(entry?.deviceId || "") === String(deviceId));
+      if (!device) throw new Error("Device is not present in the canonical Core account inventory.");
+      return device;
+    };
+
+    const projectCoreDevice = (computer, fallback = null) => {
+      const lastSeenSeconds = Number(computer?.lastSeenAt || 0);
+      const networkExpiresSeconds = Number(computer?.networkExpiresAt || 0);
+      const coreOnline = computer?.online === true;
+      const fallbackTools = coreOnline && fallback ? fallback.capabilities : [];
+      return {
+        id: String(computer.deviceId),
+        name: String(computer.label || computer.deviceId),
+        platform: String(computer.platform || "unknown"),
+        status: coreOnline ? "online" : "offline",
+        lastSeen: lastSeenSeconds > 0 ? new Date(lastSeenSeconds * 1000).toISOString() : new Date(0).toISOString(),
+        expiresAt: networkExpiresSeconds > 0 ? new Date(networkExpiresSeconds * 1000).toISOString() : null,
+        metadata: {
+          provider: String(computer.provider || ""),
+          appVersion: String(computer.appVersion || ""),
+          networkBound: computer?.networkBound === true ? "true" : "false",
+          networkGeneration: computer?.networkGeneration == null ? "" : String(computer.networkGeneration),
+        },
+        secureInputPublicKey: fallback?.secureInputPublicKey ?? null,
+        capabilities: Array.isArray(fallbackTools) ? fallbackTools : [],
+        toolSchemaCount: Number(fallback?.toolSchemaCount || 0),
+        toolSchemaVersion: String(fallback?.toolSchemaVersion || ""),
+      };
+    };
+
     registerDeviceTools(server, {
       accountId: account.accountId,
       canRead: () => readAllowed,
@@ -717,6 +767,32 @@ export function createFabushiRemoteMcpServer(options = {}) {
       writeSecuritySchemes: WRITE_SECURITY_SCHEMES,
       operationJournal,
       requireOperationJournal,
+      listDevices: async (accountId) => {
+        const computers = await loadCoreInventory();
+        if (!computers) return listRegisteredDevices(accountId);
+        const fallbackById = new Map(listRegisteredDevices(accountId).map((device) => [device.id, device]));
+        return computers.map((computer) => projectCoreDevice(computer, fallbackById.get(String(computer.deviceId)) || null));
+      },
+      describeDeviceTool: async (accountId, deviceId, toolName) => {
+        const computer = await findCoreComputer(deviceId);
+        if (!computer) return describeRegisteredDeviceTool(accountId, deviceId, toolName);
+        if (computer.online !== true) {
+          return {
+            deviceId,
+            toolName,
+            available: false,
+            schemaVersion: "",
+            tool: null,
+            message: `Device ${deviceId} is offline in canonical Core inventory.`,
+          };
+        }
+        return describeRegisteredDeviceTool(accountId, deviceId, toolName);
+      },
+      callDevice: async (accountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions) => {
+        const computer = await findCoreComputer(deviceId);
+        if (computer && computer.online !== true) throw new Error(`Device ${deviceId} is offline in canonical Core inventory.`);
+        return callRegisteredDevice(accountId, deviceId, toolName, args, timeoutSeconds, diskPreflight, callOptions);
+      },
     });
     return server;
   }
