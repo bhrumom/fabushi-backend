@@ -34,6 +34,8 @@ def make_scan_archive(evidence_overrides=None, member_name='scan-evidence.json',
         'id': 1,
         'name': 'dandelion-scan-' + review.SCAN_SHA,
         'expired': False,
+        'size_in_bytes': len(raw),
+        'workflow_run': {'id': review.SCAN_RUN, 'head_sha': review.SCAN_SHA},
         'digest': 'sha256:' + hashlib.sha256(raw).hexdigest(),
     }
     return raw, artifact

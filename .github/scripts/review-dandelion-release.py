@@ -51,7 +51,12 @@ def validate_scan(evidence):
         raise ValueError('scan checks incomplete')
 
 def scan_archive(raw, artifact):
-    if artifact.get('expired') or artifact.get('name') != 'dandelion-scan-' + SCAN_SHA:
+    if (artifact.get('expired') is not False
+            or artifact.get('name') != 'dandelion-scan-' + SCAN_SHA
+            or type(artifact.get('id')) is not int or artifact['id'] <= 0
+            or artifact.get('workflow_run', {}).get('id') != SCAN_RUN
+            or artifact.get('workflow_run', {}).get('head_sha') != SCAN_SHA
+            or artifact.get('size_in_bytes') != len(raw)):
         raise ValueError('unexpected scan artifact')
     if len(raw) > 1024 * 1024 or artifact.get('digest') != 'sha256:' + hashlib.sha256(raw).hexdigest():
         raise ValueError('scan transport digest mismatch')
@@ -68,6 +73,17 @@ def scan_archive(raw, artifact):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+PROOF_URL = 'https://api.ombhrum.com/v1/extensions/install/web-miniapp/bhrumom/global-dandelion/0.1.0'
+
+def validate_proof(proof):
+    descriptor = proof.get('descriptor', {})
+    if (proof.get('protocol') != 'fabushi.extension-install-proof.v1'
+            or descriptor.get('release', {}).get('bundleDigest') != PACKAGE_SHA
+            or descriptor.get('release', {}).get('version') != '0.1.0'
+            or descriptor.get('identity', {}) != {
+                'kind': 'web-miniapp', 'namespace': 'bhrumom', 'name': 'global-dandelion'}):
+        raise ValueError('public approval proof binding mismatch')
 
 def main():
     if os.environ.get('GITHUB_REF') != 'refs/heads/main' or os.environ.get('GITHUB_REPOSITORY') != 'bhrumom/fabushi-backend':
@@ -101,6 +117,11 @@ def main():
     release = json.loads(raw)['release']
     if release.get('state') != 'approved' or release.get('descriptor', {}).get('release', {}).get('bundleDigest') != PACKAGE_SHA:
         raise ValueError('approval binding mismatch')
+    with urllib.request.build_opener(NoRedirect).open(PROOF_URL, timeout=30) as response:
+        public_raw = response.read(1024 * 1024 + 1)
+    if len(public_raw) > 1024 * 1024:
+        raise ValueError('proof response too large')
+    validate_proof(json.loads(public_raw))
     Path('release-review-evidence.json').write_text(json.dumps({
         'state': 'approved', 'packageSha256': PACKAGE_SHA, 'desktopSource': DESKTOP_SHA,
         'scanRun': SCAN_RUN, 'reviewRun': os.environ['GITHUB_RUN_ID'],

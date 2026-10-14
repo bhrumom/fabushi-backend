@@ -26,3 +26,23 @@ Secrets remain production environment inputs. Never print private release fields
 tokens, paths or upstream error bodies. Actions unit tests cover source/CI failure,
 scan digest/scope/source swaps and oversized/unexpected artifacts. Rollback is the
 existing release revoke/yank workflow, not a database edit or key rotation.
+
+## Traceable acceptance and execution
+
+- RR-01: exact-source successful run names/SHAs and immutable scan artifact
+  metadata/whole ZIP digest are required before any mutation.
+- RR-02: one fixed HTTPS review write through the existing reviewer owner; no
+  redirects, arbitrary caller identity, automatic retry or secret diagnostics.
+- RR-03: public approved proof must expose the same fixed package/version after
+  approval. Record public evidence only; approval is not installed acceptance.
+- RR-04: unit verification executes only in GitHub Actions (never a workstation).
+  Separate manual production workflow is never triggered by a PR or test.
+
+Plan: pure gate validators and negative unit fixtures -> exact-head Actions CI ->
+review PR/integrate -> manually dispatch protected main once -> inspect public
+proof -> separate Desktop installed/offline/remove gates. Existing service API,
+database, key, namespace and scan records are unchanged; no migration/deployment.
+Failure before write is blocked; uncertain write requires read-only public-proof
+diagnosis rather than rerunning. Evidence records RR-01..04 and remaining gates.
+References: backend scan38453729078, Desktop PR64/source f346686, real publisher
+pending-review observation and user request to finish publication (2026-10-14).
