@@ -129,6 +129,91 @@ jobs:
             -v "$PWD/runtime:/etc/headscale/fdn-runtime:ro" \
             docker.io/headscale/headscale:0.29.5 \
             configtest
+      - name: Validate Headscale enrollment key mint owner
+        working-directory: fdn-network-coordinator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ./mint-enrollment-key.sh
+          node --input-type=module - <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const source = await readFile("mint-enrollment-key.sh", "utf8");
+          const mint = source.indexOf("headscale preauthkeys create");
+          if (mint < 0) throw new Error("missing preauth key mint");
+          const tail = source.slice(mint, mint + 500);
+          if (tail.includes("--reusable") || tail.includes("--ephemeral")) {
+            throw new Error("enrollment key must be single-use and persistent-node");
+          }
+          for (const required of [
+            'headscale users list --name "$cell_id" --output json',
+            'headscale users create "$cell_id"',
+            '--user "$user_id"',
+            '--expiration "${ttl_seconds}s"',
+          ]) {
+            if (!source.includes(required)) throw new Error(`missing mint invariant: ${required}`);
+          }
+          NODE
+
+          cp policy.hujson runtime/policy.hujson
+          chmod 600 runtime/policy.hujson
+          docker compose up -d headscale
+          trap 'docker compose down -v >/dev/null 2>&1 || true' EXIT
+          for attempt in {1..30}; do
+            if docker compose exec -T headscale headscale health >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker compose logs headscale
+              exit 1
+            fi
+            sleep 1
+          done
+
+          cell_id="cell-fdn-ci-enrollment"
+          key="$(
+            FABUSHI_FDN_CELL_ID="$cell_id"             FABUSHI_FDN_ENROLLMENT_TTL_SECONDS=120             bash ./mint-enrollment-key.sh
+          )"
+          test -n "$key"
+          test "${#key}" -le 512
+          if [[ "$key" =~ [[:space:]] ]]; then
+            exit 1
+          fi
+
+          users_json="$(docker compose exec -T headscale headscale users list --name "$cell_id" --output json)"
+          preauth_json="$(docker compose exec -T headscale headscale preauthkeys list --output json)"
+          CELL_ID="$cell_id" USERS_JSON="$users_json" PREAUTH_JSON="$preauth_json" node --input-type=module - <<'NODE'
+          const normalize = (raw, property) => {
+            const value = JSON.parse(raw);
+            if (Array.isArray(value)) return value;
+            if (Array.isArray(value?.[property])) return value[property];
+            return [];
+          };
+          const users = normalize(process.env.USERS_JSON, "users")
+            .filter((row) => row?.name === process.env.CELL_ID);
+          if (users.length !== 1) throw new Error("opaque Headscale user must resolve exactly once");
+          const id = String(users[0].id ?? "");
+          if (!/^[1-9][0-9]*$/.test(id)) throw new Error("opaque user must have numeric 0.29.5 id");
+
+          const keys = normalize(process.env.PREAUTH_JSON, "preAuthKeys");
+          const owned = keys.filter((row) => {
+            const owner = row?.user;
+            return owner && String(owner.id ?? "") === id;
+          });
+          if (owned.length !== 1) throw new Error("expected exactly one CI enrollment key");
+          // Headscale 0.29.5 uses encoding/json over generated proto structs.
+          // Default false proto3 booleans carry json:",omitempty", so absence is
+          // the pinned version's normal representation of false.
+          if (owned[0].reusable === true) throw new Error("enrollment key must not be reusable");
+          if (owned[0].ephemeral === true) throw new Error("enrollment key must not be ephemeral");
+          if (owned[0].used === true) throw new Error("fresh enrollment key must be unused");
+          if (!owned[0].expiration) throw new Error("enrollment key must expire");
+          NODE
+
+          second_users_json="$(docker compose exec -T headscale headscale users list --name "$cell_id" --output json)"
+          test "$second_users_json" = "$users_json"
+          unset key users_json preauth_json second_users_json
+          docker compose down -v
+          trap - EXIT
       - name: Record coordinator provenance
         shell: bash
         run: |
