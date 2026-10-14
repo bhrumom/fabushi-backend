@@ -1,0 +1,33 @@
+[Unit]
+Description=Fabushi FDN official device network worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fabushi-fdn/current
+EnvironmentFile=/etc/fabushi/fdn-network-worker.env
+ExecStart=/opt/fabushi-fdn/current/bin/official-device-network-worker
+Restart=on-failure
+RestartSec=5
+User=fabushi-fdn
+Group=fabushi-fdn
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateDevices=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=fabushi-fdn
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/fabushi-fdn
+
+[Install]
+WantedBy=multi-user.target
