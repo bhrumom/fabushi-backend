@@ -25,6 +25,8 @@ LockPersonality=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=fabushi-fdn
+StateDirectoryMode=0700
 ReadWritePaths=/var/lib/fabushi-fdn
 
 [Install]
