@@ -191,3 +191,103 @@ test("Core device transport never replays an operation after dispatch uncertaint
   assert.equal(outcomeUnknownMarks, 1);
   assert.deepEqual(seen, ["grantController", "authorizeTool", "operation"]);
 });
+
+
+test("Core device transport describes a target-owned schema without consulting the legacy registry", async () => {
+  const seen = [];
+  const privateTransport = {
+    async request({ accountId, deviceId, networkGeneration, payload }) {
+      seen.push({ accountId, deviceId, networkGeneration, payload });
+      assert.equal(payload.type, "describeTool");
+      assert.equal(payload.toolName, "Computer");
+      return {
+        type: "toolDescription",
+        deviceId,
+        connectionId: payload.connectionId,
+        delegationId: payload.delegationId,
+        requestId: payload.requestId,
+        toolName: payload.toolName,
+        available: true,
+        schemaVersion: "d".repeat(64),
+        tool: {
+          name: "Computer",
+          title: "Computer",
+          description: "Host-owned Computer tool",
+          inputSchema: {
+            type: "object",
+            required: ["action"],
+            properties: { action: { type: "string" } },
+          },
+          outputSchema: {
+            type: "object",
+            required: ["content", "screenshotPath"],
+          },
+        },
+        networkGeneration,
+      };
+    },
+  };
+  const accountClient = {
+    async createRemoteComputerSession() { throw new Error("describe must not create a session"); },
+    async reconcileRemoteComputerSession() { throw new Error("describe must not reconcile a session"); },
+    async createRemoteComputerOperation() { throw new Error("describe must not create an operation"); },
+    async queryRemoteComputerOperation() { throw new Error("describe must not query an operation"); },
+    async markRemoteComputerOperationOutcomeUnknown() { throw new Error("describe must not mutate operation state"); },
+  };
+  const transport = createCoreDeviceTransport({ accountClient, privateTransport });
+  const result = await transport.describeDeviceTool({
+    accountId: "user:fdn",
+    deviceId: "device-fdn-1",
+    toolName: "Computer",
+    computer: { online: true, networkBound: true, networkGeneration: 7 },
+    connectionId: "official-mcp:connection-0001",
+    delegationId: "delegation-0001",
+  });
+  assert.equal(result.available, true);
+  assert.equal(result.schemaVersion, "d".repeat(64));
+  assert.equal(result.tool.name, "Computer");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].accountId, "user:fdn");
+  assert.equal(seen[0].networkGeneration, 7);
+});
+
+test("Core device transport rejects mismatched target schema identity", async () => {
+  const privateTransport = {
+    async request({ deviceId, networkGeneration, payload }) {
+      return {
+        type: "toolDescription",
+        deviceId,
+        connectionId: payload.connectionId,
+        delegationId: payload.delegationId,
+        requestId: payload.requestId,
+        toolName: "Screenshot",
+        available: true,
+        schemaVersion: "e".repeat(64),
+        tool: { name: "Screenshot" },
+        networkGeneration,
+      };
+    },
+  };
+  const unavailable = async () => { throw new Error("unused"); };
+  const transport = createCoreDeviceTransport({
+    accountClient: {
+      createRemoteComputerSession: unavailable,
+      reconcileRemoteComputerSession: unavailable,
+      createRemoteComputerOperation: unavailable,
+      queryRemoteComputerOperation: unavailable,
+      markRemoteComputerOperationOutcomeUnknown: unavailable,
+    },
+    privateTransport,
+  });
+  await assert.rejects(
+    () => transport.describeDeviceTool({
+      accountId: "user:fdn",
+      deviceId: "device-fdn-1",
+      toolName: "Computer",
+      computer: { online: true, networkBound: true, networkGeneration: 7 },
+      connectionId: "official-mcp:connection-0001",
+      delegationId: "delegation-0001",
+    }),
+    /failed identity correlation/u,
+  );
+});
