@@ -1109,6 +1109,7 @@ async function resolveUser(req, body = {}) {
   if (testToken && token && token === testToken) {
     return {
       userId: 'user:test_account',
+      fabushiAccountId: 'user:test_account',
       username: 'TestAccount',
       tokenHash: sha256(token).slice(0, 24),
       isAuthenticated: true,
@@ -1138,6 +1139,11 @@ async function resolveUser(req, body = {}) {
       : `anon:${anonymousHash}`;
   return {
     userId,
+    // Canonical Platform Core account identity. Never fall back to username,
+    // email, or token hash for FDN device/network authorization.
+    fabushiAccountId: remoteAccount.authenticated && remoteAccount.id
+      ? String(remoteAccount.id)
+      : '',
     username: remoteAccount.username || usernameHint,
     tokenHash,
     isAuthenticated: remoteAccount.authenticated,
