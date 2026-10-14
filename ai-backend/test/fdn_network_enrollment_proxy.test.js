@@ -14,6 +14,7 @@ const SECRET="g".repeat(96);
 
 test("Headscale control URL is a clean HTTPS origin",()=>{
   assert.equal(validateHeadscaleControlUrl("https://fdn-control.example"),"https://fdn-control.example");
+  assert.throws(()=>validateHeadscaleControlUrl(""),e=>e.code==="fdn_headscale_control_url_invalid" && e.statusCode===503);
   assert.throws(()=>validateHeadscaleControlUrl("http://fdn-control.example"),e=>e.code==="fdn_headscale_control_url_invalid");
   assert.throws(()=>validateHeadscaleControlUrl("https://user:pass@fdn-control.example"),e=>e.code==="fdn_headscale_control_url_invalid");
   assert.throws(()=>validateHeadscaleControlUrl("https://fdn-control.example/path"),e=>e.code==="fdn_headscale_control_url_invalid");
