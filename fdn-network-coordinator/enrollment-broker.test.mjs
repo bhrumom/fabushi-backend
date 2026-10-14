@@ -77,7 +77,9 @@ test("AES-GCM envelope authenticates enrollment identity and rejects tamper", ()
   };
   const envelope = encryptAuthKey(KEY, row, STATE_KEY);
   assert.equal(decryptAuthKey(envelope, row, STATE_KEY), KEY);
-  const tampered = { ...envelope, ciphertext: envelope.ciphertext.slice(0, -1) + (envelope.ciphertext.endsWith("A") ? "B" : "A") };
+  const tamperedBytes = Buffer.from(envelope.ciphertext, "base64url");
+  tamperedBytes[0] ^= 0x01;
+  const tampered = { ...envelope, ciphertext: tamperedBytes.toString("base64url") };
   assert.throws(() => decryptAuthKey(tampered, row, STATE_KEY), (error) => error instanceof EnrollmentError && error.code === "auth_key_decrypt_failed");
   assert.throws(() => decryptAuthKey(envelope, { ...row, generation: 4 }, STATE_KEY), (error) => error.code === "auth_key_decrypt_failed");
 });

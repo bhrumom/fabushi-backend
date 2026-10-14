@@ -112,6 +112,18 @@ jobs:
             if (source.includes(forbidden)) throw new Error(`forbidden enrollment authority: ${forbidden}`);
           }
           NODE
+      - name: Test loopback enrollment service boundary
+        working-directory: fdn-network-coordinator
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test ./enrollment-service.test.mjs
+          node --check ./enrollment-service.mjs
+          grep -F 'host !== "127.0.0.1" && host !== "::1"' enrollment-service.mjs
+          grep -F 'FABUSHI_FDN_ENROLLMENT_BROKER_TOKEN' enrollment-service.mjs
+          if grep -Eiq 'registerDeviceTools|devices registry|headscale:latest' enrollment-service.mjs; then
+            exit 1
+          fi
       - name: Validate policy sync ordering
         working-directory: fdn-network-coordinator
         shell: bash
