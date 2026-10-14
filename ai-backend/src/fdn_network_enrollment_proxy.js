@@ -125,7 +125,8 @@ export class FdnEnrollmentBrokerClient {
 }
 
 export function authorizeEnrollmentForAccount(user, payload) {
-  if (!user?.isAuthenticated || !readText(user.userId, 256)) {
+  const canonicalAccountId = readText(user?.fabushiAccountId, 256);
+  if (!user?.isAuthenticated || !canonicalAccountId) {
     throw enrollmentError("fdn_enrollment_auth_required", 401);
   }
   const target = payload?.target;
@@ -133,7 +134,7 @@ export function authorizeEnrollmentForAccount(user, payload) {
   if (!target || typeof target !== "object" || !enrollment || typeof enrollment !== "object") {
     throw enrollmentError("fdn_enrollment_broker_invalid_response", 502);
   }
-  if (target.userId !== user.userId) {
+  if (target.userId !== canonicalAccountId) {
     throw enrollmentError("fdn_enrollment_account_mismatch", 403);
   }
   if (!readText(target.deviceId, 128) || !readText(target.cellId, 128) ||
