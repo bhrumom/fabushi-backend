@@ -5,6 +5,21 @@ import {
   createCoreDeviceTransport,
 } from "../lib/core-device-transport.js";
 
+
+function coreNetworkRoute(overrides = {}) {
+  return {
+    deviceId: "device-fdn-1",
+    cellId: "cell-fdn-1",
+    nodeId: "node-fdn-1",
+    generation: 7,
+    expiresAt: 4_000_000_000,
+    connectionId: "official-mcp:connection-0001",
+    delegationId: "delegation-0001",
+    active: true,
+    ...overrides,
+  };
+}
+
 function baseInput() {
   return {
     accountId: "user:fdn",
@@ -27,10 +42,16 @@ test("Core device transport uses target grant then Core session/operation and co
   const clientToken = "c".repeat(64);
   const mobileToken = "m".repeat(64);
   const privateTransport = {
-    async request({ payload, deviceId, networkGeneration }) {
+    async request({ payload, deviceId, networkGeneration, networkRoute }) {
       events.push(["private", payload.type]);
       assert.equal(deviceId, "device-fdn-1");
       assert.equal(networkGeneration, 7);
+      assert.deepEqual(networkRoute, {
+        cellId: "cell-fdn-1",
+        nodeId: "node-fdn-1",
+        generation: 7,
+        expiresAt: 4_000_000_000,
+      });
       if (payload.type === "grantController") {
         return {
           type: "controllerGranted",
@@ -72,6 +93,7 @@ test("Core device transport uses target grant then Core session/operation and co
     },
   };
   const accountClient = {
+    async getRemoteComputerNetworkRoute() { return coreNetworkRoute(); },
     async createRemoteComputerSession(_serviceToken, input) {
       events.push(["core", "session-create"]);
       assert.equal(input.clientToken, clientToken);
@@ -156,6 +178,7 @@ test("Core device transport never replays an operation after dispatch uncertaint
     },
   };
   const accountClient = {
+    async getRemoteComputerNetworkRoute() { return coreNetworkRoute(); },
     async createRemoteComputerSession() {
       return { sessionId: "session-fdn-2", mobileToken: "m".repeat(64) };
     },
@@ -228,6 +251,7 @@ test("Core device transport describes a target-owned schema without consulting t
     },
   };
   const accountClient = {
+    async getRemoteComputerNetworkRoute() { return coreNetworkRoute(); },
     async createRemoteComputerSession() { throw new Error("describe must not create a session"); },
     async reconcileRemoteComputerSession() { throw new Error("describe must not reconcile a session"); },
     async createRemoteComputerOperation() { throw new Error("describe must not create an operation"); },
@@ -271,6 +295,7 @@ test("Core device transport rejects mismatched target schema identity", async ()
   const unavailable = async () => { throw new Error("unused"); };
   const transport = createCoreDeviceTransport({
     accountClient: {
+      getRemoteComputerNetworkRoute: async () => coreNetworkRoute(),
       createRemoteComputerSession: unavailable,
       reconcileRemoteComputerSession: unavailable,
       createRemoteComputerOperation: unavailable,
@@ -290,4 +315,32 @@ test("Core device transport rejects mismatched target schema identity", async ()
     }),
     /failed identity correlation/u,
   );
+});
+
+
+test("Core device transport fails closed before target dispatch when Core route generation is stale", async () => {
+  let privateDispatches = 0;
+  const unavailable = async () => { throw new Error("must not reach controller operation flow"); };
+  const transport = createCoreDeviceTransport({
+    accountClient: {
+      getRemoteComputerNetworkRoute: async () => coreNetworkRoute({ generation: 6 }),
+      createRemoteComputerSession: unavailable,
+      reconcileRemoteComputerSession: unavailable,
+      createRemoteComputerOperation: unavailable,
+      queryRemoteComputerOperation: unavailable,
+      markRemoteComputerOperationOutcomeUnknown: unavailable,
+    },
+    privateTransport: {
+      async request() {
+        privateDispatches += 1;
+        throw new Error("private transport must not run for a stale route");
+      },
+    },
+    now: () => 1_800_000_000,
+  });
+  await assert.rejects(
+    () => transport.callDevice(baseInput()),
+    /network route failed service\/device\/generation correlation/u,
+  );
+  assert.equal(privateDispatches, 0);
 });
