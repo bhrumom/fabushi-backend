@@ -9,7 +9,7 @@ Coordinator dependency: internal FDN enrollment service.
 
 The product-facing endpoint uses the existing Fabushi account resolver. It must not use the historical ai-backend `devices` table, device names, IPs, email equality, or the official MCP in-memory registry as network enrollment authority.
 
-The coordinator independently redeems the Core grant. The proxy releases enrollment material only when the coordinator's Core-derived `target.userId` exactly equals the authenticated Fabushi subject and the coordinator target generation equals the enrollment generation.
+The coordinator independently redeems the Core grant. Platform Core access tokens use the canonical account database id as `sub`. ai-backend keeps its historical local storage namespace (`user:<id>`) separate and also carries `fabushiAccountId`, sourced only from the authenticated remote account `id`. The proxy releases enrollment material only when the coordinator's Core-derived `target.userId` exactly equals that raw `fabushiAccountId` and the coordinator target generation equals the enrollment generation. Username, email, local userId prefixes, and token hashes are never identity fallbacks for FDN.
 
 ## Routes
 
