@@ -15,6 +15,7 @@ SCAN_RUN = 38453729078
 PACKAGE_SHA = 'de10e02115415908f827723457817e51cb4f39aa5ca68798da824fecc483118a'
 WASM_SHA = 'fce746baecc6bbd9f4b12d5862d886cf7f72eda5'
 KEY = 'fabushi-marketplace-managed-20261013-1'
+USER_AGENT = 'Fabushi-Marketplace-Delivery/1'
 RUNS = {
     38449598363: 'Rust desktop runtime',
     38449598160: 'Desktop Chat Parity CI',
@@ -108,7 +109,8 @@ def main():
     request = urllib.request.Request(
         'https://api.ombhrum.com/v1/extensions/review/releases/web-miniapp/bhrumom/global-dandelion/0.1.0',
         data=json.dumps(body, separators=(',', ':')).encode(), method='POST', headers={
-            'content-type': 'application/json', 'x-fabushi-marketplace-review-token': token})
+            'content-type': 'application/json', 'user-agent': USER_AGENT,
+            'x-fabushi-marketplace-review-token': token})
     # Exactly one write; a transport uncertainty requires read-only diagnosis.
     with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
         raw = response.read(1024 * 1024 + 1)
@@ -117,7 +119,8 @@ def main():
     release = json.loads(raw)['release']
     if release.get('state') != 'approved' or release.get('descriptor', {}).get('release', {}).get('bundleDigest') != PACKAGE_SHA:
         raise ValueError('approval binding mismatch')
-    with urllib.request.build_opener(NoRedirect).open(PROOF_URL, timeout=30) as response:
+    proof_request = urllib.request.Request(PROOF_URL, headers={'user-agent': USER_AGENT})
+    with urllib.request.build_opener(NoRedirect).open(proof_request, timeout=30) as response:
         public_raw = response.read(1024 * 1024 + 1)
     if len(public_raw) > 1024 * 1024:
         raise ValueError('proof response too large')
@@ -133,5 +136,8 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        print('Review blocked; class=' + type(error).__name__ + '; no automatic write retry.', file=sys.stderr)
+        status = getattr(error, 'code', None)
+        safe_status = str(status) if type(status) is int and 100 <= status <= 599 else 'unavailable'
+        print('Review blocked; class=' + type(error).__name__ + '; HTTP=' + safe_status
+              + '; no automatic write retry.', file=sys.stderr)
         sys.exit(1)
