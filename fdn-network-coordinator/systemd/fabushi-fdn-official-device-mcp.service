@@ -1,0 +1,34 @@
+[Unit]
+Description=Fabushi Official Device MCP controller
+After=network-online.target fabushi-fdn-network-worker.service
+Requires=fabushi-fdn-network-worker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fabushi-fdn/current/official-device-mcp
+EnvironmentFile=/etc/fabushi/fdn-official-device-mcp.env
+ExecStart=/usr/bin/node /opt/fabushi-fdn/current/official-device-mcp/bin/fabushi-remote-mcp.js
+Restart=on-failure
+RestartSec=5
+User=fabushi-fdn
+Group=fabushi-fdn
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateDevices=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=fabushi-fdn
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/fabushi-fdn
+
+[Install]
+WantedBy=multi-user.target
