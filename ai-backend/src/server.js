@@ -24,6 +24,7 @@ import { AccountSyncStore } from './account_sync_store.js';
 import { readGlobalDharmaEntitlement } from './global_dharma_entitlement.js';
 import { GlobalDharmaRuntimeStore } from './global_dharma_runtime_store.js';
 import { registerPlatformApi } from './platform_api.js';
+import { registerFdnEnrollmentProxy } from './fdn_network_enrollment_proxy.js';
 import {
   codexResponsesMessages,
   codexResponsesTools,
@@ -5475,6 +5476,7 @@ app.post(
   }),
 );
 
+registerFdnEnrollmentProxy({ app, resolveUser, asyncHandler });
 registerPlatformApi({ app, db, resolveUser, asyncHandler });
 
 app.use((error, _req, res, _next) => {

@@ -1,0 +1,58 @@
+name: FDN Account Enrollment Proxy
+
+on:
+  pull_request:
+    paths:
+      - "ai-backend/src/fdn_network_enrollment_proxy.js"
+      - "ai-backend/src/server.js"
+      - "ai-backend/test/fdn_network_enrollment_proxy.test.js"
+      - ".github/workflows/fdn-account-enrollment-proxy.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ai-backend/src/fdn_network_enrollment_proxy.js"
+      - "ai-backend/src/server.js"
+      - "ai-backend/test/fdn_network_enrollment_proxy.test.js"
+      - ".github/workflows/fdn-account-enrollment-proxy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  account-enrollment-proxy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ai-backend
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Bind exact tested HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          test "$actual" = "$expected"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ai-backend/package-lock.json
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - name: Validate source
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check src/fdn_network_enrollment_proxy.js
+          node --check src/server.js
+          grep -F "registerFdnEnrollmentProxy({ app, resolveUser, asyncHandler });" src/server.js
+          if grep -Eiq 'listDevices|registerDeviceTools|device_pairings|FROM devices|headscale:latest' src/fdn_network_enrollment_proxy.js; then
+            exit 1
+          fi
+      - name: Test account-bound enrollment proxy
+        run: node --test test/fdn_network_enrollment_proxy.test.js
