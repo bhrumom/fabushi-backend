@@ -126,8 +126,14 @@ try {
   assert.equal(String(aUsers[0].user?.id ?? aUsers[0].id), String(aUsers[1].user?.id ?? aUsers[1].id));
   const bResponse = await api('/api/auth/user-info', b.sessions[0]); assert.equal(bResponse.status, 200);
   const bUser = await bResponse.json();
+  assert.equal(String(bUser.user?.id ?? bUser.id), String(b.sessions[0].user.id));
   assert.notEqual(String(aUsers[0].user?.id ?? aUsers[0].id), String(bUser.user?.id ?? bUser.id));
   assertions.sameAccountMultiSession = 'PASS';
+  const spoofed = await api(`/api/auth/user-info?userId=${encodeURIComponent(String(b.sessions[0].user.id))}`, a.sessions[0]);
+  assert.equal(spoofed.status, 200);
+  const spoofedUser = await spoofed.json();
+  assert.equal(String(spoofedUser.user?.id ?? spoofedUser.id), String(a.sessions[0].user.id));
+  assertions.crossAccountIdentitySpoofDenied = 'PASS';
   const identities = sql('SELECT algo, password_hash FROM users'); assert.equal(identities.length, 3); assert.ok(identities.every(u => u.algo === 'argon2id' && u.password_hash === ''));
   const passwords = sql('SELECT password_phc FROM account_password_credentials'); assert.ok(passwords.every(u => u.password_phc.startsWith('$argon2id$')));
   assertions.canonicalArgon2id = 'PASS';
@@ -139,6 +145,9 @@ try {
   const afterLogout = await api('/api/auth/user-info', rotated); assert.equal(afterLogout.status, 401);
   const revokedRefresh = await api('/api/auth/refresh', rotated, { refreshToken: rotated.refreshToken }); assert.equal(revokedRefresh.status, 401); assertions.sessionRevocation = 'PASS';
   assert.equal((await api('/api/auth/user-info', a.sessions[1])).status, 200); assertions.otherSessionRetained = 'PASS';
+  assert.ok(typeof b.sessions[0].sessionId === 'string');
+  sql(`UPDATE account_sessions SET expires_at=0 WHERE session_id=${escape(b.sessions[0].sessionId)} AND user_id=${escape(String(b.sessions[0].user.id))};`);
+  assert.equal((await api('/api/auth/user-info', b.sessions[0])).status, 401); assertions.expiredSessionDenied = 'PASS';
   const cleanup = await fixtureRequest(`/v1/leases/${lease.leaseId}`, 'DELETE'); assert.equal(cleanup.status, 200); assert.equal((await cleanup.json()).remaining, 0); assertions.zeroResidualCleanup = 'PASS';
   const stale = await api('/api/auth/user-info', a.sessions[0]); assert.equal(stale.status, 401); assertions.deletedSessionDenied = 'PASS';
   const ttlResponse = await fixtureRequest('/v1/leases', 'POST', { scenarioId: 'actual-ttl' });

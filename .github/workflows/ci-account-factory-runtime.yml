@@ -1,7 +1,7 @@
 name: Canonical Account Worker Runtime
 on:
   push:
-    branches: [codex/isolated-ci-account-factory]
+    branches: [main, codex/isolated-ci-account-factory]
     paths: ['ci/account-factory/**', '.github/workflows/ci-account-factory-runtime.yml']
   workflow_dispatch:
 permissions:
