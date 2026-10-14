@@ -173,7 +173,97 @@ export function createCoreDeviceTransport(options = {}) {
     throw new CoreDeviceTransportOutcomeUnknownError(reason, context.requestId);
   }
 
+  async function describeTool(input = {}) {
+    const context = {
+      ...input,
+      accountId: String(input.accountId || "").trim(),
+      deviceId: String(input.deviceId || "").trim(),
+      toolName: String(input.toolName || "").trim(),
+      connectionId: String(input.connectionId || "").trim(),
+      delegationId: String(input.delegationId || "").trim(),
+      timeoutSeconds: 30,
+    };
+    if (!context.accountId || !context.deviceId || !context.toolName
+      || !context.connectionId || !context.delegationId) {
+      throw new Error("Core Remote Computer tool description context is incomplete.");
+    }
+    if (context.computer?.online !== true
+      || context.computer?.networkBound !== true
+      || !Number.isSafeInteger(Number(context.computer?.networkGeneration))
+      || Number(context.computer.networkGeneration) <= 0) {
+      return {
+        deviceId: context.deviceId,
+        toolName: context.toolName,
+        available: false,
+        schemaVersion: "",
+        tool: null,
+        message: `Device ${context.deviceId} has no active canonical private route.`,
+      };
+    }
+    const requestId = stableId(
+      "official-mcp-describe",
+      context.accountId,
+      context.deviceId,
+      context.connectionId,
+      context.delegationId,
+      context.toolName,
+      context.computer.networkGeneration,
+    );
+    const response = await privateRequest(context, {
+      type: "describeTool",
+      deviceId: context.deviceId,
+      networkGeneration: Number(context.computer.networkGeneration),
+      connectionId: context.connectionId,
+      delegationId: context.delegationId,
+      requestId,
+      label: "Fabushi Official MCP",
+      toolName: context.toolName,
+    }, 30);
+    if (response.type !== "toolDescription"
+      || String(response.deviceId) !== context.deviceId
+      || String(response.connectionId) !== context.connectionId
+      || String(response.delegationId) !== context.delegationId
+      || String(response.requestId) !== requestId
+      || String(response.toolName) !== context.toolName
+      || Number(response.networkGeneration) !== Number(context.computer.networkGeneration)
+      || typeof response.available !== "boolean") {
+      throw new Error("Target tool description failed identity correlation.");
+    }
+    const schemaVersion = String(response.schemaVersion || "");
+    if (schemaVersion && !/^[0-9a-f]{64}$/u.test(schemaVersion)) {
+      throw new Error("Target tool description returned an invalid schema version.");
+    }
+    if (!response.available) {
+      if (response.tool != null || schemaVersion) {
+        throw new Error("Unavailable target tool description must not carry schema data.");
+      }
+      return {
+        deviceId: context.deviceId,
+        toolName: context.toolName,
+        available: false,
+        schemaVersion: "",
+        tool: null,
+        message: `Tool ${context.toolName} is not available on ${context.deviceId}.`,
+      };
+    }
+    if (!response.tool || typeof response.tool !== "object" || Array.isArray(response.tool)
+      || String(response.tool.name || "") !== context.toolName
+      || !schemaVersion) {
+      throw new Error("Available target tool description is incomplete.");
+    }
+    return {
+      deviceId: context.deviceId,
+      toolName: context.toolName,
+      available: true,
+      schemaVersion,
+      tool: response.tool,
+      message: `Returned the target-authorized schema for ${context.toolName} on ${context.deviceId}.`,
+    };
+  }
+
   return {
+    describeDeviceTool: describeTool,
+
     async callDevice(input = {}) {
       const timeoutSeconds = Math.min(Math.max(Number(input.timeoutSeconds) || DEFAULT_TIMEOUT_SECONDS, 1), MAX_TIMEOUT_SECONDS);
       const context = {
