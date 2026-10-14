@@ -175,6 +175,59 @@ jobs:
           set -e
           test "$status" -eq 64
           grep -F 'dedicated rootless Docker unix socket' <<<"$output"
+      - name: Validate official MCP ingress reconcile supervisor
+        working-directory: fdn-network-coordinator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ./run-official-device-mcp-ingress-binder.sh
+          node --check ./official-device-mcp-ingress-binder.mjs
+          node --test ./official-device-mcp-ingress-binder.test.mjs
+          grep -F 'User=fabushi-fdn' systemd/fabushi-fdn-official-mcp-ingress.service
+          grep -F 'Group=fabushi-fdn' systemd/fabushi-fdn-official-mcp-ingress.service
+          grep -F 'UMask=0077' systemd/fabushi-fdn-official-mcp-ingress.service
+          grep -F 'NoNewPrivileges=true' systemd/fabushi-fdn-official-mcp-ingress.service
+          grep -F 'ProtectSystem=strict' systemd/fabushi-fdn-official-mcp-ingress.service
+          grep -F 'PrivateDevices=true' systemd/fabushi-fdn-official-mcp-ingress.service
+          grep -F 'StateDirectory=fabushi-fdn' systemd/fabushi-fdn-official-mcp-ingress.service
+          grep -F 'OnUnitActiveSec=5m' systemd/fabushi-fdn-official-mcp-ingress.timer
+          grep -F 'Persistent=true' systemd/fabushi-fdn-official-mcp-ingress.timer
+          grep -F 'FABUSHI_FDN_CONTROLLER_WORKER_URL=http://127.0.0.1:8791' enrollment.env.example
+          grep -F 'FABUSHI_FDN_INGRESS_STATE_FILE=/var/lib/fabushi-fdn/' enrollment.env.example
+          if grep -Eq 'FDN_NETWORK_AUTHORITY_TOKEN=.*[^A-Z_]' systemd/fabushi-fdn-official-mcp-ingress.service systemd/fabushi-fdn-official-mcp-ingress.timer; then
+            echo "authority secret must not be embedded in systemd units" >&2
+            exit 1
+          fi
+          secret='012345678901234567890123456789012345678901234567'
+          set +e
+          output="$(
+            FABUSHI_PLATFORM_CORE_URL='https://core.example.invalid' \
+            FDN_NETWORK_AUTHORITY_TOKEN="$secret" \
+            FABUSHI_FDN_CELL_ID='cell-fdn-ci' \
+            FABUSHI_FDN_INGRESS_USER_ID='user-ci' \
+            FABUSHI_FDN_CONTROLLER_WORKER_URL='http://localhost:8791' \
+            FABUSHI_FDN_INGRESS_STATE_FILE='/var/lib/fabushi-fdn/ingress.json' \
+            bash ./run-official-device-mcp-ingress-binder.sh 2>&1
+          )"
+          status=$?
+          set -e
+          test "$status" -eq 64
+          grep -F 'exact 127.0.0.1 loopback HTTP origin' <<<"$output"
+
+          set +e
+          output="$(
+            FABUSHI_PLATFORM_CORE_URL='https://core.example.invalid' \
+            FDN_NETWORK_AUTHORITY_TOKEN="$secret" \
+            FABUSHI_FDN_CELL_ID='cell-fdn-ci' \
+            FABUSHI_FDN_INGRESS_USER_ID='user-ci' \
+            FABUSHI_FDN_CONTROLLER_WORKER_URL='http://127.0.0.1:8791' \
+            FABUSHI_FDN_INGRESS_STATE_FILE='/tmp/ingress.json' \
+            bash ./run-official-device-mcp-ingress-binder.sh 2>&1
+          )"
+          status=$?
+          set -e
+          test "$status" -eq 64
+          grep -F 'must remain under /var/lib/fabushi-fdn' <<<"$output"
       - name: Validate policy sync ordering
         working-directory: fdn-network-coordinator
         shell: bash

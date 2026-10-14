@@ -7,6 +7,9 @@ on:
       - "official-device-network-worker/**"
       - "docs/specs/fabushi-official-mcp-oauth.md"
       - "docs/specs/fdn-001-official-device-mcp-core-cutover.md"
+      - "docs/specs/fdn-001-official-mcp-ingress-binding.md"
+      - "fdn-network-coordinator/official-device-mcp-ingress-binder.mjs"
+      - "fdn-network-coordinator/official-device-mcp-ingress-binder.test.mjs"
       - ".github/workflows/fdn-official-device-mcp.yml"
   push:
     branches: [main]
@@ -15,6 +18,9 @@ on:
       - "official-device-network-worker/**"
       - "docs/specs/fabushi-official-mcp-oauth.md"
       - "docs/specs/fdn-001-official-device-mcp-core-cutover.md"
+      - "docs/specs/fdn-001-official-mcp-ingress-binding.md"
+      - "fdn-network-coordinator/official-device-mcp-ingress-binder.mjs"
+      - "fdn-network-coordinator/official-device-mcp-ingress-binder.test.mjs"
       - ".github/workflows/fdn-official-device-mcp.yml"
   workflow_dispatch:
 
@@ -92,6 +98,9 @@ jobs:
         with:
           go-version: "1.27.1"
           cache-dependency-path: official-device-network-worker/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - name: Resolve locked module graph
         shell: bash
         run: |
@@ -117,6 +126,10 @@ jobs:
           gofmt -d .
           test -z "$(gofmt -l .)"
       - run: go test ./...
+      - name: Test ingress binding owner
+        working-directory: .
+        shell: bash
+        run: node --test fdn-network-coordinator/official-device-mcp-ingress-binder.test.mjs
       - run: go vet ./...
       - run: go build ./...
       - name: Verify exact Tailscale pin

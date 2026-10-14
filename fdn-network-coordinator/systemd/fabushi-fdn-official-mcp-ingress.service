@@ -1,0 +1,28 @@
+[Unit]
+Description=Fabushi FDN official MCP ingress binding reconcile
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/fabushi-fdn/current/fdn-network-coordinator
+EnvironmentFile=/etc/fabushi/fdn-network-enrollment.env
+ExecStart=/usr/bin/bash /opt/fabushi-fdn/current/fdn-network-coordinator/run-official-device-mcp-ingress-binder.sh
+User=fabushi-fdn
+Group=fabushi-fdn
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateDevices=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=fabushi-fdn
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/fabushi-fdn
