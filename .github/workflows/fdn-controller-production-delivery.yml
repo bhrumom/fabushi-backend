@@ -216,11 +216,37 @@ jobs:
         run: |
           set -euo pipefail
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo install -d -m 0755 /etc/fabushi &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-network-worker.env /etc/fabushi/fdn-network-worker.env &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-network-enrollment.env /etc/fabushi/fdn-network-enrollment.env &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-official-device-mcp.env /etc/fabushi/fdn-official-device-mcp.env &&             sudo tar -xOf /tmp/fdn-controller-stack-$GITHUB_SHA.tgz ./fdn-network-coordinator/install-controller-stack.sh > /tmp/install-controller-stack.sh &&             sudo chmod 0755 /tmp/install-controller-stack.sh &&             sudo /tmp/install-controller-stack.sh /tmp/fdn-controller-stack-$GITHUB_SHA.tgz $GITHUB_SHA $CORE_SHA install &&             sudo /opt/fabushi-fdn/current/fdn-network-coordinator/install-controller-stack.sh ignored $GITHUB_SHA $CORE_SHA health &&             test \"\$(sudo cat /opt/fabushi-fdn/current/BACKEND_SHA)\" = \"$GITHUB_SHA\" &&             test \"\$(sudo cat /opt/fabushi-fdn/current/CORE_SHA)\" = \"$CORE_SHA\""
+      - name: Capture current and previous release provenance
+        id: release-provenance
+        run: |
+          set -euo pipefail
+          current_backend_sha="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" 'sudo cat /opt/fabushi-fdn/current/BACKEND_SHA')"
+          current_core_sha="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" 'sudo cat /opt/fabushi-fdn/current/CORE_SHA')"
+          previous_backend_sha="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" 'if sudo test -L /opt/fabushi-fdn/previous && sudo test -f /opt/fabushi-fdn/previous/BACKEND_SHA; then sudo cat /opt/fabushi-fdn/previous/BACKEND_SHA; fi')"
+          previous_core_sha="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" 'if sudo test -L /opt/fabushi-fdn/previous && sudo test -f /opt/fabushi-fdn/previous/CORE_SHA; then sudo cat /opt/fabushi-fdn/previous/CORE_SHA; fi')"
+          test "$current_backend_sha" = "$GITHUB_SHA"
+          test "$current_core_sha" = "$CORE_SHA"
+          {
+            echo "current_backend_sha=$current_backend_sha"
+            echo "current_core_sha=$current_core_sha"
+            echo "previous_backend_sha=$previous_backend_sha"
+            echo "previous_core_sha=$previous_core_sha"
+          } >> "$GITHUB_OUTPUT"
       - name: Record deployed provenance
         run: |
           set -euo pipefail
           digest="$(cut -d' ' -f1 fdn-controller-stack.tgz.sha256)"
-          jq -n --arg backendSha "$GITHUB_SHA" --arg coreSha "$CORE_SHA" --arg run "$GITHUB_RUN_ID" --arg digest "$digest"             '{backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,coreRepository:"bhrumom/fabushi-platform-core",coreSha:$coreSha,runId:$run,bundleSha256:$digest,result:"installed-and-health-checked"}'             > fdn-controller-deployed-provenance.json
+          jq -n \
+            --arg backendSha "$GITHUB_SHA" \
+            --arg coreSha "$CORE_SHA" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg digest "$digest" \
+            --arg currentBackendSha "${{ steps.release-provenance.outputs.current_backend_sha }}" \
+            --arg currentCoreSha "${{ steps.release-provenance.outputs.current_core_sha }}" \
+            --arg previousBackendSha "${{ steps.release-provenance.outputs.previous_backend_sha }}" \
+            --arg previousCoreSha "${{ steps.release-provenance.outputs.previous_core_sha }}" \
+            '{backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,coreRepository:"bhrumom/fabushi-platform-core",coreSha:$coreSha,runId:$run,bundleSha256:$digest,current:{backendSha:$currentBackendSha,coreSha:$currentCoreSha},previous:{backendSha:($previousBackendSha|select(length>0)?),coreSha:($previousCoreSha|select(length>0)?)},result:"installed-and-health-checked"}' \
+            > fdn-controller-deployed-provenance.json
       - uses: actions/upload-artifact@v4
         with:
           name: fdn-controller-deployed-${{ github.sha }}
