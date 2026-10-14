@@ -52,8 +52,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
       - uses: actions/setup-go@v6
         with:
-          go-version-file: official-device-network-worker/go.mod
-          cache-dependency-path: official-device-network-worker/go.sum
+          go-version: "1.27.1"
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -77,12 +76,17 @@ jobs:
           grep -F 'ln -sfn "$release" "$root/current.new"' fdn-network-coordinator/install-controller-stack.sh
           grep -F 'mv -Tf "$root/current.new" "$root/current"' fdn-network-coordinator/install-controller-stack.sh
           grep -F 'health check failed; previous release restored' fdn-network-coordinator/install-controller-stack.sh
-      - name: Test and build pinned controller worker
+      - name: Resolve, test and build pinned controller worker
         working-directory: official-device-network-worker
         run: |
           set -euo pipefail
+          cp go.mod "$RUNNER_TEMP/fdn-worker-go.mod"
+          go mod tidy
+          cmp -s go.mod "$RUNNER_TEMP/fdn-worker-go.mod"
+          grep -Fx 'require tailscale.com v1.104.1' go.mod
           test "$(go list -m -f '{{.Version}}' tailscale.com)" = "v1.104.1"
           go test ./...
+          go vet ./...
           CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o ../official-device-network-worker.bin .
       - name: Test shipping official device MCP
         working-directory: official-device-mcp
