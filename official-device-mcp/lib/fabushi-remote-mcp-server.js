@@ -742,7 +742,12 @@ export function createFabushiRemoteMcpServer(options = {}) {
       content: [{ type: "text", text: `The Fabushi MCP token does not grant ${scope}.` }],
     });
     const coreServiceAccessToken = String(account.coreServiceAccessToken || "").trim();
-    const requireCoreDeviceAuthority = requireCoreServiceState || options.requireCoreDeviceAuthority === true;
+    // Production official MCP is Core-authoritative by default. The legacy
+    // in-memory /agent registry exists only for explicit in-process parity tests
+    // and migration harnesses; the shipping bin does not expose an environment
+    // switch that can silently restore registry authority.
+    const allowLegacyRegistryFallback = options.allowLegacyRegistryFallback === true;
+    const requireCoreDeviceAuthority = !allowLegacyRegistryFallback;
     const coreDeviceTransport = configuredCoreDeviceTransport;
 
     const loadCoreInventory = async () => {
