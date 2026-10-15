@@ -1,6 +1,6 @@
 # Hosted isolated CI account factory — Specification
 
-Status: active; cloud auth lifecycle accepted; literal cancellation observation pending
+Status: active; hosted auth, real TTL and literal cancellation acceptance passed
 Owner: Fabushi Backend; normal auth remains Platform Core
 Date: 2026-10-15
 
@@ -317,7 +317,8 @@ does not change deployed executable sources or claim a new deployment SHA.
   10d9666b-9b84-463f-bd0b-db4d58dd263d, version
   da0ce4bd-5a58-4243-ac26-06452adfffdb. Both actual test-D1 bindings read back.
 - Literal cancellation: prepare 38668206894 actually cancelled; observer
-  38668322225 attempt 2 pending. Prepare independently sees 36 owned auth rows.
+  38668322225 attempt 2 PASS, exit 0. The independent observer sees 36 owned auth rows
+  before expiry and remaining=0 after expiry, without any cleanup request.
   Attempt 1 started before the cancelled conclusion settled and failed closed;
   it produced no passing report. No cleanup/sweep is sent by the observer.
 
@@ -327,12 +328,12 @@ does not change deployed executable sources or claim a new deployment SHA.
 | HAF-02 | passed | Shared factory + singleton DO, reservation/restart/isolation contracts and two actual successive lifecycle allocations |
 | HAF-03 | passed | Real canonical code delivery/validation; wrong code rejected and unauthenticated bridge denied; SMTP excluded |
 | HAF-04 | passed | Normal auth only; ownership/partial/orphan/schema contracts plus independently zero actual auth tables |
-| HAF-05 | blocked | Abandoned-client real wall-clock TTL passed; literal cancelled-job observer pending |
+| HAF-05 | passed | Actual abandoned-client TTL and actually cancelled Actions client both independently reclaimed by cloud cron |
 | HAF-06 | passed | Real OIDC, immutable repo/owner/workflow/main checks; dedicated user-authorized expiring token; main-only environment |
 | HAF-07 | passed | All product verification executed only in Actions; source/run/count/exit/wasm/deploy artifacts recorded |
 | HAF-08 | passed | Sanitized adversarial diagnostics; installation separate from credential-bearing deploy step |
 | HAF-09 | passed | Actual deployed global_fetch_strictly_public readback and cloud Worker calls |
-| HAF-10 | blocked | Actual cancellation confirmed; read-only TTL observer pending |
+| HAF-10 | passed | Prepare 38668206894 concluded cancelled; observer 38668322225 attempt 2 reads 36 live rows before expiry and 0 afterward, exit 0; same exact Backend/Core source |
 | HAF-11 | passed | Exact edge-source polling and observedFactorySha/CoreSha match accepted source |
 | HAF-12 | passed | Actual workerd public-JWKS probe distinguishes unsupported error mode; manual transport rejects all redirects; cloud real OIDC passes |
 | HAF-13 | passed | Actual invalidVerificationCodeDenied, normal correct-code registration and adversarial unsafe-issuer rejection contracts |

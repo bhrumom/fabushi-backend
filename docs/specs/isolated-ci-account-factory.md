@@ -2,7 +2,7 @@
 
 Status: active; implementation and deployment acceptance are separate
 Owner: Fabushi Backend (orchestration); Platform Core (ordinary authentication)
-Last updated: 2026-10-14
+Last updated: 2026-10-15
 Related task: FCM-027 / user-directed next-generation testing migration
 
 ## 1. Context / problem
@@ -222,12 +222,12 @@ The hosted spec's latest compliance section is authoritative for this slice.
 | AF-02 | passed | Actual isolated resource/binding inventory, dedicated secrets, production deny inventory and no-follow transport |
 | AF-03 | passed | Two successive cloud A/B/C allocations, A dual sessions, ownership/quota/replay contracts and durable metadata |
 | AF-04 | passed | Actual cloud normal Core OTP registration, wrong-code rejection, password login and canonical algorithms; no SQL provisioning |
-| AF-05 | blocked | Auth-only explicit zero and abandoned-client real TTL passed; literal cancellation observer pending, MCP/device-created data outside accepted scope |
+| AF-05 | blocked | Auth-only explicit zero and abandoned-client real TTL passed; literal cancellation passed (observer 38668322225 attempt 2, 36 to 0); MCP/device-created data outside accepted scope |
 | AF-06 | passed | 65 contracts, 15 actual wasm runtime assertions and 16 cloud assertions with independent real-D1 zero validator |
 | AF-07 | blocked | Full P2..P4 consumer/platform/device/package/release rollout remains |
 | AF-08 | passed | Recompiled pinned canonical wasm and exact-source compatibility run 38666607691 |
 | AC-1 | passed | Accepted-source main contracts 65/65, no failed/skipped, exit 0 |
-| AC-2 | blocked | Cloud auth passed; literal cancellation observation pending; actual device/MCP consumers remain |
+| AC-2 | blocked | Cloud auth passed; literal cancellation passed; actual device/MCP consumers remain |
 | AC-3 | passed | Production ordinary provision retirement merged earlier; cloud uses only independently bound test D1s |
 | AC-4 | blocked | Full P0..P4 integration/release program not complete |
 | AC-5 | passed | Actual pinned wasm, digest, 15 runtime assertions and independent source/result validator |
@@ -235,3 +235,6 @@ The hosted spec's latest compliance section is authoritative for this slice.
 The @ci.invalid bridge is real canonical code transport for isolated tests, not
 SMTP acceptance. Core JWT expiry is unchanged; independent cloud janitor bounds
 effective account/session lifetime. This is not formal product release evidence.
+
+Literal cancellation evidence: https://github.com/bhrumom/fabushi-backend/actions/runs/38668322225 (attempt 2).
+Cancelled prepare: https://github.com/bhrumom/fabushi-backend/actions/runs/38668206894.
