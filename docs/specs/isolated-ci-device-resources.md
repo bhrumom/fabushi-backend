@@ -73,3 +73,24 @@ User2026-10-15: use standard factory and finish external conditions. Backend
 cloud sourcef6dbe641 accepted auth-only; CorePR23 fixes stale ordinary session
 authorization found during this discovery. Account/Remote Computer SQL reviewed
 at Coref781e6c; inherited current schema remains source of truth.
+
+## Accepted cloud lifecycle and remaining cancellation evidence
+Source4ccf4f31ce035b19a0b697828f091d320e04b77b, Corec7d0e24b7561c6f5d1bb3c0e975f599643252504:
+Actions38696016535 passed74/74 contracts,28/28 actual remote-cloud assertions,
+exit0, no skipped tests. Independent remote inspection reports auth remaining0,
+platform remaining0. Device registration/idempotent directory, pair/session
+reconcile, cross-account denials, revoked/deleted signed-token list/register/
+heartbeat denials and abandoned-client device TTL all passed. DR01–07/AC1/AC2
+passed for this slice. Account MCP/delegation cleanup has actual SQLite contracts;
+no live OAuth/MCP call or physical Host is claimed. AC3 remains blocked separately.
+
+DR08: Extend the existing authorized main cancellation consumer to register one
+ordinary owned device before its job is actually cancelled. Preserve sanitized
+metadata/references and positive platform count. An independent read-only observer
+must verify the actual cancelled GitHub identity, see positive live platform rows
+before expiry, and auth/platform counts both zero after independent cloud TTL.
+It must not call cleanup/sweep, register devices, mutate D1 or use production
+resources. Missing/late metadata or unsupported ownership fails. Publish actual
+factory/Core source separately from consumer/observer source, as before. Existing
+74 contracts and read-only query guards remain required; runtime cancellation is
+accepted only after actual prepare/cancel/observe. No OIDC policy change required.
