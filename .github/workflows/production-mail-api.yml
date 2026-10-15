@@ -6,6 +6,12 @@ on:
     branches: [main]
     paths: ['ops/production-mail-api/**', '.github/workflows/production-mail-api.yml']
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: Install exact verified mail API and sender-dependent relay
+        required: true
+        default: false
+        type: boolean
 permissions:
   contents: read
 jobs:
@@ -23,3 +29,60 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
           python3 -m unittest discover -s ops/production-mail-api -p 'test_*.py' -v
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.FABUSHI_FDN_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.FABUSHI_FDN_DEPLOY_USER }}
+      DEPLOY_KEY: ${{ secrets.FABUSHI_FDN_DEPLOY_SSH_KEY }}
+      KNOWN_HOSTS: ${{ secrets.FABUSHI_FDN_DEPLOY_KNOWN_HOSTS }}
+      RELAY_B64: ${{ secrets.FABUSHI_MAIL_RELAY_CREDENTIALS_B64 }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require protected main and all real deployment inputs
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_KEY KNOWN_HOSTS RELAY_B64; do
+            test -n "${!name}"
+          done
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          printf '%s' "$RELAY_B64" | base64 --decode > "$RUNNER_TEMP/relay.json"
+      - name: Stage exact source and private relay credentials
+        run: |
+          set -euo pipefail
+          stage="/tmp/fabushi-mail-$GITHUB_RUN_ID"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "umask 077; mkdir '$stage'"
+          scp ops/production-mail-api/app.py ops/production-mail-api/install-relay.py "$RUNNER_TEMP/relay.json" "$DEPLOY_USER@$DEPLOY_HOST:$stage/"
+      - name: Install narrow relay configuration and record deployment provenance
+        run: |
+          set -euo pipefail
+          stage="/tmp/fabushi-mail-$GITHUB_RUN_ID"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo python3 '$stage/install-relay.py' '$stage/app.py' '$stage/relay.json'" > "$RUNNER_TEMP/mail-install.json"
+          jq --arg sha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" '. + {backendSha:$sha,runId:$run}' "$RUNNER_TEMP/mail-install.json" > "$RUNNER_TEMP/mail-deployment.json"
+      - name: Remove transient credential copies
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/relay.json" "$HOME/.ssh/id_ed25519"
+          if test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER" && test -n "$DEPLOY_KEY"; then
+            umask 077
+            printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/mail-cleanup-key"
+            ssh -i "$RUNNER_TEMP/mail-cleanup-key" "$DEPLOY_USER@$DEPLOY_HOST" "rm -f '/tmp/fabushi-mail-$GITHUB_RUN_ID/relay.json'" || true
+            rm -f "$RUNNER_TEMP/mail-cleanup-key"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mail-deployment-${{ github.sha }}-${{ github.run_id }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/mail-deployment.json
