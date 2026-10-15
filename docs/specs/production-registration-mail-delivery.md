@@ -21,3 +21,23 @@ Discover relay and sender/domain configuration -> configure minimal approved sub
 
 ## Provenance
 User2026-10-15: API registration is allowed; subsequent instruction "我怎么解决，你需要去解决". Authenticated bhrum2 readback: fabushi-mail-api and Postfix active; relayhost empty;12 queued recipient delay reports are TCP25 timeout. Canonical Backend system-mail.js/auth-provider-bridge.js and Core account.rs/identity_auth.rs inspected. Official Oracle Email Delivery supports approved sender plus authenticated TLS587/HTTPS; exact account availability remains discovery.
+
+## Concrete repair design (before implementation)
+MAIL07: Existing mail API invokes sendmail without an envelope sender. Align the
+SMTP envelope by passing -f with its existing configured MAIL_FROM, not a request
+field. Reject CR/LF in the configured sender and retain message From alignment.
+Do not log sendmail stderr or tracebacks containing message/recipient data.
+MAIL08: Use sender-dependent Postfix relay/auth maps for the one approved address;
+keep global relayhost, unrelated queued senders and existing routing unchanged.
+Use root-readable texthash maps, SMTP SASL with no anonymous mechanisms, and exact
+relay TLS policy 'secure' with certificate hostname matching. Refuse unknown
+preexisting sender/auth/TLS maps rather than silently replacing them. Keep old
+files/settings for rollback. Never flush all queued mail as a test.
+MAIL09: Canonicalize the existing deployed /opt/fabushi-mail-api/app.py into the
+Backend ops owner; it remains the same listener/bridge/OS identity. Actions must
+prove configured envelope/header alignment and redacted submission failure, plus
+validate deployment configuration and exact-source packaging before installation.
+Production credentials are supplied only as protected environment/file inputs.
+Verified endpoint smtp.email.us-phoenix-1.oci.oraclecloud.com:587; existing sender
+amitabha@ombhrum.com. Cloud UI confirmed empty prior email-domain list; domain
+ombhrum.com created and DKIM fabushi-20261015 generated under explicit approval.
