@@ -27,14 +27,17 @@ boundaries, and enable exact-source Actions delivery when real service prerequis
   Do not invent placeholder/production credentials or promote account tokens.
 - ENV-06: Use standard isolated account factory for test identities (user 2026-10-15
   follow-up). Never provision legacy privileged TestAccount or SQL users, and never
-  send isolated test credentials to production Core. Factory #75 is currently fixing
-  hosted OIDC allocation; factory auth-only janitor does not yet accept device/MCP data.
+  send isolated test credentials to production Core. Factory cloud device lifecycle now passes28/28 actual assertions at4ccf4f31
+  (run38696016535), with independent auth/platform zero-row verification. Literal
+  cancellation TTL also passes38699994522. These isolated accounts remain test-only.
 - ENV-07: All executable verification/deployment acceptance in GitHub Actions only.
   Remote server administration and read-only inventory allowed; no server tests.
 
 ## Current / target state and architecture
 Server bhrum2 has legacy official MCP at loopback8792 and rootful Docker workloads.
-It has no /etc/fabushi, FDN systemd services, Headscale or rootless coordinator.
+Dedicated fdnuid993 rootless Docker, Headscale0.29.5, Core authority,
+DNS-only fdn.ombhrum.com TLS ingress and public UDP3478 are now configured.
+Only the new controller/MCP/enrollment stack awaits the real account/cell payloads.
 Existing legacy service and ingress stay untouched until an accepted cutover plan.
 FDN new MCP defaults8790, already used by another service: production MCP port
 and ingress must be explicitly reconciled, not overwritten by a generated payload.
@@ -58,12 +61,12 @@ and cleanup support pass; no production smoke using isolated test credentials.
 ## Acceptance and compliance
 | ID | Status | Evidence |
 | --- | --- | --- |
-| ENV-01/02 | blocked | Bootstrap and readback pending |
-| ENV-03/04 | blocked | Workflow correction and exact-head Actions pending |
-| ENV-05 | blocked | Headscale/rootless Docker/Core service authority not configured |
-| ENV-06 | blocked | Hosted factory allocation #75 pending; device/MCP cleanup separate |
+| ENV-01/02 | passed | Four encrypted production SSH values; probe38670452945 |
+| ENV-03/04 | passed | PR76 ARM64 and service identity bootstrap integrated |
+| ENV-05 | blocked | Infrastructure configured; actual production subject/cell and three service payloads pending |
+| ENV-06 | passed | Factory4ccf4f31 run38696016535 actual28/28, zero-row verifier; cancelled-run TTL38699994522 auth/platform0 |
 | ENV-07 | passed | Investigation only outside Actions; no builds/tests executed |
-| AC-1 four SSH inputs securely set | blocked | Pending |
+| AC-1 four SSH inputs securely set | passed | Protected production secret names/timestamps and SSH probe38670452945 |
 | AC-2 all seven real inputs and deployed healthy exact-source stack | blocked | ENV-05 |
 | AC-3 production OAuth/direct/DERP/WSS/isolation/revoke/recovery | blocked | AC-2 and scoped fixture infrastructure |
 
@@ -87,3 +90,68 @@ sudo availability and absence/presence of service configuration without deployin
 Do not execute builds or tests on the server; this probe is read-only configuration
 inventory from Actions. Record only fixed booleans and architecture.
 Four FDN SSH input names confirmed encrypted in production at2026-10-15T01:01Z.
+
+## Dedicated ordinary production subject (user decision2026-10-15)
+
+The user explicitly selected creating a new dedicated production account rather
+than providing an existing account. This is ordinary production registration owned
+by Core, independent of the standard isolated test factory and its janitor.
+
+- PA01: Use canonical browser register/code/register/login flow against production
+  Core. Proposed username fdn_acceptance_20261015; verified operator Gmail alias
+  bhrumom+fabushi-fdn-acceptance-20261015@gmail.com receives a real code. No SQL
+  insert, privileged TestAccount, isolated credential promotion or second issuer.
+- PA02: Operator enters/retains the new password and completes registration/terms
+  in the prepared browser. Never request password/code in chat, expose session
+  credentials in logs/artifacts, or automatically save them in browser storage.
+- PA03: Read immutable production account ID only after canonical authentication;
+  derive exact Core cell using existing authority projection. Username/email/IP
+  must never substitute for immutable ID. Keep controller and enrollment secrets
+  distinct from ordinary user credentials. Account is persistent and purpose-bound;
+  isolated factory TTL/janitor is not authorized to delete production rows.
+- PA04: Securely assemble the remaining three production payloads with real cell,
+  controller AuthKey, dedicated rootless Docker, private loopback ports, separate
+  broker/state/vault keys and Core authority. No placeholder, missing prerequisite
+  or ordinary account token is accepted by service configuration. Preserve legacy
+  MCP ingress until explicit validated cutover.
+- PA05: All executable acceptance runs in Actions, records exact source, commands,
+  exit/counts and sanitized artifacts. Registration success alone does not prove
+  production MCP OAuth/direct/DERP/WSS/isolation/revoke/outcome_unknown behavior.
+
+Plan: prepared canonical registration -> operator credential/terms submission ->
+canonical identity readback -> existing Core cell/controller enrollment -> encrypted
+three-value configuration -> exact-source delivery -> real production acceptance.
+On registration response loss, reconcile account ownership through canonical login;
+never blindly re-register or mutate D1. On deployment uncertainty preserve journal
+and fail closed. Rollback stops only new FDN units/ingress, retaining account and
+existing legacy service. Account deletion or credential reset is a separate request.
+
+Current PA01 registration page prepared; PA02 pending operator completion; PA03–05
+blocked on actual production identity and subsequent deployment. Requirements are
+not relaxed by successful isolated factory or public infrastructure checks.
+
+## Infrastructure / factory evidence refresh
+
+- Core live-account/session guard:c7d0e24b7561c6f5d1bb3c0e975f599643252504;
+  canonical production delivery38695093688 passed. This is not an end-to-end
+  production subject/MCP acceptance result.
+- Backend infrastructure sourcee35cc868a13f1809ec40337cc02a4692893b31d7;
+  public probe38700633492 passed8/8, skipped0, exit0: DNS exact destination,
+  real TLS health, DERP latency endpoint, four admin403s, external STUN binding.
+  STUN accepts pinned upstream IPv4-mapped response representation and still
+  requires a public IPv4, exact packet identity/source and nonzero mapped port.
+- Isolated device factory source4ccf4f31ce035b19a0b697828f091d320e04b77b,
+  Corec7d0e24, run38696016535:74 contracts and28 actual cloud assertions pass;
+  independent auth/platform remaining0. No isolated identity becomes production.
+- Literal cancelled consumer38699748493/observer38699994522 at3373f2ad84ad4df3cacd1c6d0ac28cbcc9c5d2a4:
+  initial37 rows including1 platform device; after expiry auth0/platform0/total0.
+  Observer performs no sweep/cleanup and checked actual cancelled run identity.
+- Dedicated rootless daemon uses source-preserving slirp4netns and disables its
+  own userland proxy. Existing official br_netfilter kernel module is loaded and
+  persisted as a documented host prerequisite; no sysctl/rootful daemon change.
+- Oracle NSG fabushi-fdn-bhrum2-stun attaches only target primary VNIC and allows
+  stateful UDP3478 ingress. Shared subnet security list remains unchanged.
+
+Remaining AC-2/3 and PA03–05 stay blocked. Public endpoint probes do not establish
+private enrolled direct/DERP routing, reverse-WSS tool calls, per-account denial,
+revocation, response-loss/outcome_unknown, or an installed Host acceptance.
