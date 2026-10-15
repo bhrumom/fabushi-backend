@@ -53,3 +53,7 @@ test('janitor fails closed when account owns resources outside accepted auth sco
 test('cloud resources remain independent and runtime-independent factory is reusable',()=>{
  const r=JSON.parse(readFileSync(new URL('./cloud/resources.json',import.meta.url)));assert.equal(r.environment,'ci-isolated');assert.notEqual(r.accountDbId,r.platformDbId);assert.ok(!r.productionResourceIds.includes(r.accountDbId));assert.ok(!r.productionResourceIds.includes(r.platformDbId));assert.equal(typeof AccountFactory,'function');
 });
+
+test('janitor fails closed on changed email instead of claiming clean',async()=>{
+ const {db,janitor,input}=janitorFixture();await janitor.capture(input);db.exec("UPDATE users SET email='changed@ci.invalid' WHERE id=1");await assert.rejects(janitor.remove(input),/identity_changed/);assert.equal(db.prepare('SELECT count(*) AS n FROM users').get().n,2);
+});

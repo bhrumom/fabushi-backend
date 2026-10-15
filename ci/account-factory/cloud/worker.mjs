@@ -23,7 +23,8 @@ export class AccountLeaseOwner extends DurableObject {
     super(ctx,env); this.env=env; const config=configuration(env);
     this.journal=new DurableJournal(ctx.storage);
     const auth=new CanonicalAuthAdapter({config,mailbox:{receive:async({email})=>this.journal.consume(email)}});
-    this.factory=new AccountFactory({config,journal:this.journal,auth,janitor:new CloudJanitor(env.ACCOUNT_DB,this.journal),quota:10,ttlMs:900000});
+    this.janitor=new CloudJanitor(env.ACCOUNT_DB,this.journal);
+    this.factory=new AccountFactory({config,journal:this.journal,auth,janitor:this.janitor,quota:10,ttlMs:900000});
     this.handler=fixtureHandler({factory:this.factory,policy:JSON.parse(env.OIDC_POLICY)});
     this.tail=Promise.resolve();
   }
@@ -50,7 +51,18 @@ export class AccountLeaseOwner extends DurableObject {
       const results=await this.factory.sweep(); this.journal.purgeMail();
       return json({status:results.some(r=>r.status==='blocked')?'blocked':'ok',results});
     });
-    return this.serialize(()=>this.handler(request));
+    return this.serialize(async()=>{
+      const response=await this.handler(request);
+      if(response.status===201){
+        // Capture non-secret stable IDs before returning credentials. Later
+        // profile changes cannot hide owned child rows from residual inspection.
+        const {leaseId}=await response.clone().json();
+        const lease=this.journal.get(leaseId);
+        try{await this.janitor.capture({leaseId,accounts:lease.accounts});}
+        catch{return json({error:'cleanup_tracking_failed'},503);}
+      }
+      return response;
+    });
   }
 }
 export default {

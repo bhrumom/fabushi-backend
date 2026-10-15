@@ -17,7 +17,8 @@ export class CloudJanitor {
     this.validate(input);
     const previous = this.journal.references(input.leaseId) || { users: [], sessions: [], principals: [], identities: [] };
     for (const a of input.accounts) {
-      const users = await this.all('SELECT id FROM users WHERE username=? AND email=?', a.username, a.email);
+      const users = await this.all('SELECT id, username, email FROM users WHERE username=? OR email=?', a.username, a.email);
+      if (users.some(u => u.username !== a.username || u.email !== a.email)) throw Error('janitor_identity_changed');
       for (const { id } of users) {
         previous.users.push(id);
         previous.sessions.push(...(await this.all('SELECT session_id FROM account_sessions WHERE user_id=?', id)).map(r=>r.session_id));

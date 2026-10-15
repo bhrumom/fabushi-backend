@@ -148,3 +148,10 @@ this is distinct from literal cancellation of a running Actions job. Until a
 separate cancelled-job run is observed reclaimed, cancellation acceptance remains
 blocked even if the abandoned-client TTL smoke passes. Auth-only cloud acceptance
 does not supersede AC-2/AC-4 of the parent program or device/MCP cleanup gates.
+
+Deployment security: before saving the dedicated credential, restrict the GitHub
+ci-isolated environment to main deployments. Preserve any stronger existing
+protection rules; never allow untrusted branch workflows to obtain cloud secrets.
+The hosted handler snapshots non-secret account/session/principal IDs before
+returning credentials; janitor refuses inconsistent planned email/username rather
+than reporting a false zero-residual result after profile changes.
