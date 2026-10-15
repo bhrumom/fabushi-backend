@@ -119,3 +119,32 @@ Cloudflare Durable Object SQLite API and GitHub OIDC official docs.
 | Criterion | Status | Evidence / reason |
 | --- | --- | --- |
 | HAF-01..07 / HAC-1..4 | blocked | Implementation, configuration and cloud Actions evidence pending |
+
+## 18. Pre-deployment compliance review
+
+Implementation tree: 66ba75d5cfb8f066e583007a4b816c236ed1ba5a;
+Backend implementation SHA: d3ea951c806855cc7cdcf1d3d8fb831de086a8a7.
+Actions 38659521876: 56 contracts, 56 passed, zero failed/skipped, exit 0;
+Wrangler 4.151.0 actual factory dry-run bundle succeeded (25.35 KiB).
+Actions 38659603779: pinned actual Core wasm runtime and independent evidence
+validator passed all 15 assertions, exit 0. This remains emulated D1 evidence.
+
+| Criterion | Status | Evidence / remaining obligation |
+| --- | --- | --- |
+| HAF-01 | blocked | UI created test ACCOUNT_DB 459512de-7c4b-4194-bd66-d379efab79a8 and PLATFORM_DB 6807cd15-0dc7-4088-97bf-170302858fab; deployed keys/bindings not yet verified |
+| HAF-02 | blocked | Shared factory refactor + durable reservation/restart contracts pass; actual hosted lifecycle owner not yet exercised |
+| HAF-03 | blocked | Reserved-recipient, invalid code, expiry and one-time consumption contracts pass; cloud bridge delivery pending; SMTP explicitly out of scope |
+| HAF-04 | blocked | Ownership, unrelated-account preservation, partial deletion/orphan detection and outside-scope refusal contracts pass; actual remote D1 janitor pending |
+| HAF-05 | blocked | Cron implemented; actual wall-clock TTL and literal client cancellation not yet verified |
+| HAF-06 | blocked | Dedicated token configured only to review page, not created; action-time permission confirmation pending |
+| HAF-07 | passed | Only Actions executed product contracts/build/runtime; no local executable verification; missing deployment credential fails explicitly |
+| HAC-1 | passed | 56 contracts and actual Worker bundle at implementation source; canonical runtime regression 15/15 |
+| HAC-2 | blocked | Real resource creation confirmed by UI, Workers deployment/version/binding readback pending |
+| HAC-3 | blocked | No hosted auth lifecycle PASS claimed |
+| HAC-4 | blocked | No independent hosted TTL PASS claimed |
+
+Cloud smoke abandons a completed allocation client and waits without cleanup;
+this is distinct from literal cancellation of a running Actions job. Until a
+separate cancelled-job run is observed reclaimed, cancellation acceptance remains
+blocked even if the abandoned-client TTL smoke passes. Auth-only cloud acceptance
+does not supersede AC-2/AC-4 of the parent program or device/MCP cleanup gates.
