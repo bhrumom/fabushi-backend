@@ -121,3 +121,13 @@ test('janitor normalizes persisted numeric IDs for canonical TEXT children and s
  await assert.rejects(janitor.remove(input),/identity_changed/);
  assert.equal(db.prepare('SELECT count(*) AS n FROM account_password_credentials').get().n,1);
 });
+
+test('canonical adapter releases ignored HTML and rejected response streams',async()=>{
+ const config=JSON.parse(readFileSync(new URL('./cloud/resources.json',import.meta.url)));
+ for(const status of [200,503]){let cancelled=false;
+  const adapter=new CanonicalAuthAdapter({config,mailbox:{receive:async()=> '123456'},fetchImpl:async()=>new Response(new ReadableStream({cancel(){cancelled=true;}}),{status})});
+  if(status===200)assert.equal(await adapter.request('/api/auth/browser/register',{}, {html:true}),null);
+  else await assert.rejects(adapter.request('/api/auth/browser/register',{}, {html:true}),/auth_request_failed/);
+  assert.equal(cancelled,true);
+ }
+});
