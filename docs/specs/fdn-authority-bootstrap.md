@@ -70,3 +70,25 @@ User2026-10-15 confirmation;Backend#76;production SSH38670452945;main52a2555;
 Coremainf781e6c;existing network authority guard and cell-snapshot contract.
 Standard factory cloud38666610725 passes ordinary auth only and does not grant
 new consumer workflows or device/MCP cleanup implicitly.
+
+## Production preflight and Core delivery prerequisite
+User confirmed the expiring Workers-Scripts-Edit token. Secret-name API readback
+confirms FABUSHI_FDN_CF_BOOTSTRAP_TOKEN. PR83 merged as44ee2c6; seven contracts pass
+in38671601579. Protected-main preflight38671649756 proves cloud settings readable,
+Core authority absent,server stage absent,unauthenticated FDN route404. No authority
+was generated or published. AB01/02 pass; AB03–05 actual bootstrap remain blocked.
+
+AB07: Existing official-mcp-platform-delivery.yml remains the owner for canonical
+Core release. Permit the explicitly approved FDN production token as the last
+production credential fallback; never use the CI account factory token. Preserve
+all exact-main/exact-Core checks,provider/signing configuration validation,Worker
+build,pre-migration recovery bookmark,migration ordering,health and provenance.
+FDN route404 is a production delivery prerequisite,not permission to bypass auth.
+The accepted token currently has no D1 access. If Actions confirms that insufficient
+permission blocks the existing D1 recovery/migration steps,prepare a separately
+reviewable D1-Edit permission change on the same account and expiry,then obtain
+mandatory action-time confirmation before saving. Do not widen privileges silently.
+
+The existing delivery may discover other unconfigured production values; retain
+those failures. A successful source check/build or token permission check does not
+constitute deployed production routing. Tests/builds remain Actions-only.
