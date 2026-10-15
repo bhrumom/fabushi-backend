@@ -1,0 +1,48 @@
+# FDN public network probe
+
+Status: active; owner: Backend FDN infrastructure; 2026-10-15.
+Parent: FDN-001 and fdn-direct-tls-ingress.md.
+
+## Context and goal
+Confirmed publication run38692737102 proves HTTPS health, administrative denial
+and a local UDP firewall allowance. It does not establish external UDP reachability.
+Prove the fixed public endpoint from an independent GitHub hosted runner without
+creating accounts/nodes or sharing production authority with a test environment.
+
+## Requirements and boundaries
+- NP01: Run only in Actions, against fixed fdn.ombhrum.com:443/3478 and expected
+  IPv4 144.24.17.21. No arbitrary host, workflow input, cloud credential or SSH.
+- NP02: Verify normal TLS health, DERP latency probe, and four administrative
+  paths denied with403. Refuse redirects. DERP probe is reachability only.
+- NP03: Send one RFC5389 UDP Binding Request with random96-bit transaction ID.
+  Require exact remote address, successful Binding Response, magic cookie,
+  matching transaction, bounded/padded attributes and valid mapped IPv4/port.
+  A timeout or malformed response fails; it must never be interpreted as success.
+- NP04: Write sanitized exact source/run/environment, named assertion counts,
+  exit/status and timings even on failure. Do not log mapped runner addresses,
+  packet bodies or sensitive content. Unit regression must reject wrong source,
+  transaction, cookie, truncated attributes and absent/invalid mapped address.
+- NP05: Do not label this direct/DERP tool-call, control-protocol upgrade,
+  enrollment, MCP OAuth or G05/G16 acceptance. Those need authorized real nodes.
+
+## Current and target state; ownership
+Existing Apache/HAProxy/Headscale remain unchanged. A bounded stdlib Python probe
+and hosted Actions workflow extend deployment evidence, not product auth or a
+second network owner. It opens no inbound runner ports and mutates no resources.
+No schema, API, dependencies or production rollout is required.
+
+## Plan, verification and acceptance
+Spec -> protocol parser/probe and Actions -> adversarial parser regression ->
+protected-main actual external run -> record all NP01–05. AC1: independent real
+STUN response plus HTTPS/DERP probes and denial pass on exact main. Missing UDP
+route is blocked, not skip. No local/server executable checks.
+
+## Failure, rollback and observability
+DNS drift, redirect, TLS error, timeout, invalid source/transaction/attributes or
+unexpected HTTP status fail with fixed category and sanitized evidence. No
+automatic mutation retries. Stop/disable this read-only workflow to roll back.
+
+## Provenance
+User2026-10-15 requests finishing real environments. Published sourcef6448703;
+RFC5389 Binding Request/Response; pinned Tailscale1.104.1 ProbeHandler:
+https://pkg.go.dev/tailscale.com@v1.104.1/derp/derpserver .
