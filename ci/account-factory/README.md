@@ -110,3 +110,16 @@ while retaining recovery, deploy an empty trusted-workflow allowlist; cron clean
 continues independently. Restore only through a reviewed main deployment after
 residual inspection. Auth-only cleanup deliberately blocks unsupported owned
 account resources; expanding to MCP/device data needs its own accepted scope.
+
+## Device resource consumer rollout (acceptance pending)
+
+`isolated-ci-device-resources.md` extends the same main cloud delivery consumer
+with canonical Remote Computer schema, account-bound device registration,
+pair/session reconciliation and revoked-token denial. CloudDeviceJanitor supports
+reviewed test PLATFORM_DB Remote Computer rows and account connection/MCP/service
+children, with durable ownership references and independent zero checks. Auth-only
+callers retain CloudJanitor's original fail-closed scope. The initial rollout does
+not add an OIDC workflow or production credentials. It requires Core c7d0e24
+(live ordinary-session authorization) and a successful new cloud run before use.
+This is cloud control-plane acceptance, not a physical Host, official MCP call,
+Headscale/direct/DERP/WSS, packaged app or production credential acceptance.

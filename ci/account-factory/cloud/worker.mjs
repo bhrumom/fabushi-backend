@@ -4,7 +4,7 @@ import { AccountFactory, requireIsolation } from '../factory-core.mjs';
 import { CanonicalAuthAdapter } from '../canonical-auth.mjs';
 import { fixtureHandler } from '../service.mjs';
 import { DurableJournal } from './journal.mjs';
-import { CloudJanitor } from './janitor.mjs';
+import { CloudDeviceJanitor } from './device-janitor.mjs';
 import { failureCategory, observedAuthFetch, safeFailureDetail } from './diagnostics.mjs';
 import { noRedirectFetch } from './transport.mjs';
 
@@ -25,7 +25,7 @@ export class AccountLeaseOwner extends DurableObject {
     super(ctx,env); this.env=env; const config=configuration(env);
     this.journal=new DurableJournal(ctx.storage);
     const auth=new CanonicalAuthAdapter({config,assertRejectsWrongCode:true,fetchImpl:observedAuthFetch(value=>{this.authHistory.push(value);this.diagnostic=value;},noRedirectFetch()),mailbox:{receive:async({email})=>this.journal.consume(email)}});
-    this.janitor=new CloudJanitor(env.ACCOUNT_DB,this.journal);
+    this.janitor=new CloudDeviceJanitor(env.ACCOUNT_DB,env.PLATFORM_DB,this.journal);
     this.factory=new AccountFactory({config,journal:this.journal,auth,janitor:this.janitor,quota:10,ttlMs:900000});
     this.handler=fixtureHandler({factory:this.factory,oidcOptions:{fetchImpl:noRedirectFetch()},policy:JSON.parse(env.OIDC_POLICY),onError:(error,stage)=>{this.diagnostic={...this.diagnostic,...safeFailureDetail(error,stage)};}});
     this.tail=Promise.resolve();this.authHistory=[];this.bridgeCounts={capabilities:0,delivery:0};
