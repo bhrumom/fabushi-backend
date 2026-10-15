@@ -1,0 +1,75 @@
+name: FDN authority bootstrap
+on:
+  pull_request:
+    paths:
+      - .github/scripts/fdn-authority-bootstrap*
+      - .github/workflows/fdn-authority-bootstrap.yml
+      - docs/specs/fdn-authority-bootstrap.md
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: Initialize missing Core authority using securely staged server material
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: fdn-authority-bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Test one-time initialization and redaction boundaries
+        run: node --test .github/scripts/fdn-authority-bootstrap.test.mjs
+  configure:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: production
+    steps:
+      - name: Require canonical main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Prepare pinned SSH
+        env:
+          KEY: ${{ secrets.FABUSHI_FDN_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.FABUSHI_FDN_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$KEY" && test -n "$KNOWN_HOSTS"
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+      - name: Inspect or bootstrap real Core authority
+        env:
+          CF_BOOTSTRAP_TOKEN: ${{ secrets.FABUSHI_FDN_CF_BOOTSTRAP_TOKEN }}
+          DEPLOY_HOST: ${{ secrets.FABUSHI_FDN_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.FABUSHI_FDN_DEPLOY_USER }}
+          CORE_SHA: f781e6c85375ba0945aa4fd4c19ead89e396dfdb
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+        run: node .github/scripts/fdn-authority-bootstrap.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fdn-authority-${{ github.sha }}-${{ github.run_id }}
+          path: evidence/fdn-authority-bootstrap.json
+          if-no-files-found: error
+      - name: Remove temporary SSH key
+        if: always()
+        run: rm -f "$HOME/.ssh/id_ed25519"
