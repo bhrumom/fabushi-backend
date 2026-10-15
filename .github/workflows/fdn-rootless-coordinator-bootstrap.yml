@@ -1,0 +1,78 @@
+name: FDN rootless coordinator bootstrap
+on:
+  pull_request:
+    paths:
+      - fdn-network-coordinator/bootstrap-rootless-controller.sh
+      - .github/workflows/fdn-rootless-coordinator-bootstrap.yml
+      - docs/specs/fdn-rootless-coordinator-bootstrap.md
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fdn-rootless-coordinator-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Check installer and render exact coordinator configuration
+        working-directory: fdn-network-coordinator
+        env:
+          FABUSHI_FDN_HEADSCALE_SERVER_URL: https://fdn.ombhrum.com
+        run: |
+          set -euo pipefail
+          bash -n bootstrap-rootless-controller.sh
+          bash render-config.sh
+          docker compose config --quiet
+          docker run --rm -v "$PWD/runtime/config.yaml:/etc/headscale/config.yaml:ro" -v "$PWD/runtime:/etc/headscale/fdn-runtime:ro" docker.io/headscale/headscale:0.29.5 configtest
+          tar -czf "$RUNNER_TEMP/fdn-rootless-coordinator.tgz" docker-compose.yml runtime config.yaml.template policy.hujson bootstrap-rootless-controller.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fdn-rootless-coordinator-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/fdn-rootless-coordinator.tgz
+          if-no-files-found: error
+  install:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.FABUSHI_FDN_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.FABUSHI_FDN_DEPLOY_USER }}
+    steps:
+      - name: Require canonical main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/download-artifact@v5
+        with:
+          name: fdn-rootless-coordinator-${{ github.sha }}
+      - name: Prepare pinned SSH identity
+        env:
+          KEY: ${{ secrets.FABUSHI_FDN_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.FABUSHI_FDN_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+      - name: Install dedicated rootless coordinator infrastructure
+        run: |
+          set -euo pipefail
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes fdn-rootless-coordinator.tgz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/fdn-rootless-coordinator-$GITHUB_SHA.tgz"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "tar -xOf /tmp/fdn-rootless-coordinator-$GITHUB_SHA.tgz bootstrap-rootless-controller.sh | sudo bash -s -- /tmp/fdn-rootless-coordinator-$GITHUB_SHA.tgz $GITHUB_SHA" > fdn-rootless-deployment.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fdn-rootless-deployed-${{ github.sha }}
+          path: fdn-rootless-deployment.txt
+          if-no-files-found: error
+      - name: Remove temporary deployment material
+        if: always()
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "rm -f /tmp/fdn-rootless-coordinator-$GITHUB_SHA.tgz" || true
+          rm -f "$HOME/.ssh/id_ed25519"
