@@ -1,4 +1,4 @@
-import { requireIsolation } from './factory.mjs';
+import { requireIsolation } from './factory-core.mjs';
 
 export class CanonicalAuthAdapter {
   constructor({ config, mailbox, fetchImpl = fetch }) {

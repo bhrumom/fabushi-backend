@@ -27,6 +27,13 @@ jobs:
           mkdir -p evidence
           node --test --test-reporter=tap ci/account-factory/*.test.mjs | tee evidence/contracts.tap
           printf '{"kind":"contract-tests","sourceSha":"%s","runId":"%s","runAttempt":"%s","exitCode":0,"liveAccountLifecycle":"NOT_VERIFIED"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > evidence/source.json
+      - name: Bundle actual Cloudflare factory runtime without cloud credentials
+        env:
+          CORE_SHA: f781e6c85375ba0945aa4fd4c19ead89e396dfdb
+        run: |
+          npm install --prefix "$RUNNER_TEMP/cloud-tools" --no-audit --no-fund wrangler@4.151.0
+          node ci/account-factory/cloud/prepare.mjs
+          "$RUNNER_TEMP/cloud-tools/node_modules/.bin/wrangler" deploy --dry-run --config "$RUNNER_TEMP/cloud-accounts/factory.json" --outdir "$RUNNER_TEMP/cloud-factory-bundle"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
