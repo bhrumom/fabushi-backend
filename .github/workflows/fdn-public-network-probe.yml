@@ -1,0 +1,30 @@
+name: FDN public network probe
+on:
+  pull_request:
+    paths:
+      - .github/scripts/*fdn-public-network-probe.py
+      - .github/workflows/fdn-public-network-probe.yml
+      - docs/specs/fdn-public-network-probe.md
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Adversarial STUN response validation
+        run: python3 .github/scripts/test-fdn-public-network-probe.py
+      - name: Probe fixed public infrastructure from independent runner
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        run: python3 .github/scripts/fdn-public-network-probe.py
+      - uses: actions/upload-artifact@v4
+        if: always() && github.event_name == 'workflow_dispatch'
+        with:
+          name: fdn-public-network-${{ github.sha }}-${{ github.run_id }}
+          path: evidence/fdn-public-network.json
+          if-no-files-found: error
