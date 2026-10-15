@@ -47,13 +47,19 @@ def mapped_response(packet, transaction, source):
             raise ValueError('stun_attribute_invalid')
         value = packet[offset + 4:end]
         if tag in (0x0001, 0x0020):
-            if len(value) != 8 or value[:2] != b'\x00\x01':
+            family = value[1] if len(value) >= 4 else 0
+            if value[:1] != b'\x00' or family not in (1, 2) or len(value) != (8 if family == 1 else 20):
                 raise ValueError('stun_mapping_invalid')
-            port, address = struct.unpack('!HI', value[2:])
+            port = struct.unpack('!H', value[2:4])[0]
+            encoded = value[4:]
             if tag == 0x0020:
                 port ^= COOKIE >> 16
-                address ^= COOKIE
-            if not port or not ipaddress.IPv4Address(address).is_global:
+                mask = struct.pack('!I', COOKIE) + transaction
+                encoded = bytes(a ^ b for a, b in zip(encoded, mask))
+            address = ipaddress.ip_address(encoded)
+            if isinstance(address, ipaddress.IPv6Address):
+                address = address.ipv4_mapped
+            if not port or not isinstance(address, ipaddress.IPv4Address) or not address.is_global:
                 raise ValueError('stun_mapping_invalid')
             found = True
         offset = padded

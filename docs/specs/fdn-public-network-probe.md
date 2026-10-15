@@ -58,3 +58,19 @@ Tailscale1.104.1 net/stun/stun.go finds ParseBindingRequest requires SOFTWARE
 and FINGERPRINT; the generic initial request lacked both. Preserve failures,
 verify pinned parser interoperability, then rerun actual external acceptance.
 Reference: https://github.com/tailscale/tailscale/blob/v1.104.1/net/stun/stun.go .
+
+## IPv4-mapped IPv6 response correction
+Headscale0.29.5 serverSTUNListener uses netip.AddrFromSlice on UDPAddr.IP without
+Unmap; a valid IPv4 peer may be encoded as family2 IPv4-mapped IPv6. The initial
+parser reported the same stun_mapping_invalid for an unsupported family and a
+private address, so that status alone did not establish private source rewriting.
+NP06: Accept a correctly decoded public IPv4 mapping in either family1 or family2
+IPv4-mapped representation. Decode XOR mask with cookie+transaction exactly;
+keep strict source/transaction/length/public IPv4/port checks and reject private,
+loopback, malformed or unrelated IPv6 mappings. Test interoperability against the
+pinned upstream Response generator, not only handcrafted packets, then run actual
+external acceptance. No extra host change is justified by the old generic error
+without this discriminating probe. Earlier rootless configuration deliveries and
+rollback remain recorded but do not prove the external source-address property.
+Reference: Headscalev0.29.5 hscontrol/derp/server/derp_server.go lines389–390;
+Tailscalev1.104.1 net/stun/stun.go Response/ParseResponse unmapping behavior.
