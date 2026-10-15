@@ -1,0 +1,13 @@
+{
+  "environment": "ci-isolated",
+  "accountId": "c9b14ac29b7815a5fcc704799d1a0f25",
+  "accountDbId": "459512de-7c4b-4194-bd66-d379efab79a8",
+  "platformDbId": "6807cd15-0dc7-4088-97bf-170302858fab",
+  "mailboxResourceId": "fabushi-ci-isolated-lease-owner-v1",
+  "authWorker": "fabushi-ci-isolated-auth",
+  "factoryWorker": "fabushi-ci-isolated-accounts",
+  "authOrigin": "https://fabushi-ci-isolated-auth.bhrumom.workers.dev",
+  "factoryOrigin": "https://fabushi-ci-isolated-accounts.bhrumom.workers.dev",
+  "allowedAuthOrigin": "https://fabushi-ci-isolated-auth.bhrumom.workers.dev",
+  "productionResourceIds": ["7b6318f0-fbc2-42f9-9887-85f878ae76d0", "24e53e28-5abd-4850-ae99-cd5d2bdfffb0", "df212fd4-289f-474b-9133-150d13f3a205", "20bc68276a0345ab9b5cbf17c1bd51c5", "94534f35a0a34023a428a065f77f1911", "773e778850ea429d99686ff4fbbe1180", "59c5263942b4436191e6dffbaacc5957"]
+}

@@ -43,3 +43,28 @@ Full requirement and blocked deployment checklist:
 `docs/specs/isolated-ci-account-factory.md`. Full program P0–P4 lives in canonical
 fabushi-governance FCM-027. Existing production TestAccount identities remain
 historical compatibility pending a separate audit, never standard fixture input.
+
+## Hosted Cloudflare adapter
+
+`cloud/` reuses the same factory orchestration and canonical auth adapter, with a
+singleton SQLite Durable Object journal, authenticated registration-code bridge,
+D1 auth-only janitor and independent minute cron. No separate VM or Node runtime
+is required for this adapter. `factory.mjs` still exports the existing Node
+journal/API; `factory-core.mjs` is shared runtime-independent logic.
+
+The two `fabushi-ci-isolated-*` D1 resources in `cloud/resources.json` were created
+through Cloudflare UI on 2026-10-15. Existing development/production DBs are not
+reused. The manual `ci-account-factory-cloud.yml` deploy runs only from main and
+requires `ci-isolated` secret `CI_CLOUDFLARE_API_TOKEN`; no production-secret
+fallback. New RSA/bridge keys are created inside Actions only on first deployment;
+subsequent delivery preserves secrets. Partial bootstrap requires operator
+recovery instead of silently rotating active keys. The cloud workflow binds only
+the two test databases, verifies deployed bindings, runs normal auth acceptance,
+waits for real wall-clock TTL and independently checks real D1 for auth residue.
+
+SMTP delivery remains NOT_VERIFIED: reserved `@ci.invalid` emails use the isolated
+cloud bridge, with real Core-generated/validated codes. This verifies registration
+and auth in cloud, not public mail delivery. Actual cancellation, packaged clients,
+MCP/device data cleanup and cross-device E2E are separate acceptance gates. The
+first janitor blocks when owned resources exist beyond accepted auth-only scope.
+See `docs/specs/hosted-ci-account-factory.md` for requirements and actual evidence.
