@@ -1,0 +1,22 @@
+name: FDN Core delivery contract
+on:
+  pull_request:
+    paths:
+      - .github/workflows/official-mcp-platform-delivery.yml
+      - .github/workflows/fdn-core-delivery-contract.yml
+      - .github/scripts/fdn-core-delivery-contract.test.mjs
+      - docs/specs/fdn-authority-bootstrap.md
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: node --test .github/scripts/fdn-core-delivery-contract.test.mjs

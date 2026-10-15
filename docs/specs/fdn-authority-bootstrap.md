@@ -92,3 +92,22 @@ mandatory action-time confirmation before saving. Do not widen privileges silent
 The existing delivery may discover other unconfigured production values; retain
 those failures. A successful source check/build or token permission check does not
 constitute deployed production routing. Tests/builds remain Actions-only.
+
+## PLATFORM_DB delivery correction
+Existing release38671901555 deployed exactCoref781e6c and migrated ACCOUNT_DB.
+Authority38672077824 safely staged/published one key; immediate read401 failed.
+Reconciliation38672189288 reused that same material without publication and read500.
+Core network snapshot readsPLATFORM_DB.remote_computer_network_bindings; existing
+release migrates onlyACCOUNT_DB. Missing platform migrations are the current
+hypothesis,not accepted proof until actual remote migration inventory is read.
+
+AB08: Existing canonical delivery must always inventory pendingPLATFORM_DB migrations
+and capture its recovery bookmark before any mutation. Add manual migrate_platform
+boolean defaultfalse. A preflight may list but not apply platform migrations. After
+reading the actual pending canonical SQL,an explicittrue dispatch may apply the
+canonicalPLATFORM_DB migration chain before Worker activation. Preserve independent
+ACCOUNT_DB recovery/migration. Upload both recovery bookmarks and pending inventory,
+including on failure. No ad-hocSQL or production account provisioning.
+AB09: Actions contracts cover both-bookmarks-before-mutation,migration-before-deploy,
+explicit migration opt-in,and no isolated cloud credential fallback. Actual schema
+and authority acceptance still require protected-main Actions; no fake passing500.
