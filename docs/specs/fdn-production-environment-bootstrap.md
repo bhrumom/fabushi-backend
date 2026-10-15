@@ -101,9 +101,12 @@ by Core, independent of the standard isolated test factory and its janitor.
   Core. Proposed username fdn_acceptance_20261015; verified operator Gmail alias
   bhrumom+fabushi-fdn-acceptance-20261015@gmail.com receives a real code. No SQL
   insert, privileged TestAccount, isolated credential promotion or second issuer.
-- PA02: Operator enters/retains the new password and completes registration/terms
-  in the prepared browser. Never request password/code in chat, expose session
-  credentials in logs/artifacts, or automatically save them in browser storage.
+- PA02: The ordinary canonical registration APIs may automate account creation
+  with a strong generated password retained only in restricted operator storage.
+  This does not require manual form entry. Browser-only credential/terms handoff
+  rules apply when using computer UI; do not extend them into an invented universal
+  registration requirement. Never request password/code in chat or expose session
+  credentials in logs/artifacts or automatically save them in browser storage.
 - PA03: Read immutable production account ID only after canonical authentication;
   derive exact Core cell using existing authority projection. Username/email/IP
   must never substitute for immutable ID. Keep controller and enrollment secrets
@@ -118,7 +121,7 @@ by Core, independent of the standard isolated test factory and its janitor.
   exit/counts and sanitized artifacts. Registration success alone does not prove
   production MCP OAuth/direct/DERP/WSS/isolation/revoke/outcome_unknown behavior.
 
-Plan: prepared canonical registration -> operator credential/terms submission ->
+Plan: prepared canonical registration -> canonical verified registration (API, or operator UI submission) ->
 canonical identity readback -> existing Core cell/controller enrollment -> encrypted
 three-value configuration -> exact-source delivery -> real production acceptance.
 On registration response loss, reconcile account ownership through canonical login;
@@ -126,7 +129,7 @@ never blindly re-register or mutate D1. On deployment uncertainty preserve journ
 and fail closed. Rollback stops only new FDN units/ingress, retaining account and
 existing legacy service. Account deletion or credential reset is a separate request.
 
-Current PA01 registration page prepared; PA02 pending operator completion; PA03–05
+Current PA01 registration page prepared; PA02 API completion pending real email delivery; PA03–05
 blocked on actual production identity and subsequent deployment. Requirements are
 not relaxed by successful isolated factory or public infrastructure checks.
 
@@ -155,3 +158,9 @@ not relaxed by successful isolated factory or public infrastructure checks.
 Remaining AC-2/3 and PA03–05 stay blocked. Public endpoint probes do not establish
 private enrolled direct/DERP routing, reverse-WSS tool calls, per-account denial,
 revocation, response-loss/outcome_unknown, or an installed Host acceptance.
+
+User follow-up2026-10-15 requests standard API creation instead of assuming mandatory
+manual registration. Core browser/start, browser/register/code, browser/register and
+protected attempt poll are ordinary public registration APIs, not a test issuer.
+Server accepted send request, but actual mailbox delivery is not yet confirmed.
+Do not claim delivered email or a created account from a successful send response.
