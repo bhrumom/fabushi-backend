@@ -204,3 +204,9 @@ actual deployed factory/Core source separately. All executable work remains in
 Actions; operator Git/API dispatch/cancel is allowed locally. This is the
 required evidence for literal client/Actions cancellation acceptance, distinct
 from the original completed-client abandonment smoke.
+
+Cloud run 38662123463 confirms restored flags and deployment pass, but allocation
+still fails before any recorded auth fetch with fixture_request_failed and an
+unclassified category. Add fixed handler-stage and allowlisted stack-function
+labels (not raw stack/error text) so OIDC/body/journal failures can be separated.
+Observers must still not change the response status or disclose credentials.
