@@ -85,13 +85,6 @@ jobs:
           test -n "$MAIL_API_TOKEN"
           echo "::add-mask::$MAIL_API_TOKEN"
           export MAIL_API_TOKEN
-          ssh -o ExitOnForwardFailure=yes -L 127.0.0.1:18790:127.0.0.1:8790 -N "$DEPLOY_USER@$DEPLOY_HOST" &
-          tunnel_pid=$!
-          trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 20); do
-            if curl --silent --fail http://127.0.0.1:18790/healthz >/dev/null; then break; fi
-            sleep 1
-          done
           python3 ops/production-mail-api/submit-verification.py
       - name: Remove transient credential copies
         if: always()
