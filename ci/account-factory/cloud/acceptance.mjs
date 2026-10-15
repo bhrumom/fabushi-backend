@@ -13,6 +13,7 @@ try{
  let health;for(let attempt=0;attempt<12;attempt++){health=await(await fetch(`${r.factoryOrigin}/health`,{signal:AbortSignal.timeout(15000),redirect:'error'})).json();if(health.backendSha===process.env.GITHUB_SHA&&health.coreSha===process.env.CORE_SHA)break;await new Promise(ok=>setTimeout(ok,5000));}report.observedFactorySha=/^[a-f0-9]{40}$/.test(health.backendSha||'')?health.backendSha:'invalid';report.observedCoreSha=/^[a-f0-9]{40}$/.test(health.coreSha||'')?health.coreSha:'invalid';check(health.backendSha===process.env.GITHUB_SHA&&health.coreSha===process.env.CORE_SHA,'exactDeployedSource');
  check((await fixture('/v1/leases','POST',{scenarioId:'denied'},'invalid')).status===401,'invalidOidcDenied');
  check((await fixture('/__scheduled_sweep','POST')).status===404,'publicSweepDenied');
+ check((await fetch(`${r.factoryOrigin}/api/internal/auth-provider/capabilities`,{redirect:'error',signal:AbortSignal.timeout(15000)})).status===403,'unauthenticatedBridgeDenied');
  active=await allocate('cloud-lifecycle');check(active.otpRejectionChecked===true,'invalidVerificationCodeDenied');const [a,b,c]=active.accounts;
  check(active.accounts.length===3&&a.sessions.length===2&&new Set(active.accounts.map(x=>String(x.sessions[0].user.id))).size===3,'ordinaryRegistrationCodeAndLogin');
  const infos=[];for(const session of a.sessions){const response=await auth('/api/auth/user-info',session);if(response.status!==200)throw Error('multi_session_denied');infos.push(await response.json());}
