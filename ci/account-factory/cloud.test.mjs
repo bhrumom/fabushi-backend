@@ -63,7 +63,7 @@ test('failure diagnostics never expose upstream bodies, credentials, codes or er
  const secret='PRIVATE_PASSWORD_123456';let output;
  const fn=observedAuthFetch(value=>{output=value;},async()=>new Response(`Error 1102 ${secret}`,{status:500}));
  await fn('https://test.invalid/api/auth/browser/register',{});
- assert.deepEqual(output,{route:'/api/auth/browser/register',status:500,category:'worker_cpu_limit'});
+ assert.deepEqual(output,{route:'/api/auth/browser/register',status:500,category:'worker_resource_limit'});
  assert.ok(!JSON.stringify(output).includes(secret));assert.equal(failureCategory(Error(secret)),'unclassified_failure');
  assert.equal(failureCategory(Error(`FOREIGN KEY constraint failed: ${secret}`)),'foreign_key_constraint');
  const failing=observedAuthFetch(value=>{output=value;},async()=>{throw Error(secret);});
@@ -89,4 +89,18 @@ test('hosted no-redirect transport rejects redirect without following or forward
  await assert.rejects(wrapper('https://fixed.invalid/auth',{redirect:'error',headers:{authorization:'Bearer PRIVATE_TOKEN'}}),/unsafe_redirect/);
  assert.equal(calls.length,1);assert.equal(calls[0].url,'https://fixed.invalid/auth');assert.equal(calls[0].options.redirect,'manual');
  const ok=noRedirectFetch(async()=>Response.json({ok:true}));assert.deepEqual(await(await ok('https://fixed.invalid/')).json(),{ok:true});
+});
+
+import {CanonicalAuthAdapter} from './canonical-auth.mjs';
+function codeCheckingAdapter(unsafeIssuer=false){
+ const config=JSON.parse(readFileSync(new URL('./cloud/resources.json',import.meta.url)));
+ const adapter=new CanonicalAuthAdapter({config,mailbox:{receive:async()=> '123456'},assertRejectsWrongCode:true});const submissions=[];
+ adapter.request=async(path,body)=>{if(path==='/api/auth/browser/start')return{attemptId:'attempt-1',pollSecret:'private',loginUrl:`${config.authOrigin}/api/auth/browser/portal?attemptId=attempt-1&ticket=proof`};if(path==='/api/auth/browser/register/code')return{};if(path==='/api/auth/browser/register'){submissions.push(body.verificationCode);return null;}if(path.startsWith('/api/auth/browser/attempts/'))return{status:unsafeIssuer||submissions.length===2?'completed':'pending'};throw Error('unexpected_route');};
+ return{adapter,submissions};
+}
+test('cloud code assertion submits guaranteed wrong code, proves rejection, then uses actual delivered code',async()=>{
+ const {adapter,submissions}=codeCheckingAdapter();await adapter.register({username:'user',email:'user@ci.invalid',password:'private',deviceIds:['device']});assert.equal(submissions.length,2);assert.notEqual(submissions[0],submissions[1]);assert.equal(submissions[1],'123456');
+});
+test('cloud code assertion fails closed when issuer completes a wrong-code attempt',async()=>{
+ const {adapter,submissions}=codeCheckingAdapter(true);await assert.rejects(adapter.register({username:'user',email:'user@ci.invalid',password:'private',deviceIds:['device']}),/invalid_code_not_rejected/);assert.equal(submissions.length,1);
 });

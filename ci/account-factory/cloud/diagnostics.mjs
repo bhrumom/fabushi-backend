@@ -12,7 +12,7 @@ export function observedAuthFetch(capture,fetchImpl=fetch) {
       const response=await fetchImpl(url,options);const diagnostic={route,status:response.status};
       if(!response.ok){const reader=response.clone().body?.getReader();let raw='';let bytes=0;
         if(reader)while(bytes<4096){const {done,value}=await reader.read();if(done)break;const part=value.subarray(0,4096-bytes);bytes+=part.byteLength;raw+=new TextDecoder().decode(part);if(bytes>=4096){reader.cancel().catch(()=>{});break;}}
-        if(/1102|CPU time/i.test(raw))diagnostic.category='worker_cpu_limit';else if(/1042/.test(raw))diagnostic.category='worker_interop_blocked';else if(/1101/.test(raw))diagnostic.category='worker_exception';}
+        if(/1102|CPU time|exceeded resource limits/i.test(raw))diagnostic.category='worker_resource_limit';else if(/memory|out of bounds|stack size/i.test(raw))diagnostic.category='worker_memory_limit';else if(/constraint|UNIQUE/i.test(raw))diagnostic.category='database_constraint';else if(/D1_ERROR|SQLITE|database/i.test(raw))diagnostic.category='database_failure';else if(/1042/.test(raw))diagnostic.category='worker_interop_blocked';else if(/1101/.test(raw))diagnostic.category='worker_exception';}
       capture(diagnostic);return response;
     }catch(error){capture({route,status:'transport_failed',category:failureCategory(error)});throw Error('auth_transport_failed');}
   };

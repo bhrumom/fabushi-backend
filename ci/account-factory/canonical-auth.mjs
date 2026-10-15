@@ -1,10 +1,11 @@
 import { requireIsolation } from './factory-core.mjs';
 
 export class CanonicalAuthAdapter {
-  constructor({ config, mailbox, fetchImpl = fetch }) {
+  constructor({ config, mailbox, fetchImpl = fetch, assertRejectsWrongCode = false }) {
     this.origin = requireIsolation(config);
     if (!mailbox?.receive) throw new Error('not_configured');
-    Object.assign(this, { mailbox, fetchImpl });
+    if (typeof assertRejectsWrongCode !== 'boolean') throw Error('invalid_code_assertion_mode');
+    Object.assign(this, { mailbox, fetchImpl, assertRejectsWrongCode });
   }
   async request(path, body, { form = false, html = false } = {}) {
     const response = await this.fetchImpl(`${this.origin}${path}`, {
@@ -24,6 +25,12 @@ export class CanonicalAuthAdapter {
     await this.request('/api/auth/browser/register/code', proof, { form: true });
     const code = await this.mailbox.receive({ email, attemptId: start.attemptId });
     if (!/^\d{6}$/.test(code || '')) throw new Error('invalid_mailbox_code');
+    if (this.assertRejectsWrongCode) {
+      const wrongCode = `${(Number(code[0]) + 1) % 10}${code.slice(1)}`;
+      await this.request('/api/auth/browser/register', { ...proof, username, verificationCode: wrongCode, password, confirmPassword: password }, { form: true, html: true });
+      const denied = await this.request(`/api/auth/browser/attempts/${start.attemptId}`, { pollSecret: start.pollSecret });
+      if (denied.status !== 'pending') throw Error('invalid_code_not_rejected');
+    }
     await this.request('/api/auth/browser/register', { ...proof, username, verificationCode: code, password, confirmPassword: password }, { form: true, html: true });
     const poll = await this.request(`/api/auth/browser/attempts/${start.attemptId}`, { pollSecret: start.pollSecret });
     if (poll.status !== 'completed') throw new Error('registration_not_completed');
