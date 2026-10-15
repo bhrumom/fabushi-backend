@@ -14,7 +14,9 @@ creating accounts/nodes or sharing production authority with a test environment.
   IPv4 144.24.17.21. No arbitrary host, workflow input, cloud credential or SSH.
 - NP02: Verify normal TLS health, DERP latency probe, and four administrative
   paths denied with403. Refuse redirects. DERP probe is reachability only.
-- NP03: Send one RFC5389 UDP Binding Request with random96-bit transaction ID.
+- NP03: Send one RFC5389 UDP Binding Request with random96-bit transaction ID,
+  upstream Tailscale SOFTWARE=tailnode and CRC32 FINGERPRINT. The pinned upstream
+  parser must accept the actual emitted Python packet in Actions.
   Require exact remote address, successful Binding Response, magic cookie,
   matching transaction, bounded/padded attributes and valid mapped IPv4/port.
   A timeout or malformed response fails; it must never be interpreted as success.
@@ -46,3 +48,13 @@ automatic mutation retries. Stop/disable this read-only workflow to roll back.
 User2026-10-15 requests finishing real environments. Published sourcef6448703;
 RFC5389 Binding Request/Response; pinned Tailscale1.104.1 ProbeHandler:
 https://pkg.go.dev/tailscale.com@v1.104.1/derp/derpserver .
+
+## Actual failure follow-up
+Runs38693700361/38693879484 proved UDP did not reach the host. User confirmed
+UDP3478 exposure and logged into OCI. A dedicated fabushi-fdn-bhrum2-stun NSG
+allows only UDP3478 and is attached only to bhrum2 VNIC; shared security list
+unchanged. Run38695411802 reached the host but timed out. Source review of
+Tailscale1.104.1 net/stun/stun.go finds ParseBindingRequest requires SOFTWARE
+and FINGERPRINT; the generic initial request lacked both. Preserve failures,
+verify pinned parser interoperability, then rerun actual external acceptance.
+Reference: https://github.com/tailscale/tailscale/blob/v1.104.1/net/stun/stun.go .
