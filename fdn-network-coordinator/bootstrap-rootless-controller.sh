@@ -38,10 +38,30 @@ cat > "$source_ip_config" <<'SOURCE_IP'
 Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_NET=slirp4netns"
 Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=slirp4netns"
 SOURCE_IP
+source_ip_changed=0
 if ! cmp -s "$source_ip_config" "$user_dropin/20-fdn-source-ip.conf"; then
   install -o fabushi-fdn -g fabushi-fdn -m 0600 "$source_ip_config" "$user_dropin/20-fdn-source-ip.conf"
+  source_ip_changed=1
+fi
+daemon_config=/var/lib/fabushi-fdn/.config/docker/daemon.json
+install -d -o fabushi-fdn -g fabushi-fdn -m 0700 "$(dirname "$daemon_config")"
+printf '%s\n' '{"userland-proxy":false}' > "$source_ip_config"
+new_daemon_config=0
+if [[ -e "$daemon_config" ]]; then
+  cmp -s "$source_ip_config" "$daemon_config" || { echo dedicated_daemon_custom_config_requires_review >&2; exit 64; }
+else
+  install -o fabushi-fdn -g fabushi-fdn -m 0600 "$source_ip_config" "$daemon_config"
+  new_daemon_config=1
+  source_ip_changed=1
+fi
+if [[ $source_ip_changed = 1 ]]; then
   run_user systemctl --user daemon-reload
-  run_user systemctl --user restart docker.service
+  if ! run_user systemctl --user restart docker.service; then
+    if [[ $new_daemon_config = 1 ]]; then rm -f "$daemon_config"; fi
+    run_user systemctl --user restart docker.service || true
+    echo dedicated_daemon_restart_failed >&2
+    exit 64
+  fi
 fi
 run_user systemctl --user enable --now docker.service
 root=/opt/fabushi-fdn-infra
@@ -85,7 +105,7 @@ UNIT
 systemctl daemon-reload
 systemctl enable --now fabushi-fdn-headscale.service
 printf 'source_sha=%s\nrootless_user=fabushi-fdn\nsocket=/run/user/%s/docker.sock\nheadscale_image=docker.io/headscale/headscale:0.29.5\n' "$sha" "$fdn_uid"
-printf 'source_preserving_port_driver=slirp4netns\n'
+printf 'source_preserving_port_driver=slirp4netns\nuserland_proxy=false\n'
 run_user systemctl --user is-active docker.service
 systemctl is-active fabushi-fdn-headscale.service
 run_user env DOCKER_HOST="unix:///run/user/$fdn_uid/docker.sock" docker compose --project-directory "$root/current" --project-name fabushi-fdn-coordinator ps --format json

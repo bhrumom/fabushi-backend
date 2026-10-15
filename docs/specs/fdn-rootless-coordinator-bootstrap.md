@@ -74,3 +74,14 @@ accepted. Reverting only this owned drop-in/restoring the dedicated daemon pause
 this rollout; never delete state. Missing slirp4netns blocks without fallback.
 Reference: Docker official troubleshooting, source IP propagation for prior
 RootlessKit versions: https://docs.docker.com/engine/security/rootless/troubleshoot/ .
+
+RB07: Run38697550872 still rejects the mapped address after actual slirp4netns
+activation. Docker's second userland proxy layer also rewrites the source. The
+inspected dedicated user has no daemon.json. Install only its owned exact
+{"userland-proxy":false} config, fail closed on an incompatible preexisting custom
+config, and restart only this daemon when changed. Retain all original ports and
+isolation. If restart fails, remove only the config newly installed by this run
+and restart the prior dedicated daemon; preserve the failure and state. Do not
+change rootful Docker, sysctls or host networking. Only a new external probe with
+valid public mapped address can accept this repair. Docker official source-IP
+propagation documentation requires userland-proxy disabled.
