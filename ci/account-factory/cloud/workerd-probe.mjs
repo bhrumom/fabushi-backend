@@ -1,0 +1,11 @@
+import {writeFileSync,mkdirSync} from 'node:fs';
+import {join,resolve} from 'node:path';
+import {spawn} from 'node:child_process';
+if(process.env.GITHUB_ACTIONS!=='true'||!process.env.RUNNER_TEMP||process.env.CLOUDFLARE_API_TOKEN)throw Error('actions_without_cloud_credentials_only');
+const dir=join(process.env.RUNNER_TEMP,'workerd-jwks-probe');mkdirSync(dir,{recursive:true});
+// This disposable test entrypoint receives no user token or account request.
+const source=`import {noRedirectFetch} from ${JSON.stringify(resolve('ci/account-factory/cloud/transport.mjs'))};
+export default {async fetch(){let results={};for(const mode of ['error','manual']){try{const r=await fetch('https://token.actions.githubusercontent.com/.well-known/jwks',{redirect:mode,signal:AbortSignal.timeout(10000)});const j=await r.json();results[mode]={status:r.status,hasKeys:Array.isArray(j.keys)};}catch(e){results[mode]={type:e.name,category:/redirect/i.test(e.message)?'redirect_mode':/fetch/i.test(e.message)?'fetch_failure':'other'};}}const r=await noRedirectFetch()('https://token.actions.githubusercontent.com/.well-known/jwks',{redirect:'error',signal:AbortSignal.timeout(10000)});const j=await r.json();results.portable={status:r.status,hasKeys:Array.isArray(j.keys)};return Response.json(results);}};`;
+writeFileSync(join(dir,'worker.mjs'),source);writeFileSync(join(dir,'wrangler.json'),JSON.stringify({name:'ci-workerd-jwks-probe',main:join(dir,'worker.mjs'),compatibility_date:'2026-07-18',compatibility_flags:['nodejs_compat','global_fetch_strictly_public']}));
+const child=spawn(join(process.env.RUNNER_TEMP,'cloud-tools/node_modules/.bin/wrangler'),['dev','--local','--port','9876','--config',join(dir,'wrangler.json')],{stdio:'ignore'});
+try{let result;for(let i=0;i<30;i++){try{const r=await fetch('http://127.0.0.1:9876/',{signal:AbortSignal.timeout(25000)});if(r.ok){result=await r.json();break;}}catch{}await new Promise(ok=>setTimeout(ok,1000));}if(!result||result.portable?.status!==200||!result.portable?.hasKeys)throw Error('workerd_transport_failed');console.log(JSON.stringify({kind:'credential-free-workerd-public-jwks-probe',sourceSha:process.env.GITHUB_SHA,results:result}));}finally{child.kill('SIGTERM');}

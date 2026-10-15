@@ -82,3 +82,11 @@ test('diagnostics reveal fixed stages and known function labels, never raw stack
  const error=Error('PRIVATE_OIDC_123456');error.stack='Error: PRIVATE_OIDC_123456\n at PRIVATE_PASSWORD (secret.js:1:1)\n at DurableJournal.reserve (worker.js:123:1)';
  assert.deepEqual(safeFailureDetail(error,'allocate'),{stage:'allocate',errorType:'Error',reason:'unclassified_failure',frames:['DurableJournal.reserve']});
 });
+
+import {noRedirectFetch} from './cloud/transport.mjs';
+test('hosted no-redirect transport rejects redirect without following or forwarding credentials',async()=>{
+ const calls=[];const wrapper=noRedirectFetch(async(url,options)=>{calls.push({url,options});return new Response('',{status:302,headers:{location:'https://other.invalid/stolen'}});});
+ await assert.rejects(wrapper('https://fixed.invalid/auth',{redirect:'error',headers:{authorization:'Bearer PRIVATE_TOKEN'}}),/unsafe_redirect/);
+ assert.equal(calls.length,1);assert.equal(calls[0].url,'https://fixed.invalid/auth');assert.equal(calls[0].options.redirect,'manual');
+ const ok=noRedirectFetch(async()=>Response.json({ok:true}));assert.deepEqual(await(await ok('https://fixed.invalid/')).json(),{ok:true});
+});

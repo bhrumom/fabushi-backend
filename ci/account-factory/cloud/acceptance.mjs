@@ -10,7 +10,7 @@ const auth=(path,session,body)=>fetch(`${r.authOrigin}${path}`,{method:body?'POS
 async function allocate(scenarioId){const response=await fixture('/v1/leases','POST',{scenarioId});if(response.status!==201){const failure=await response.json().catch(()=>({}));report.allocationFailure={status:response.status,error:failure.error,diagnostic:failure.diagnostic};throw Error(`cloud_allocation_failed:${response.status}`);}const lease=await response.json();report.leases.push({leaseId:lease.leaseId,expiresAt:lease.expiresAt,accounts:lease.accounts.map(({username,email,deviceIds})=>({username,email,deviceIds}))});return lease;}
 try{
  oidc=await identity();
- const health=await(await fetch(`${r.factoryOrigin}/health`,{signal:AbortSignal.timeout(15000),redirect:'error'})).json();check(health.backendSha===process.env.GITHUB_SHA&&health.coreSha===process.env.CORE_SHA,'exactDeployedSource');
+ const health=await(await fetch(`${r.factoryOrigin}/health`,{signal:AbortSignal.timeout(15000),redirect:'error'})).json();report.observedFactorySha=/^[a-f0-9]{40}$/.test(health.backendSha||'')?health.backendSha:'invalid';report.observedCoreSha=/^[a-f0-9]{40}$/.test(health.coreSha||'')?health.coreSha:'invalid';check(health.backendSha===process.env.GITHUB_SHA&&health.coreSha===process.env.CORE_SHA,'exactDeployedSource');
  check((await fixture('/v1/leases','POST',{scenarioId:'denied'},'invalid')).status===401,'invalidOidcDenied');
  check((await fixture('/__scheduled_sweep','POST')).status===404,'publicSweepDenied');
  active=await allocate('cloud-lifecycle');const [a,b,c]=active.accounts;

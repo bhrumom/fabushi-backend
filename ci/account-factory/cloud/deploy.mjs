@@ -45,7 +45,7 @@ try{
   const unexpected=(settings.bindings||[]).filter(x=>!['d1','plain_text','secret_text','durable_object_namespace'].includes(x.type));if(unexpected.length)throw Error('unexpected_bindings');
   report.deployments[worker]=await api(`/workers/scripts/${worker}/deployments`);
  }
- for(const origin of [r.authOrigin,r.factoryOrigin]){let ready=false;for(let attempt=0;attempt<12;attempt++){try{const response=await fetch(`${origin}/health`,{signal:AbortSignal.timeout(15000),redirect:'error'});if(response.ok){ready=true;break;}}catch{}await new Promise(ok=>setTimeout(ok,5000));}if(!ready)throw Error('cloud_health_failed');}
+ for(const origin of [r.authOrigin,r.factoryOrigin]){let ready=false;for(let attempt=0;attempt<12;attempt++){try{const response=await fetch(`${origin}/health`,{signal:AbortSignal.timeout(15000),redirect:'error'});if(response.ok){if(origin===r.factoryOrigin){const health=await response.json();if(health.backendSha!==process.env.GITHUB_SHA||health.coreSha!==process.env.CORE_SHA){await new Promise(ok=>setTimeout(ok,5000));continue;}}ready=true;break;}}catch{}await new Promise(ok=>setTimeout(ok,5000));}if(!ready)throw Error('cloud_health_failed');}
  report.wasmSha256=createHash('sha256').update(readFileSync('core/deploy/platform-worker/build/worker/index.wasm')).digest('hex');
  report.status='PASS'; console.log('Cloud test workers deployed; bindings verified; authentication acceptance still required.');
 }catch(error){console.error(error.message?.startsWith('cloud_api_failed:')?error.message:'cloud_deployment_failed');process.exitCode=1;}
