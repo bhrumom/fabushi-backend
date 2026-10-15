@@ -46,7 +46,15 @@ TLS health + later actual tsnet enrollment/direct/DERP tests. Health alone is no
 G02/G05/G16. No local workstation/server build,test,lint or generator execution.
 
 ## Acceptance,rollback,evidence
-IN01–06/AC1(stage prepared)/AC2(real TLS public endpoint) pending actual Actions.
+IN01–06, AC1 (stage) and AC2 (public TLS endpoint) passed at exact source
+`f644870335ac779d683ff28908fff434c6fb0558`. Stage run38692462081 and confirmed
+publish run38692737102 both succeeded (exit0). Actual artifact records active
+service, running healthy pinned Headscale image, real
+certificate expiring2027-01-13, dedicated hostname vhosts and UDP3478 firewall
+allowance. Cloudflare UI separately confirmed the saved DNS-only A record.
+Public HTTPS health passed; /metrics, /api/v1/node, /swagger and /debug
+each returned403. Actual STUN packet reachability/control upgrade, enrollment and
+direct/DERP/WSS are separate unverified gates; health is not their acceptance.
 Rollback disables onlyfabushi-fdn HTTP/TLS sites and removes only the newUDP3478
 allow rule if this workflow created it; restore prior unchanged routes. Preserve
 certificates/state/keys; do not remove shared Apache/HAProxy. Capture only source,
@@ -54,7 +62,7 @@ mode,runtime state,HTTP/TLS exit,artifact; no production private cert content.
 
 ## Provenance
 User's production environment request and confirmed limited CF token. Public
-publication has not yet been confirmed. Authenticated server inspection shows
+publication was explicitly confirmed by the user after stage delivery on2026-10-15. Authenticated server inspection shows
 HAProxy443,Apache80/9443,existing certbot and registered Let's Encrypt account.
 Headscale deployment reference:
 https://headscale.net/stable/ref/integration/reverse-proxy/ (Cloudflare limitation,
