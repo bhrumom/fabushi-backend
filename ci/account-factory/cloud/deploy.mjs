@@ -40,7 +40,7 @@ try{
  }
  report.deployments={};
  for(const worker of [r.authWorker,r.factoryWorker]){
-  const settings=await api(`/workers/scripts/${worker}/settings`);const dbs=(settings.bindings||[]).filter(x=>x.type==='d1');
+  const settings=await api(`/workers/scripts/${worker}/settings`);if(!settings.compatibility_flags?.includes('global_fetch_strictly_public'))throw Error('worker_interop_flag_missing');const dbs=(settings.bindings||[]).filter(x=>x.type==='d1');
   if(dbs.length!==2||!dbs.some(x=>x.name==='ACCOUNT_DB'&&x.id===r.accountDbId)||!dbs.some(x=>x.name==='PLATFORM_DB'&&x.id===r.platformDbId))throw Error('deployed_binding_mismatch');
   const unexpected=(settings.bindings||[]).filter(x=>!['d1','plain_text','secret_text','durable_object_namespace'].includes(x.type));if(unexpected.length)throw Error('unexpected_bindings');
   report.deployments[worker]=await api(`/workers/scripts/${worker}/deployments`);

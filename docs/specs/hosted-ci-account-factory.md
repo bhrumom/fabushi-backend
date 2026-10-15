@@ -177,3 +177,15 @@ The existing handler may accept an optional error observer, without changing its
 status/error contract or authorization and without letting observer errors escape.
 Verify sanitization with adversarial errors containing secrets and regress all
 existing factory contracts before deploying the correction.
+
+HAF-09: Restore canonical Cloudflare public Worker-to-Worker routing in both
+hosted configs with global_fetch_strictly_public. Canonical Core wrangler.toml
+already declares this flag; the initial generated auth/factory configs omitted
+it. Cloudflare's official Fetch documentation requires service bindings or this
+flag for Worker-to-Worker fetch. This deployment deliberately uses fixed public
+HTTPS test origins, not private routing or arbitrary service bindings. Confirm
+actual deployed flags in settings readback and retain 1042 as an allowlisted
+worker_interop_blocked diagnostic category. This is an identified configuration
+defect; only a new actual cloud run may establish whether it was the allocation
+failure cause or whether additional failures remain.
+Reference: https://developers.cloudflare.com/workers/runtime-apis/fetch/.
