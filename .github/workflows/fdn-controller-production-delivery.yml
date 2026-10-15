@@ -66,6 +66,7 @@ jobs:
           bash -n fdn-network-coordinator/run-official-device-mcp-ingress-binder.sh
           node --test fdn-network-coordinator/enrollment-broker.test.mjs
           node --test fdn-network-coordinator/enrollment-service.test.mjs
+          node --test fdn-network-coordinator/environment-preflight.test.mjs
           node --test fdn-network-coordinator/official-device-mcp-ingress-binder.test.mjs
           grep -F 'User=fabushi-fdn' fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service
           grep -F 'User=fabushi-fdn' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
@@ -107,6 +108,7 @@ jobs:
           go test ./...
           go vet ./...
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o ../official-device-network-worker.bin .
+          file ../official-device-network-worker.bin | grep -F 'ARM aarch64'
       - name: Test shipping official device MCP
         working-directory: official-device-mcp
         run: |
