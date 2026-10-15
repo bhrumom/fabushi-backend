@@ -155,3 +155,52 @@ protection rules; never allow untrusted branch workflows to obtain cloud secrets
 The hosted handler snapshots non-secret account/session/principal IDs before
 returning credentials; janitor refuses inconsistent planned email/username rather
 than reporting a false zero-residual result after profile changes.
+
+## 19. Cloud deployment and first failure (2026-10-15)
+The user explicitly approved creation and storage of the named Cloudflare token
+at action time. UI confirmed token creation (expires 2026-10-22), GitHub secret
+CI_CLOUDFLARE_API_TOKEN was saved in ci-isolated, and API readback confirms the
+secret name only. The environment allows only main. Do not record credential value.
+Main 580b15028bed6d725e6aaf1f715f73280b17555f passed 57 contracts/bundle
+(Actions 38660478906) and canonical wasm 15 assertions (38660478842).
+Cloud Actions 38661203282 deployed both test Workers, verified real independent
+D1 bindings and health, and recorded compiled wasm/deployment versions. First
+allocation failed HTTP 503, so HAC-3/4 remain blocked. Do not weaken auth to pass.
+
+HAF-08: Add bounded non-secret cloud failure diagnostics: fixed auth route names,
+HTTP status, allowlisted failure category, and database table counts only. Never
+return/log upstream bodies, errors containing identities, codes, credentials or
+raw exception messages. The same protected Actions workflow must retain failed
+cloud evidence. Installing deployment tooling must occur without the cloud token
+in environment; expose it only to the actual trusted deployment/inspection step.
+The existing handler may accept an optional error observer, without changing its
+status/error contract or authorization and without letting observer errors escape.
+Verify sanitization with adversarial errors containing secrets and regress all
+existing factory contracts before deploying the correction.
+
+HAF-09: Restore canonical Cloudflare public Worker-to-Worker routing in both
+hosted configs with global_fetch_strictly_public. Canonical Core wrangler.toml
+already declares this flag; the initial generated auth/factory configs omitted
+it. Cloudflare's official Fetch documentation requires service bindings or this
+flag for Worker-to-Worker fetch. This deployment deliberately uses fixed public
+HTTPS test origins, not private routing or arbitrary service bindings. Confirm
+actual deployed flags in settings readback and retain 1042 as an allowlisted
+worker_interop_blocked diagnostic category. This is an identified configuration
+defect; only a new actual cloud run may establish whether it was the allocation
+failure cause or whether additional failures remain.
+Reference: https://developers.cloudflare.com/workers/runtime-apis/fetch/.
+
+HAF-10: Add a dedicated main-only Actions cancellation probe. Prepare ordinary
+A/B/C through the same OIDC factory, independently read owned auth-row references
+from test D1, upload metadata only, then hold the job for operator cancellation.
+After the job is actually cancelled, an independent observe job verifies its
+GitHub run identity/conclusion, recomputes lease ownership and only reads the
+fixed test D1. It must first see live owned rows before expiry, then see zero
+owned rows after wall-clock TTL without calling explicit cleanup or sweep.
+Only the additional exact main workflow path may be authorized by OIDC; no other
+repository/ref/event permission is added. Metadata never includes passwords,
+access/refresh tokens, code, OIDC or cloud token. Report workflow source and
+actual deployed factory/Core source separately. All executable work remains in
+Actions; operator Git/API dispatch/cancel is allowed locally. This is the
+required evidence for literal client/Actions cancellation acceptance, distinct
+from the original completed-client abandonment smoke.

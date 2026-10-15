@@ -58,14 +58,15 @@ jobs:
           if ! cargo install --list | grep -q '^worker-build v0.8.5:'; then cargo install worker-build --version 0.8.5 --locked; fi
           cd core/deploy/platform-worker
           worker-build --release --no-panic-recovery --locked
+      - name: Install deployment tooling without cloud credentials
+        run: |
+          npm install --prefix "$RUNNER_TEMP/cloud-tools" --no-audit --no-fund wrangler@4.151.0
+          node ci/account-factory/cloud/prepare.mjs
       - name: Prepare and deploy isolated resources
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CI_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: c9b14ac29b7815a5fcc704799d1a0f25
-        run: |
-          npm install --prefix "$RUNNER_TEMP/cloud-tools" --no-audit --no-fund wrangler@4.151.0
-          node ci/account-factory/cloud/prepare.mjs
-          node ci/account-factory/cloud/deploy.mjs
+        run: node ci/account-factory/cloud/deploy.mjs
       - name: Real cloud account lifecycle and independent wall-clock TTL
         run: node ci/account-factory/cloud/acceptance.mjs
       - name: Independently verify exact-source assertions and real D1 zero residue

@@ -2,7 +2,7 @@ import { verifyActionsIdentity } from './oidc.mjs';
 
 // Mount only on an isolated test deployment. Production gateway never imports
 // this module. The host owns its persistent journal and independent TTL timer.
-export function fixtureHandler({ factory, policy, oidcOptions }) {
+export function fixtureHandler({ factory, policy, oidcOptions, onError }) {
   return async request => {
     const json = (body, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
     try {
@@ -31,6 +31,7 @@ export function fixtureHandler({ factory, policy, oidcOptions }) {
       if (request.method === 'DELETE' && match) return json(await factory.cleanup(identity, match[1]));
       return json({ error: 'route_not_found' }, 404);
     } catch (error) {
+      try { onError?.(error); } catch { /* diagnostics must never alter authorization/results */ }
       const code = ['oidc_denied', 'lease_forbidden', 'lease_already_allocated', 'quota_exceeded', 'lease_busy', 'cleanup_failed', 'provision_failed'].includes(error.message) ? error.message : 'fixture_request_failed';
       return json({ error: code }, code === 'oidc_denied' ? 401 : code === 'lease_forbidden' ? 403 : ['lease_already_allocated', 'lease_busy'].includes(code) ? 409 : code === 'quota_exceeded' ? 429 : 503);
     }
