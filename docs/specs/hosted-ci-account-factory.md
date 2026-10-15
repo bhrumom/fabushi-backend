@@ -229,3 +229,21 @@ An Actions-only actual workerd probe, without JWT/account/cloud credentials,
 compares public fixed-JWKS fetch behavior and records only the fixed diagnostic
 category/status; no production diagnostic endpoint is added. It must establish
 runtime behavior before the next hosted acceptance, not infer it from Node tests.
+
+Cloud 38663361216 on 72f4a038ab1d59be9f6425017a3c2569bb184c2d passes
+12 actual cloud assertions through explicit zero-residual cleanup/deleted-session
+denial. A second ordinary allocation for TTL fails /browser/register HTTP 500.
+Classify bounded upstream failure bodies into fixed resource/memory/constraint/
+database categories (never raw text) to distinguish cloud runtime and data errors.
+
+HAF-13: Explicitly prove wrong-code rejection in the hosted auth-only fixture.
+CanonicalAuthAdapter gains an opt-in assertRejectsWrongCode flag (default false,
+existing callers unchanged). The cloud test factory enables it: receive actual
+code, construct a guaranteed different six-digit code, submit via ordinary Core
+registration, require authenticated poll still pending, then submit the actual
+code and require completion normally. Never accept a completed wrong-code attempt.
+Expose only a boolean successful-check marker on an authorized created lease;
+cloud acceptance independently requires this marker and includes the named
+invalidVerificationCodeDenied assertion. Codes/passwords stay in memory. Verify
+both rejection of an unsafe issuer and normal retry using adversarial contracts.
+This remains test infrastructure; normal Core validators/algorithms are unchanged.
