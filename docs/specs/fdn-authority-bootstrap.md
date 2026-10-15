@@ -111,3 +111,8 @@ including on failure. No ad-hocSQL or production account provisioning.
 AB09: Actions contracts cover both-bookmarks-before-mutation,migration-before-deploy,
 explicit migration opt-in,and no isolated cloud credential fallback. Actual schema
 and authority acceptance still require protected-main Actions; no fake passing500.
+The existing production-delivery alias contract must retain every canonical alias
+and order while explicitly permitting only the approved FDN credential tail in
+the platform owner. Gateway credentials remain unchanged; isolated factory token
+is explicitly forbidden. This intentional owner-specific credential extension
+replaces the earlier byte-identical alias-line expectation,not its security scope.
