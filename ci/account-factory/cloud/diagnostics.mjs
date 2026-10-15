@@ -1,6 +1,6 @@
 export function failureCategory(error) {
   const message=String(error?.message||'');
-  for(const [pattern,label]of [[/FOREIGN KEY constraint/i,'foreign_key_constraint'],[/no such (table|column)/i,'schema_missing'],[/transaction/i,'journal_transaction'],[/SQLITE/i,'sqlite_failure'],[/Too many subrequests/i,'subrequest_limit'],[/CPU time|1102/i,'worker_cpu_limit'],[/not implemented|not supported|unsupported|not a function|Illegal invocation/i,'runtime_unsupported']]) if(pattern.test(message))return label;
+  for(const [pattern,label]of [[/redirect/i,'redirect_mode_failure'],[/fetch failed|Failed to fetch|Network connection/i,'fetch_transport_failure'],[/FOREIGN KEY constraint/i,'foreign_key_constraint'],[/no such (table|column)/i,'schema_missing'],[/transaction/i,'journal_transaction'],[/SQLITE/i,'sqlite_failure'],[/Too many subrequests/i,'subrequest_limit'],[/CPU time|1102/i,'worker_cpu_limit'],[/not implemented|not supported|unsupported|not a function|Illegal invocation/i,'runtime_unsupported']]) if(pattern.test(message))return label;
   const allowed=['not_configured','provision_failed','cleanup_failed','registration_not_completed','mail_not_delivered','invalid_auth_attempt','invalid_account_session','lease_already_allocated','quota_exceeded','oidc_denied'];
   return allowed.includes(message)?message:'unclassified_failure';
 }

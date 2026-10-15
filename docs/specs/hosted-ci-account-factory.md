@@ -210,3 +210,22 @@ still fails before any recorded auth fetch with fixture_request_failed and an
 unclassified category. Add fixed handler-stage and allowlisted stack-function
 labels (not raw stack/error text) so OIDC/body/journal failures can be separated.
 Observers must still not change the response status or disclose credentials.
+
+HAF-11: A deploy API success/HTTP 200 health is insufficient during edge version
+propagation. Before auth acceptance, bounded polling must require factory health
+backendSha/coreSha to equal the requested exact source; never accept predecessor
+health or weaken exactDeployedSource. Record only validated 40-hex observed source
+metadata on mismatch. Cloud 38662573835 attempt 1 correctly failed this guard;
+rerun attempt 2 uses the same source and a new per-attempt lease identity.
+
+HAF-12: Cloud 38662573835 attempt 2 localizes failure to OIDC (TypeError), before
+normal account authentication. Add a portable hosted no-redirect transport using
+manual mode plus explicit rejection of every 3xx response, for both the fixed
+GitHub JWKS fetch and ordinary auth adapter. This preserves the existing no-follow
+security contract and every RSA/issuer/audience/identity check. Node's existing
+error-mode callers remain unchanged. Adversarial contracts must prove no redirect
+is followed and no request credentials are forwarded to another URL.
+An Actions-only actual workerd probe, without JWT/account/cloud credentials,
+compares public fixed-JWKS fetch behavior and records only the fixed diagnostic
+category/status; no production diagnostic endpoint is added. It must establish
+runtime behavior before the next hosted acceptance, not infer it from Node tests.

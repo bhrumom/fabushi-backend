@@ -33,6 +33,7 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/cloud-tools" --no-audit --no-fund wrangler@4.151.0
           node ci/account-factory/cloud/prepare.mjs
+          node ci/account-factory/cloud/workerd-probe.mjs
           "$RUNNER_TEMP/cloud-tools/node_modules/.bin/wrangler" deploy --dry-run --config "$RUNNER_TEMP/cloud-accounts/factory.json" --outdir "$RUNNER_TEMP/cloud-factory-bundle"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
