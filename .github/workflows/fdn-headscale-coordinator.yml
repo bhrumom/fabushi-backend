@@ -150,7 +150,7 @@ jobs:
           output="$(
             FDN_NETWORK_AUTHORITY_TOKEN="$secret" \
             FABUSHI_FDN_ENROLLMENT_BROKER_TOKEN="$secret" \
-            FABUSHI_FDN_ENROLLMENT_STATE_KEY_B64="$secret" \
+            FABUSHI_FDN_ENROLLMENT_STATE_KEY_B64='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
             FABUSHI_PLATFORM_CORE_URL='https://core.example.invalid' \
             FABUSHI_FDN_ENROLLMENT_LISTEN_HOST='0.0.0.0' \
             DOCKER_HOST='unix:///run/user/1000/docker.sock' \
@@ -165,7 +165,7 @@ jobs:
           output="$(
             FDN_NETWORK_AUTHORITY_TOKEN="$secret" \
             FABUSHI_FDN_ENROLLMENT_BROKER_TOKEN="$secret" \
-            FABUSHI_FDN_ENROLLMENT_STATE_KEY_B64="$secret" \
+            FABUSHI_FDN_ENROLLMENT_STATE_KEY_B64='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
             FABUSHI_PLATFORM_CORE_URL='https://core.example.invalid' \
             FABUSHI_FDN_ENROLLMENT_LISTEN_HOST='127.0.0.1' \
             DOCKER_HOST='unix:///var/run/docker.sock' \
