@@ -41,3 +41,18 @@ Production credentials are supplied only as protected environment/file inputs.
 Verified endpoint smtp.email.us-phoenix-1.oci.oraclecloud.com:587; existing sender
 amitabha@ombhrum.com. Cloud UI confirmed empty prior email-domain list; domain
 ombhrum.com created and DKIM fabushi-20261015 generated under explicit approval.
+
+## Requirement compliance before integration
+| Requirement | Status | Evidence / remaining runtime gate |
+| --- | --- | --- |
+| MAIL01 | passed for repair scope | Ordinary registration APIs unchanged; no OTP queue extraction or challenge mutation |
+| MAIL02 | blocked on activation | Oracle domain and approved sender created; TLS587 endpoint verified from Console; authenticated live delivery still pending |
+| MAIL03 | blocked on credential installation | SMTP-only service identity and exact-address group policy created under explicit user confirmation; encrypted credential storage pending |
+| MAIL04/08 | passed in source | Sender-dependent maps only, reject unowned maps, root-readable backups/manifest, restore modes/ownership and previous files on failure; no queue flush |
+| MAIL05 | blocked | Exact-head Actions contracts pass; actual mailbox receipt and ordinary account creation still pending |
+| MAIL06 | passed | User explicitly confirmed exact domain/sender, dedicated identity/credentials, TLS587 and SPF/DKIM changes; no paid subscription/purchase |
+| MAIL07/09 | passed in source | Existing API canonicalized without new listener/auth; configured envelope/header alignment, invalid-sender rejection and error redaction covered in Actions |
+
+Actions38739847281 atafd9573b passed verify (six targeted tests); source refinement
+for durable rollback manifest and installed app digest requires new exact-head CI.
+Runtime deployment and mailbox receipt remain separate mandatory gates.

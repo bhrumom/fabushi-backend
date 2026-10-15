@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Narrow operational installer; credentials never enter command arguments."""
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -84,12 +85,18 @@ def install(source, credential_path):
     os.chmod(backup.parent, 0o700)
     originals = {}
     original_modes = {}
+    original_owners = {}
     for i, p in enumerate(files):
         originals[p] = p.exists()
         if p.exists():
             original_modes[p] = p.stat().st_mode & 0o777
+            original_owners[p] = (p.stat().st_uid, p.stat().st_gid)
             shutil.copy2(p, backup / str(i))
             os.chmod(backup / str(i), 0o600)
+    atomic_write(backup / "manifest.json", json.dumps([
+        {"path": str(p), "backup": str(i), "existed": originals[p],
+         "mode": original_modes.get(p), "owner": original_owners.get(p)}
+        for i, p in enumerate(files)]))
     try:
         for path, value in maps.items():
             atomic_write(path, value)
@@ -104,6 +111,7 @@ def install(source, credential_path):
             if originals[p]:
                 shutil.copy2(backup / str(i), p)
                 os.chmod(p, original_modes[p])
+                os.chown(p, *original_owners[p])
             elif p.exists():
                 p.unlink()
         subprocess.run(['systemctl', 'reload', 'postfix'], capture_output=True)
@@ -111,7 +119,8 @@ def install(source, credential_path):
         raise RuntimeError('mail installation failed; previous files restored') from None
     print(json.dumps({'installed': True, 'sender': SENDER, 'relay': ENDPOINT,
                       'credentialLogged': False, 'unrelatedQueuesFlushed': False,
-                      'backupPath': str(backup)}))
+                      'backupPath': str(backup),
+                      'appSha256': hashlib.sha256(app.read_bytes()).hexdigest()}))
 
 if __name__ == '__main__':
     install(sys.argv[1], sys.argv[2])
