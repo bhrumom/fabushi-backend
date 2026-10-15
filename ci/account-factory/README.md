@@ -68,3 +68,45 @@ and auth in cloud, not public mail delivery. Actual cancellation, packaged clien
 MCP/device data cleanup and cross-device E2E are separate acceptance gates. The
 first janitor blocks when owned resources exist beyond accepted auth-only scope.
 See `docs/specs/hosted-ci-account-factory.md` for requirements and actual evidence.
+
+## Operating the isolated cloud environment
+
+The deployed factory origin is
+`https://fabushi-ci-isolated-accounts.bhrumom.workers.dev`; ordinary auth is
+`https://fabushi-ci-isolated-auth.bhrumom.workers.dev`. Both are dedicated test
+Workers. The main-only GitHub environment stores `CI_CLOUDFLARE_API_TOKEN`; its
+current authorization expires 2026-10-22. Expiry affects future deployment and
+credentialed D1 inspection; already deployed OIDC allocation and cron do not use
+that token. Application RSA/bridge keys remain in
+Cloudflare secrets and are preserved across deployments. Never paste them into
+workflow input, shell commands, repository files, or artifacts.
+
+From GitHub Actions, dispatch `Isolated Cloud Account Delivery` on main to compile
+the pinned Core, deploy, register ordinary A/B/C via actual generated codes, log
+in automatically, verify sessions/revocation, delete, re-register and wait for
+real 15-minute TTL. The workflow independently inspects all auth tables in the
+actual D1 database. Required success artifacts are cloud-deployment.json,
+cloud-runtime.json and cloud-verification.json, all matching the same run/source.
+A deployment alone is not acceptance.
+
+The factory accepts verified Actions OIDC only from the two explicitly allowed
+main workflows in cloud/prepare.mjs. POST /v1/leases with {scenarioId} returns
+one-time ordinary account sessions for the calling run; DELETE /v1/leases/:id
+requires that same run identity. Tests keep credentials in memory. Arbitrary
+external callers, untrusted branches and other workflows cannot allocate. Adding
+a consumer workflow requires an explicit reviewed policy change.
+
+For literal cancellation verification, run `Isolated Cloud Account Cancellation
+Probe` with mode=prepare after cloud delivery finishes. Wait for the metadata
+artifact and hold step, cancel only that probe run, then dispatch mode=observe
+with its cancelled_run_id. The observer must see live owned rows before expiry
+and zero rows afterward using read-only D1 queries; it never requests cleanup.
+Do not overlap preparation with delivery's global-zero check.
+
+If allocation or cleanup fails, preserve sanitized evidence and the journal.
+Do not recreate databases, reset lease ownership, reuse production credentials,
+rotate signing keys, or mark failed/cancelled checks passed. To stop allocations
+while retaining recovery, deploy an empty trusted-workflow allowlist; cron cleanup
+continues independently. Restore only through a reviewed main deployment after
+residual inspection. Auth-only cleanup deliberately blocks unsupported owned
+account resources; expanding to MCP/device data needs its own accepted scope.
