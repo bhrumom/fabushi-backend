@@ -282,3 +282,14 @@ contracts must prove both paths release the stream; real cloud rerun must prove
 all three accounts plus the second full lifecycle before accepting the diagnosis.
 Reference: Cloudflare Workers limits, simultaneous outgoing connections (6);
 https://developers.cloudflare.com/workers/platform/limits/.
+
+HAF-17: Stream cancellation passes contracts but cloud 38666172358 reproduces
+the same C code-capability failure; HAF-16 alone is not established as the cause.
+Keep the resource fix, and remove unnecessary re-entrant DO dispatch for the
+static bridge capabilities route. The outer Worker must authenticate the exact
+bridge secret before returning the unchanged {email:true,alipay:false}; delivery
+still enters the singleton journal and validates reserved recipients. No caller
+can retrieve codes or mutate leases via capabilities. This reduces nested actor
+entries while retaining a single mutable lifecycle/mailbox owner. Verify denied
+secret behavior and actual cloud lifecycle; do not declare the preceding
+connection hypothesis confirmed without real successful evidence.
