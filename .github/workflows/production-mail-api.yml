@@ -28,6 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          python3 -m py_compile ops/production-mail-api/app.py ops/production-mail-api/install-relay.py ops/production-mail-api/submit-verification.py
           python3 -m unittest discover -s ops/production-mail-api -p 'test_*.py' -v
   deploy:
     if: github.event_name == 'workflow_dispatch' && inputs.deploy
@@ -97,6 +98,7 @@ jobs:
             rm -f "$RUNNER_TEMP/mail-cleanup-key"
           fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: mail-deployment-${{ github.sha }}-${{ github.run_id }}
           if-no-files-found: error
