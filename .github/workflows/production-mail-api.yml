@@ -1,0 +1,25 @@
+name: Production registration mail transport
+on:
+  pull_request:
+    paths: ['ops/production-mail-api/**', '.github/workflows/production-mail-api.yml']
+  push:
+    branches: [main]
+    paths: ['ops/production-mail-api/**', '.github/workflows/production-mail-api.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    env:
+      EXACT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.EXACT_SHA }}
+          persist-credentials: false
+      - name: Bind exact source and verify submission boundaries
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          python3 -m unittest discover -s ops/production-mail-api -p 'test_*.py' -v
