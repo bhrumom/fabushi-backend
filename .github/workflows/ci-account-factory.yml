@@ -13,9 +13,12 @@ jobs:
   contracts:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      EXACT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -24,12 +27,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          node --check ci/account-factory/cloud/cancel-probe.mjs
           mkdir -p evidence
           node --test --test-reporter=tap ci/account-factory/*.test.mjs | tee evidence/contracts.tap
-          printf '{"kind":"contract-tests","sourceSha":"%s","runId":"%s","runAttempt":"%s","exitCode":0,"liveAccountLifecycle":"NOT_VERIFIED"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > evidence/source.json
+          printf '{"kind":"contract-tests","sourceSha":"%s","runId":"%s","runAttempt":"%s","exitCode":0,"liveAccountLifecycle":"NOT_VERIFIED"}\n' "$EXACT_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > evidence/source.json
       - name: Bundle actual Cloudflare factory runtime without cloud credentials
         env:
-          CORE_SHA: f781e6c85375ba0945aa4fd4c19ead89e396dfdb
+          CORE_SHA: c7d0e24b7561c6f5d1bb3c0e975f599643252504
         run: |
           npm install --prefix "$RUNNER_TEMP/cloud-tools" --no-audit --no-fund wrangler@4.151.0
           node ci/account-factory/cloud/prepare.mjs
