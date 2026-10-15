@@ -2,7 +2,7 @@
 
 Status: active; implementation and deployment acceptance are separate
 Owner: Fabushi Backend (orchestration); Platform Core (ordinary authentication)
-Last updated: 2026-10-14
+Last updated: 2026-10-15
 Related task: FCM-027 / user-directed next-generation testing migration
 
 ## 1. Context / problem
@@ -203,3 +203,38 @@ pin. Therefore re-run the real account compatibility suite on f781e6c rather tha
 implicitly reusing the older wasm evidence. Its existing Core Actions 38600063038
 and 38600063041 pass. Backend source/run and newly compiled wasm digest must be
 recorded by the new runtime report. This does not claim production deployment.
+
+## 21. Hosted auth deployment evidence (2026-10-15)
+
+Backend runtime source f6dbe6417b6252fdbbfb01bbd4b093ab2b7ae592, pinned Core
+f781e6c85375ba0945aa4fd4c19ead89e396dfdb: 65/65 contracts and actual workerd
+bundle/probe (Actions 38666607783), 15/15 canonical wasm/emulated-D1 assertions
+(38666607691), 16/16 actual remote-cloud auth assertions with independent real
+D1 remaining=0 (38666610725). All final runs exit 0; earlier failed iterations
+remain in hosted-ci-account-factory.md and are not passing acceptance.
+Cloud now has dedicated D1 databases/Workers, independently generated RSA keys,
+reserved-code bridge and minute cron; production resources are not used.
+The hosted spec's latest compliance section is authoritative for this slice.
+
+| Criterion | Status | Evidence / remaining obligation |
+| --- | --- | --- |
+| AF-01 | passed | Verified Actions OIDC in actual cloud and adversarial signature/claim/repository/ref/workflow contracts |
+| AF-02 | passed | Actual isolated resource/binding inventory, dedicated secrets, production deny inventory and no-follow transport |
+| AF-03 | passed | Two successive cloud A/B/C allocations, A dual sessions, ownership/quota/replay contracts and durable metadata |
+| AF-04 | passed | Actual cloud normal Core OTP registration, wrong-code rejection, password login and canonical algorithms; no SQL provisioning |
+| AF-05 | blocked | Auth-only explicit zero and abandoned-client real TTL passed; literal cancellation passed (observer 38668322225 attempt 2, 36 to 0); MCP/device-created data outside accepted scope |
+| AF-06 | passed | 65 contracts, 15 actual wasm runtime assertions and 16 cloud assertions with independent real-D1 zero validator |
+| AF-07 | blocked | Full P2..P4 consumer/platform/device/package/release rollout remains |
+| AF-08 | passed | Recompiled pinned canonical wasm and exact-source compatibility run 38666607691 |
+| AC-1 | passed | Accepted-source main contracts 65/65, no failed/skipped, exit 0 |
+| AC-2 | blocked | Cloud auth passed; literal cancellation passed; actual device/MCP consumers remain |
+| AC-3 | passed | Production ordinary provision retirement merged earlier; cloud uses only independently bound test D1s |
+| AC-4 | blocked | Full P0..P4 integration/release program not complete |
+| AC-5 | passed | Actual pinned wasm, digest, 15 runtime assertions and independent source/result validator |
+
+The @ci.invalid bridge is real canonical code transport for isolated tests, not
+SMTP acceptance. Core JWT expiry is unchanged; independent cloud janitor bounds
+effective account/session lifetime. This is not formal product release evidence.
+
+Literal cancellation evidence: https://github.com/bhrumom/fabushi-backend/actions/runs/38668322225 (attempt 2).
+Cancelled prepare: https://github.com/bhrumom/fabushi-backend/actions/runs/38668206894.

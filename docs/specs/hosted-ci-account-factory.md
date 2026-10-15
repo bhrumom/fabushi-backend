@@ -1,6 +1,6 @@
 # Hosted isolated CI account factory — Specification
 
-Status: active; deployment acceptance pending
+Status: active; hosted auth, real TTL and literal cancellation acceptance passed
 Owner: Fabushi Backend; normal auth remains Platform Core
 Date: 2026-10-15
 
@@ -293,3 +293,69 @@ can retrieve codes or mutate leases via capabilities. This reduces nested actor
 entries while retaining a single mutable lifecycle/mailbox owner. Verify denied
 secret behavior and actual cloud lifecycle; do not declare the preceding
 connection hypothesis confirmed without real successful evidence.
+
+## 20. Deployed auth-only acceptance (2026-10-15)
+
+This section supersedes earlier pending configuration/status snapshots; failure
+history above remains provenance, not current status. Accepted runtime source:
+Backend f6dbe6417b6252fdbbfb01bbd4b093ab2b7ae592; Core
+f781e6c85375ba0945aa4fd4c19ead89e396dfdb. The following documentation update
+does not change deployed executable sources or claim a new deployment SHA.
+
+- Contracts and actual workerd bundle/probe: Actions 38666607783, 65/65, no
+  failed/skipped tests, exit 0.
+- Canonical wasm/emulated-D1 regression: Actions 38666607691, 15/15 named
+  assertions, exit 0; explicitly not the hosted result.
+- Actual remote-cloud delivery: Actions 38666610725 attempt 1, 16/16 named
+  assertions, exit 0; independent REST inspection reports remaining=0 across
+  every users/email mapping/account_* auth table. Two successive complete A/B/C
+  allocations succeed, including explicit deletion and real abandoned-client TTL.
+- Actual compiled wasm SHA256:
+  9991f2f1f55ff5e00951a60dd44ad6d792c8b1c4347bdad0e9b27188db101672.
+- Auth deployment 1d12c22e-2904-4d42-ac78-4c59c2b5fb89, version
+  fecab31e-eff4-4562-9873-5b68b3527bf9. Factory deployment
+  10d9666b-9b84-463f-bd0b-db4d58dd263d, version
+  da0ce4bd-5a58-4243-ac26-06452adfffdb. Both actual test-D1 bindings read back.
+- Literal cancellation: prepare 38668206894 actually cancelled; observer
+  38668322225 attempt 2 PASS, exit 0. The independent observer sees 36 owned auth rows
+  before expiry and remaining=0 after expiry, without any cleanup request.
+  Attempt 1 started before the cancelled conclusion settled and failed closed;
+  it produced no passing report. No cleanup/sweep is sent by the observer.
+
+| Criterion | Status | Evidence / reason |
+| --- | --- | --- |
+| HAF-01 | passed | Dedicated two test D1s, independent initial RSA/bridge secrets and binding readback in cloud-deployment.json |
+| HAF-02 | passed | Shared factory + singleton DO, reservation/restart/isolation contracts and two actual successive lifecycle allocations |
+| HAF-03 | passed | Real canonical code delivery/validation; wrong code rejected and unauthenticated bridge denied; SMTP excluded |
+| HAF-04 | passed | Normal auth only; ownership/partial/orphan/schema contracts plus independently zero actual auth tables |
+| HAF-05 | passed | Actual abandoned-client TTL and actually cancelled Actions client both independently reclaimed by cloud cron |
+| HAF-06 | passed | Real OIDC, immutable repo/owner/workflow/main checks; dedicated user-authorized expiring token; main-only environment |
+| HAF-07 | passed | All product verification executed only in Actions; source/run/count/exit/wasm/deploy artifacts recorded |
+| HAF-08 | passed | Sanitized adversarial diagnostics; installation separate from credential-bearing deploy step |
+| HAF-09 | passed | Actual deployed global_fetch_strictly_public readback and cloud Worker calls |
+| HAF-10 | passed | Prepare 38668206894 concluded cancelled; observer 38668322225 attempt 2 reads 36 live rows before expiry and 0 afterward, exit 0; same exact Backend/Core source |
+| HAF-11 | passed | Exact edge-source polling and observedFactorySha/CoreSha match accepted source |
+| HAF-12 | passed | Actual workerd public-JWKS probe distinguishes unsupported error mode; manual transport rejects all redirects; cloud real OIDC passes |
+| HAF-13 | passed | Actual invalidVerificationCodeDenied, normal correct-code registration and adversarial unsafe-issuer rejection contracts |
+| HAF-14 | passed | REAL-bind/TEXT child independent-count regression, ownership-safe ID reuse, historical repair, second cloud allocation and global zero |
+| HAF-15 | passed | Bounded route/status history and counts localize cloud boundary; no response bodies/credentials in evidence |
+| HAF-16 | passed | Ignored/rejected streams cancelled, explicit cancellation contracts; not claimed as the sole prior cloud failure cause |
+| HAF-17 | passed | Authenticated static outer capability route, mutable journal delivery retained, actual unauthenticatedBridgeDenied plus full cloud lifecycle |
+| HAC-1 | passed | Accepted source 65 contracts and actual workerd bundle/probe; canonical wasm regression 15 assertions |
+| HAC-2 | passed | Actual bindings, deployment/version IDs, source and wasm digest recorded |
+| HAC-3 | passed | 16 actual cloud assertions, normal A/B/C auth and zero auth-table residue |
+| HAC-4 | passed | Independent minute cron reclaims abandoned client after real 15-minute TTL |
+
+Scope remains cloud ordinary authentication with isolated @ci.invalid transport.
+Actual SMTP, packaged app/physical-device discovery, MCP/device-created data
+cleanup, full P2..P4 and formal release are NOT_VERIFIED by these reports.
+The preserved deployment token expires 2026-10-22; changing provider permissions
+or paid plans is not part of this acceptance. Operations are in
+ci/account-factory/README.md.
+
+Evidence:
+https://github.com/bhrumom/fabushi-backend/actions/runs/38666610725
+https://github.com/bhrumom/fabushi-backend/actions/runs/38666607783
+https://github.com/bhrumom/fabushi-backend/actions/runs/38666607691
+https://github.com/bhrumom/fabushi-backend/actions/runs/38668206894
+https://github.com/bhrumom/fabushi-backend/actions/runs/38668322225
