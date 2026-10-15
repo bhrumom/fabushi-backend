@@ -35,7 +35,9 @@ def render_maps(credentials):
     user, password = credentials['username'], credentials['password']
     if not isinstance(user, str) or not re.fullmatch(r'[A-Za-z0-9_.@/-]{16,512}', user):
         raise ValueError('invalid relay username')
-    if not isinstance(password, str) or not re.fullmatch(r'[A-Za-z0-9+/=_-]{16,512}', password):
+    if (not isinstance(password, str) or not 16 <= len(password) <= 512
+            or not password.isascii() or not all(33 <= ord(c) <= 126 for c in password)
+            or chr(92) in password):
         raise ValueError('invalid relay password')
     return {
         '/etc/postfix/fabushi-relayhosts': SENDER + ' ' + ENDPOINT + '\n',

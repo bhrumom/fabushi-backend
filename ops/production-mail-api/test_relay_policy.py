@@ -7,7 +7,7 @@ spec.loader.exec_module(relay)
 
 class RelayPolicyTests(unittest.TestCase):
     def test_only_exact_sender_and_verified_tls_endpoint(self):
-        m = relay.render_maps({'username': 'ocid1.user.fixture@ocid1.tenancy.fixture', 'password': 'SyntheticOnlyPassword123'})
+        m = relay.render_maps({'username': 'ocid1.user.fixture@ocid1.tenancy.fixture', 'password': 'Synthetic:Password!23'})
         self.assertEqual(m['/etc/postfix/fabushi-relayhosts'], relay.SENDER + ' [' + relay.HOST + ']:587\n')
         self.assertEqual(m['/etc/postfix/fabushi-tls-policy'], relay.ENDPOINT + ' secure match=' + relay.HOST + '\n')
         self.assertNotIn('relayhost', relay.SETTINGS)
