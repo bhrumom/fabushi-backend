@@ -189,3 +189,18 @@ worker_interop_blocked diagnostic category. This is an identified configuration
 defect; only a new actual cloud run may establish whether it was the allocation
 failure cause or whether additional failures remain.
 Reference: https://developers.cloudflare.com/workers/runtime-apis/fetch/.
+
+HAF-10: Add a dedicated main-only Actions cancellation probe. Prepare ordinary
+A/B/C through the same OIDC factory, independently read owned auth-row references
+from test D1, upload metadata only, then hold the job for operator cancellation.
+After the job is actually cancelled, an independent observe job verifies its
+GitHub run identity/conclusion, recomputes lease ownership and only reads the
+fixed test D1. It must first see live owned rows before expiry, then see zero
+owned rows after wall-clock TTL without calling explicit cleanup or sweep.
+Only the additional exact main workflow path may be authorized by OIDC; no other
+repository/ref/event permission is added. Metadata never includes passwords,
+access/refresh tokens, code, OIDC or cloud token. Report workflow source and
+actual deployed factory/Core source separately. All executable work remains in
+Actions; operator Git/API dispatch/cancel is allowed locally. This is the
+required evidence for literal client/Actions cancellation acceptance, distinct
+from the original completed-client abandonment smoke.

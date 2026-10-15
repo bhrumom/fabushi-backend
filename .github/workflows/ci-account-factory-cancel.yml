@@ -1,0 +1,71 @@
+name: Isolated Cloud Account Cancellation Probe
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Prepare an account lease for actual cancellation, or observe the cancelled lease
+        type: choice
+        options: [prepare, observe]
+        default: prepare
+        required: true
+      cancelled_run_id:
+        description: Required only in observe mode
+        type: string
+        default: ''
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+concurrency:
+  group: ci-isolated-cancellation-${{ inputs.mode }}
+  cancel-in-progress: false
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    environment: ci-isolated
+    timeout-minutes: 25
+    steps:
+      - name: Require main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Download only the cancelled run metadata
+        if: inputs.mode == 'observe'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANCEL_RUN_ID: ${{ inputs.cancelled_run_id }}
+        run: |
+          [[ "$CANCEL_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          gh run download "$CANCEL_RUN_ID" --repo bhrumom/fabushi-backend --name "cancel-lease-$CANCEL_RUN_ID" --dir "$RUNNER_TEMP/cancel-metadata"
+      - name: Prepare ordinary cloud account lease
+        if: inputs.mode == 'prepare'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CI_CLOUDFLARE_API_TOKEN }}
+        run: node ci/account-factory/cloud/cancel-probe.mjs prepare
+      - name: Preserve non-secret lease metadata before cancellation
+        if: inputs.mode == 'prepare'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cancel-lease-${{ github.run_id }}
+          path: evidence/cancel-lease.json
+          if-no-files-found: error
+      - name: Hold for actual operator cancellation; intentionally no cleanup
+        if: inputs.mode == 'prepare'
+        run: node -e 'setTimeout(() => process.exit(1), 1200000)'
+      - name: Observe independent TTL after actual cancellation
+        if: inputs.mode == 'observe'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CI_CLOUDFLARE_API_TOKEN }}
+          CANCEL_RUN_ID: ${{ inputs.cancelled_run_id }}
+        run: node ci/account-factory/cloud/cancel-probe.mjs observe
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always() && inputs.mode == 'observe'
+        with:
+          name: cancel-observation-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: error
