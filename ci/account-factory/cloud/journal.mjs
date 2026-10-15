@@ -3,10 +3,14 @@ export class DurableJournal {
   constructor(storage) {
     this.storage = storage;
     this.sql = storage.sql;
+    this.sql.exec('CREATE TABLE IF NOT EXISTS maintenance (name TEXT PRIMARY KEY)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS leases (id TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL, state TEXT NOT NULL, accounts TEXT NOT NULL)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS mailbox (email TEXT PRIMARY KEY, code TEXT NOT NULL, expires INTEGER NOT NULL)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS cleanup_refs (lease TEXT PRIMARY KEY, refs TEXT NOT NULL)');
   }
+  repaired(){return this.sql.exec("SELECT name FROM maintenance WHERE name='text-user-refs-v1'").toArray().length===1;}
+  markRepaired(){this.sql.exec("INSERT OR IGNORE INTO maintenance VALUES('text-user-refs-v1')");}
+  cleaned(){return this.sql.exec("SELECT id FROM leases WHERE state='cleaned'").toArray().map(r=>this.get(r.id));}
   reserve(lease, quota) {
     this.storage.transactionSync(() => {
       if (this.get(lease.id)) throw Error('lease_already_allocated');

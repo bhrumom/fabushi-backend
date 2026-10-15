@@ -30,7 +30,13 @@ export class AccountLeaseOwner extends DurableObject {
     this.handler=fixtureHandler({factory:this.factory,oidcOptions:{fetchImpl:noRedirectFetch()},policy:JSON.parse(env.OIDC_POLICY),onError:(error,stage)=>{this.diagnostic={...this.diagnostic,...safeFailureDetail(error,stage)};}});
     this.tail=Promise.resolve();
   }
-  serialize(action) { const work=this.tail.then(action); this.tail=work.then(()=>{},()=>{}); return work; }
+  serialize(action) { const work=this.tail.then(async()=>{
+    if(!this.journal.repaired()){
+      for(const lease of this.journal.cleaned()){const input={leaseId:lease.id,accounts:lease.accounts};await this.janitor.remove(input);if((await this.janitor.inspect(input)).remaining!==0)throw Error('cleanup_residuals');}
+      this.journal.markRepaired();
+    }
+    return action();
+  }); this.tail=work.then(()=>{},()=>{}); return work; }
   async fetch(request) {
     const path=new URL(request.url).pathname;
     if(path.startsWith('/api/internal/auth-provider/')) {

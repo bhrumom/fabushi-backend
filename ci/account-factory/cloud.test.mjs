@@ -104,3 +104,20 @@ test('cloud code assertion submits guaranteed wrong code, proves rejection, then
 test('cloud code assertion fails closed when issuer completes a wrong-code attempt',async()=>{
  const {adapter,submissions}=codeCheckingAdapter(true);await assert.rejects(adapter.register({username:'user',email:'user@ci.invalid',password:'private',deviceIds:['device']}),/invalid_code_not_rejected/);assert.equal(submissions.length,1);
 });
+
+// D1 JS-number parameters are REAL; force that affinity in this regression.
+test('janitor normalizes persisted numeric IDs for canonical TEXT children and safe ID reuse',async()=>{
+ const {db,janitor,input,j}=janitorFixture();
+ db.exec("CREATE TABLE account_password_credentials(user_id TEXT PRIMARY KEY,password_phc TEXT); INSERT INTO account_password_credentials VALUES('1','private');");
+ const original=janitor.db;
+ janitor.db={prepare(sql){let params=[];return{bind(...values){params=values;return this;},async all(){let i=0;const rewritten=sql.replace(/\?/g,()=>typeof params[i++]==='number'?'CAST(? AS REAL)':'?');return original.prepare(rewritten).bind(...params).all();}};},batch:original.batch};
+ j.references(input.leaseId,{users:[1],sessions:[],principals:[],identities:[]});
+ await janitor.remove(input);assert.equal((await janitor.inspect(input)).remaining,0);
+ for(const table of ['account_password_credentials','account_identities','account_principals'])assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0);
+ assert.equal(db.prepare("SELECT count(*) AS n FROM account_sessions WHERE session_id='s1'").get().n,0);
+ assert.deepEqual(j.references(input.leaseId).users,['1']);
+ db.prepare('INSERT INTO users VALUES(?,?,?)').run(1,'new_owner','new@ci.invalid');
+ db.exec("INSERT INTO account_password_credentials VALUES('1','new-private')");
+ await assert.rejects(janitor.remove(input),/identity_changed/);
+ assert.equal(db.prepare('SELECT count(*) AS n FROM account_password_credentials').get().n,1);
+});

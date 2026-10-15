@@ -247,3 +247,17 @@ cloud acceptance independently requires this marker and includes the named
 invalidVerificationCodeDenied assertion. Codes/passwords stay in memory. Verify
 both rejection of an unsafe issuer and normal retry using adversarial contracts.
 This remains test infrastructure; normal Core validators/algorithms are unchanged.
+
+HAF-14: Cloud run 38664043542 identifies a database constraint failure after
+prior cleanup. Normalize canonical numeric users.id to decimal strings before
+querying Core TEXT user_id/legacy_user_id columns: D1 binds JS numbers as REAL,
+whose TEXT affinity can differ (10001.0 versus canonical 10001). Persist normalized
+references including existing journal records. Add Actions regression with REAL
+binding emulation, TEXT credential/session/principal ownership, independent table
+counts and a second account lifecycle reusing the freed numeric ID.
+Before new allocations, perform a one-time ownership-checked repair of historical
+cleaned leases using persisted references; never delete a captured ID currently
+belonging to another identity. Persist the repair marker only after independent
+zero-residual inspection. This repair is limited to this dedicated test DB and
+does not provision accounts or alter canonical auth. Cloud success and independent
+global zero counts must confirm the hypothesis; unit success alone is insufficient.

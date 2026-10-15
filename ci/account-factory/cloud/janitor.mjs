@@ -20,11 +20,17 @@ export class CloudJanitor {
       const users = await this.all('SELECT id, username, email FROM users WHERE username=? OR email=?', a.username, a.email);
       if (users.some(u => u.username !== a.username || u.email !== a.email)) throw Error('janitor_identity_changed');
       for (const { id } of users) {
-        previous.users.push(id);
-        previous.sessions.push(...(await this.all('SELECT session_id FROM account_sessions WHERE user_id=?', id)).map(r=>r.session_id));
-        previous.principals.push(...(await this.all('SELECT principal_id FROM account_principals WHERE legacy_user_id=?', id)).map(r=>r.principal_id));
-        previous.identities.push(...(await this.all('SELECT identity_id FROM account_identities WHERE user_id=?', id)).map(r=>r.identity_id));
+        const userId=String(id);
+        previous.users.push(userId);
+        previous.sessions.push(...(await this.all('SELECT session_id FROM account_sessions WHERE user_id=?', userId)).map(r=>r.session_id));
+        previous.principals.push(...(await this.all('SELECT principal_id FROM account_principals WHERE legacy_user_id=?', userId)).map(r=>r.principal_id));
+        previous.identities.push(...(await this.all('SELECT identity_id FROM account_identities WHERE user_id=?', userId)).map(r=>r.identity_id));
       }
+    }
+    previous.users=previous.users.map(String);
+    for(const userId of previous.users){
+      const rows=await this.all('SELECT username, email FROM users WHERE id=?',userId);
+      if(rows.some(u=>!input.accounts.some(a=>a.username===u.username&&a.email===u.email)))throw Error('janitor_identity_changed');
     }
     for (const k of Object.keys(previous)) previous[k] = [...new Set(previous[k])];
     this.journal.references(input.leaseId, previous);
