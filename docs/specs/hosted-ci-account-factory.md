@@ -261,3 +261,12 @@ belonging to another identity. Persist the repair marker only after independent
 zero-residual inspection. This repair is limited to this dedicated test DB and
 does not provision accounts or alter canonical auth. Cloud success and independent
 global zero counts must confirm the hypothesis; unit success alone is insufficient.
+
+HAF-15: Cloud 38665170954 attempt 2 passes exact-source/OIDC guards but reports
+registration-code HTTP 503 (canonical email availability). Preserve bounded fixed
+route/status history and bridge capability/delivery counters in protected failure
+diagnostics, never identities, code or response bodies. Classify only literal
+known bridge error codes and subrequest-limit text. Poll exact-source health in
+the acceptance runner too, since separate edge requests can briefly disagree.
+Use the diagnostics to distinguish infrastructure limits from ordinary auth errors;
+no automatic retry of uncertain account mutations or paid upgrade is allowed.

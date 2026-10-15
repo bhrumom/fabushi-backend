@@ -24,11 +24,11 @@ export class AccountLeaseOwner extends DurableObject {
   constructor(ctx,env) {
     super(ctx,env); this.env=env; const config=configuration(env);
     this.journal=new DurableJournal(ctx.storage);
-    const auth=new CanonicalAuthAdapter({config,assertRejectsWrongCode:true,fetchImpl:observedAuthFetch(value=>{this.diagnostic=value;},noRedirectFetch()),mailbox:{receive:async({email})=>this.journal.consume(email)}});
+    const auth=new CanonicalAuthAdapter({config,assertRejectsWrongCode:true,fetchImpl:observedAuthFetch(value=>{this.authHistory.push(value);this.diagnostic=value;},noRedirectFetch()),mailbox:{receive:async({email})=>this.journal.consume(email)}});
     this.janitor=new CloudJanitor(env.ACCOUNT_DB,this.journal);
     this.factory=new AccountFactory({config,journal:this.journal,auth,janitor:this.janitor,quota:10,ttlMs:900000});
     this.handler=fixtureHandler({factory:this.factory,oidcOptions:{fetchImpl:noRedirectFetch()},policy:JSON.parse(env.OIDC_POLICY),onError:(error,stage)=>{this.diagnostic={...this.diagnostic,...safeFailureDetail(error,stage)};}});
-    this.tail=Promise.resolve();
+    this.tail=Promise.resolve();this.authHistory=[];this.bridgeCounts={capabilities:0,delivery:0};
   }
   serialize(action) { const work=this.tail.then(async()=>{
     if(!this.journal.repaired()){
@@ -41,14 +41,14 @@ export class AccountLeaseOwner extends DurableObject {
     const path=new URL(request.url).pathname;
     if(path.startsWith('/api/internal/auth-provider/')) {
       if(!bridgeAuthorized(request,this.env)) return json({error:'denied'},403);
-      if(path==='/api/internal/auth-provider/capabilities' && request.method==='GET') return json({email:true,alipay:false});
+      if(path==='/api/internal/auth-provider/capabilities' && request.method==='GET'){this.bridgeCounts.capabilities++;return json({email:true,alipay:false});}
       if(path==='/api/internal/auth-provider/email/send-registration-code' && request.method==='POST') {
         try {
           const reader=request.body?.getReader(); if(!reader) return json({error:'invalid_request'},400);
           let size=0; const chunks=[];
           while(true) { const {value,done}=await reader.read(); if(done) break; size+=value.byteLength; if(size>4096){await reader.cancel();return json({error:'invalid_request'},413);} chunks.push(value); }
           const {email,code}=JSON.parse(new TextDecoder().decode(Buffer.concat(chunks)));
-          this.journal.deliver(email,code); return json({ok:true});
+          this.bridgeCounts.delivery++;this.journal.deliver(email,code); return json({ok:true});
         } catch { return json({error:'mail_denied'},400); }
       }
       return json({error:'not_found'},404);
@@ -60,7 +60,7 @@ export class AccountLeaseOwner extends DurableObject {
       return json({status:results.some(r=>r.status==='blocked')?'blocked':'ok',results});
     });
     return this.serialize(async()=>{
-      this.diagnostic=null;
+      this.diagnostic=null;this.authHistory=[];this.bridgeCounts={capabilities:0,delivery:0};
       const response=await this.handler(request);
       if(response.status===201){
         // Capture non-secret stable IDs before returning credentials. Later
@@ -70,7 +70,7 @@ export class AccountLeaseOwner extends DurableObject {
         try{await this.janitor.capture({leaseId,accounts:lease.accounts});const body=await response.json();return json({...body,otpRejectionChecked:true},201);}
         catch(error){return json({error:'cleanup_tracking_failed',diagnostic:{reason:failureCategory(error)}},503);}
       }
-      if(response.status===503 && this.diagnostic){const body=await response.json();return json({...body,diagnostic:this.diagnostic},503);}
+      if(response.status===503 && this.diagnostic){const body=await response.json();return json({...body,diagnostic:{...this.diagnostic,authHistory:this.authHistory.slice(-32),bridgeCounts:this.bridgeCounts}},503);}
       return response;
     });
   }
