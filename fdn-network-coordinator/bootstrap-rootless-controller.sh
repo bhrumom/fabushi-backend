@@ -43,6 +43,11 @@ if ! cmp -s "$source_ip_config" "$user_dropin/20-fdn-source-ip.conf"; then
   install -o fabushi-fdn -g fabushi-fdn -m 0600 "$source_ip_config" "$user_dropin/20-fdn-source-ip.conf"
   source_ip_changed=1
 fi
+# Official Docker prerequisite for source-preserving bridge forwarding.
+# Do not set any sysctl or restart the unrelated rootful daemon.
+modprobe br_netfilter
+install -d -m 0755 /etc/modules-load.d
+printf '%s\n' br_netfilter > /etc/modules-load.d/fabushi-fdn-br-netfilter.conf
 daemon_config=/var/lib/fabushi-fdn/.config/docker/daemon.json
 install -d -o fabushi-fdn -g fabushi-fdn -m 0700 "$(dirname "$daemon_config")"
 printf '%s\n' '{"userland-proxy":false}' > "$source_ip_config"

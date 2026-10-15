@@ -85,3 +85,18 @@ and restart the prior dedicated daemon; preserve the failure and state. Do not
 change rootful Docker, sysctls or host networking. Only a new external probe with
 valid public mapped address can accept this repair. Docker official source-IP
 propagation documentation requires userland-proxy disabled.
+
+RB08: Deployment38698589575 correctly failed and restored the previous dedicated
+Docker after the daemon reported missing /proc/sys/net/bridge/bridge-nf-call-iptables.
+Installed official kernel module br_netfilter is present but unloaded. Docker's
+source-propagation instructions require it for userland-proxy=false. Load only this
+existing kernel module before restarting the dedicated daemon; persist its name in
+an owned modules-load fragment. No sysctl value, iptables rule, route, rootful daemon
+or unrelated service is changed by the installer. Existing rootful FORWARD chain
+already dispatches Docker connection tracking/isolation and explicit bridge accepts.
+This is an explicit host kernel prerequisite addition to RB01, not a VPN/DNS/route
+change. Retain failure/rollback evidence. After install, Actions external TLS/admin/
+STUN acceptance must pass; rootless source flags alone never prove readiness.
+Rollback removes only the owned load fragment; do not unload a module that other
+containers may now reference. Reference: Docker official troubleshooting source-IP
+propagation prerequisite br_netfilter.
