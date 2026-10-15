@@ -1,4 +1,5 @@
 """Read-only external infrastructure probe; execution is Actions-only."""
+import binascii
 import ipaddress
 import json
 import os
@@ -13,6 +14,16 @@ from pathlib import Path
 HOST = 'fdn.ombhrum.com'
 IP = '144.24.17.21'
 COOKIE = 0x2112A442
+
+
+def binding_request(transaction):
+    if len(transaction) != 12:
+        raise ValueError('stun_transaction_invalid')
+    # Tailscale's pinned server intentionally accepts its SOFTWARE marker only.
+    prefix = struct.pack('!HHI', 1, 20, COOKIE) + transaction
+    prefix += struct.pack('!HH', 0x8022, 8) + b'tailnode'
+    fingerprint = binascii.crc32(prefix) ^ 0x5354554e
+    return prefix + struct.pack('!HHI', 0x8028, 4, fingerprint)
 
 
 def mapped_response(packet, transaction, source):
@@ -97,7 +108,7 @@ def main():
 
         def stun():
             transaction = secrets.token_bytes(12)
-            packet = struct.pack('!HHI', 1, 0, COOKIE) + transaction
+            packet = binding_request(transaction)
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.settimeout(8)
                 sock.sendto(packet, (IP, 3478))
