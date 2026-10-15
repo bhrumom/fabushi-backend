@@ -79,6 +79,7 @@ export default {
   async fetch(request,env) {
     try {
       configuration(env); const path=new URL(request.url).pathname;
+      if(path==='/api/internal/auth-provider/capabilities'&&request.method==='GET')return bridgeAuthorized(request,env)?json({email:true,alipay:false}):json({error:'denied'},403);
       if(path==='/health' && request.method==='GET') return json({status:'ok',environment:'ci-isolated',backendSha:env.BACKEND_SHA,coreSha:env.CORE_SHA,scope:'cloud-auth-test-mailbox'});
       if(!(path==='/v1/leases' || /^\/v1\/leases\/[a-f0-9]{64}$/.test(path) || path.startsWith('/api/internal/auth-provider/'))) return json({error:'not_found'},404);
       return env.LEASE_OWNER.get(env.LEASE_OWNER.idFromName('leases-v1')).fetch(request);
