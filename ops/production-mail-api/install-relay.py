@@ -83,9 +83,11 @@ def install(source, credential_path):
     backup.mkdir(parents=True, mode=0o700)
     os.chmod(backup.parent, 0o700)
     originals = {}
+    original_modes = {}
     for i, p in enumerate(files):
         originals[p] = p.exists()
         if p.exists():
+            original_modes[p] = p.stat().st_mode & 0o777
             shutil.copy2(p, backup / str(i))
             os.chmod(backup / str(i), 0o600)
     try:
@@ -101,8 +103,7 @@ def install(source, credential_path):
         for i, p in enumerate(files):
             if originals[p]:
                 shutil.copy2(backup / str(i), p)
-                if p == app:
-                    os.chmod(p, 0o644)
+                os.chmod(p, original_modes[p])
             elif p.exists():
                 p.unlink()
         subprocess.run(['systemctl', 'reload', 'postfix'], capture_output=True)
