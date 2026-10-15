@@ -5,7 +5,7 @@ import { CanonicalAuthAdapter } from '../canonical-auth.mjs';
 import { fixtureHandler } from '../service.mjs';
 import { DurableJournal } from './journal.mjs';
 import { CloudJanitor } from './janitor.mjs';
-import { failureCategory, observedAuthFetch } from './diagnostics.mjs';
+import { failureCategory, observedAuthFetch, safeFailureDetail } from './diagnostics.mjs';
 
 const json=(body,status=200)=>Response.json(body,{status,headers:{'cache-control':'no-store'}});
 function configuration(env) {
@@ -26,7 +26,7 @@ export class AccountLeaseOwner extends DurableObject {
     const auth=new CanonicalAuthAdapter({config,fetchImpl:observedAuthFetch(value=>{this.diagnostic=value;}),mailbox:{receive:async({email})=>this.journal.consume(email)}});
     this.janitor=new CloudJanitor(env.ACCOUNT_DB,this.journal);
     this.factory=new AccountFactory({config,journal:this.journal,auth,janitor:this.janitor,quota:10,ttlMs:900000});
-    this.handler=fixtureHandler({factory:this.factory,policy:JSON.parse(env.OIDC_POLICY),onError:error=>{this.diagnostic={...this.diagnostic,reason:failureCategory(error)};}});
+    this.handler=fixtureHandler({factory:this.factory,policy:JSON.parse(env.OIDC_POLICY),onError:(error,stage)=>{this.diagnostic={...this.diagnostic,...safeFailureDetail(error,stage)};}});
     this.tail=Promise.resolve();
   }
   serialize(action) { const work=this.tail.then(action); this.tail=work.then(()=>{},()=>{}); return work; }

@@ -58,7 +58,7 @@ test('janitor fails closed on changed email instead of claiming clean',async()=>
  const {db,janitor,input}=janitorFixture();await janitor.capture(input);db.exec("UPDATE users SET email='changed@ci.invalid' WHERE id=1");await assert.rejects(janitor.remove(input),/identity_changed/);assert.equal(db.prepare('SELECT count(*) AS n FROM users').get().n,2);
 });
 
-import {failureCategory,observedAuthFetch} from './cloud/diagnostics.mjs';
+import {failureCategory,observedAuthFetch,safeFailureDetail} from './cloud/diagnostics.mjs';
 test('failure diagnostics never expose upstream bodies, credentials, codes or error text',async()=>{
  const secret='PRIVATE_PASSWORD_123456';let output;
  const fn=observedAuthFetch(value=>{output=value;},async()=>new Response(`Error 1102 ${secret}`,{status:500}));
@@ -76,4 +76,9 @@ test('diagnostic observer failure cannot change invalid-OIDC denial or disclose 
  const handler=fixtureHandler({factory:{},policy:{},onError(){throw Error('PRIVATE_OBSERVER_FAILURE');}});
  const response=await handler(new Request('https://fixture.invalid/v1/leases',{method:'POST',headers:{authorization:'Bearer invalid','content-type':'application/json'},body:'{"scenarioId":"test"}'}));
  assert.equal(response.status,401);assert.deepEqual(await response.json(),{error:'oidc_denied'});
+});
+
+test('diagnostics reveal fixed stages and known function labels, never raw stack text',()=>{
+ const error=Error('PRIVATE_OIDC_123456');error.stack='Error: PRIVATE_OIDC_123456\n at PRIVATE_PASSWORD (secret.js:1:1)\n at DurableJournal.reserve (worker.js:123:1)';
+ assert.deepEqual(safeFailureDetail(error,'allocate'),{stage:'allocate',errorType:'Error',reason:'unclassified_failure',frames:['DurableJournal.reserve']});
 });

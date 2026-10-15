@@ -1,6 +1,6 @@
 export function failureCategory(error) {
   const message=String(error?.message||'');
-  for(const [pattern,label]of [[/FOREIGN KEY constraint/i,'foreign_key_constraint'],[/no such (table|column)/i,'schema_missing'],[/transaction/i,'journal_transaction'],[/SQLITE/i,'sqlite_failure'],[/Too many subrequests/i,'subrequest_limit'],[/CPU time|1102/i,'worker_cpu_limit'],[/not implemented|not supported|unsupported/i,'runtime_unsupported']]) if(pattern.test(message))return label;
+  for(const [pattern,label]of [[/FOREIGN KEY constraint/i,'foreign_key_constraint'],[/no such (table|column)/i,'schema_missing'],[/transaction/i,'journal_transaction'],[/SQLITE/i,'sqlite_failure'],[/Too many subrequests/i,'subrequest_limit'],[/CPU time|1102/i,'worker_cpu_limit'],[/not implemented|not supported|unsupported|not a function|Illegal invocation/i,'runtime_unsupported']]) if(pattern.test(message))return label;
   const allowed=['not_configured','provision_failed','cleanup_failed','registration_not_completed','mail_not_delivered','invalid_auth_attempt','invalid_account_session','lease_already_allocated','quota_exceeded','oidc_denied'];
   return allowed.includes(message)?message:'unclassified_failure';
 }
@@ -16,4 +16,12 @@ export function observedAuthFetch(capture,fetchImpl=fetch) {
       capture(diagnostic);return response;
     }catch(error){capture({route,status:'transport_failed',category:failureCategory(error)});throw Error('auth_transport_failed');}
   };
+}
+
+export function safeFailureDetail(error,stage) {
+ const names=['verifyActionsIdentity','AccountFactory.create','DurableJournal.reserve','DurableJournal.get','CloudJanitor.capture','CanonicalAuthAdapter.request','CanonicalAuthAdapter.register'];
+ const stack=String(error?.stack||'').split('\n').slice(1);
+ const frames=names.filter(name=>stack.some(line=>line.includes(`at ${name} (`)));
+ const errorType=['Error','TypeError','SyntaxError','RangeError'].includes(error?.name)?error.name:'Error';
+ return {stage:['authorization','oidc','body','allocate','cleanup'].includes(stage)?stage:'unknown',errorType,reason:failureCategory(error),frames};
 }
