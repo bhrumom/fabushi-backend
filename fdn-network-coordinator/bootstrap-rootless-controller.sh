@@ -27,6 +27,22 @@ run_user() { sudo -H -u fabushi-fdn env XDG_RUNTIME_DIR="/run/user/$fdn_uid" DBU
 if ! run_user systemctl --user is-active --quiet docker.service; then
   run_user dockerd-rootless-setuptool.sh install --force
 fi
+# STUN must observe the caller source IP; RootlessKit2 builtin rewrites it.
+command -v slirp4netns >/dev/null
+user_dropin=/var/lib/fabushi-fdn/.config/systemd/user/docker.service.d
+install -d -o fabushi-fdn -g fabushi-fdn -m 0700 "$user_dropin"
+source_ip_config=$(mktemp)
+trap 'rm -f "$source_ip_config"' EXIT
+cat > "$source_ip_config" <<'SOURCE_IP'
+[Service]
+Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_NET=slirp4netns"
+Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=slirp4netns"
+SOURCE_IP
+if ! cmp -s "$source_ip_config" "$user_dropin/20-fdn-source-ip.conf"; then
+  install -o fabushi-fdn -g fabushi-fdn -m 0600 "$source_ip_config" "$user_dropin/20-fdn-source-ip.conf"
+  run_user systemctl --user daemon-reload
+  run_user systemctl --user restart docker.service
+fi
 run_user systemctl --user enable --now docker.service
 root=/opt/fabushi-fdn-infra
 release="$root/releases/$sha"
@@ -69,6 +85,7 @@ UNIT
 systemctl daemon-reload
 systemctl enable --now fabushi-fdn-headscale.service
 printf 'source_sha=%s\nrootless_user=fabushi-fdn\nsocket=/run/user/%s/docker.sock\nheadscale_image=docker.io/headscale/headscale:0.29.5\n' "$sha" "$fdn_uid"
+printf 'source_preserving_port_driver=slirp4netns\n'
 run_user systemctl --user is-active docker.service
 systemctl is-active fabushi-fdn-headscale.service
 run_user env DOCKER_HOST="unix:///run/user/$fdn_uid/docker.sock" docker compose --project-directory "$root/current" --project-name fabushi-fdn-coordinator ps --format json
