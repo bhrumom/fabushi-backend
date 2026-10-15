@@ -17,7 +17,16 @@ require_secret() {
 
 require_secret FDN_NETWORK_AUTHORITY_TOKEN
 require_secret FABUSHI_FDN_ENROLLMENT_BROKER_TOKEN
-require_secret FABUSHI_FDN_ENROLLMENT_STATE_KEY_B64
+# AES-256 uses32 decoded bytes (44 canonical base64 characters), not a48-char token.
+node --input-type=module -e '
+  const raw = process.env.FABUSHI_FDN_ENROLLMENT_STATE_KEY_B64 || "";
+  const key = Buffer.from(raw, "base64");
+  if (key.length !== 32 || key.toString("base64") !== raw) {
+    console.error("FABUSHI_FDN_ENROLLMENT_STATE_KEY_B64 must be canonical base64 for32 bytes");
+    process.exit(64);
+  }
+'
+
 
 case "${FABUSHI_PLATFORM_CORE_URL:-}" in
   https://*) ;;
