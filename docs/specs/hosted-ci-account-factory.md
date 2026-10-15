@@ -155,3 +155,25 @@ protection rules; never allow untrusted branch workflows to obtain cloud secrets
 The hosted handler snapshots non-secret account/session/principal IDs before
 returning credentials; janitor refuses inconsistent planned email/username rather
 than reporting a false zero-residual result after profile changes.
+
+## 19. Cloud deployment and first failure (2026-10-15)
+The user explicitly approved creation and storage of the named Cloudflare token
+at action time. UI confirmed token creation (expires 2026-10-22), GitHub secret
+CI_CLOUDFLARE_API_TOKEN was saved in ci-isolated, and API readback confirms the
+secret name only. The environment allows only main. Do not record credential value.
+Main 580b15028bed6d725e6aaf1f715f73280b17555f passed 57 contracts/bundle
+(Actions 38660478906) and canonical wasm 15 assertions (38660478842).
+Cloud Actions 38661203282 deployed both test Workers, verified real independent
+D1 bindings and health, and recorded compiled wasm/deployment versions. First
+allocation failed HTTP 503, so HAC-3/4 remain blocked. Do not weaken auth to pass.
+
+HAF-08: Add bounded non-secret cloud failure diagnostics: fixed auth route names,
+HTTP status, allowlisted failure category, and database table counts only. Never
+return/log upstream bodies, errors containing identities, codes, credentials or
+raw exception messages. The same protected Actions workflow must retain failed
+cloud evidence. Installing deployment tooling must occur without the cloud token
+in environment; expose it only to the actual trusted deployment/inspection step.
+The existing handler may accept an optional error observer, without changing its
+status/error contract or authorization and without letting observer errors escape.
+Verify sanitization with adversarial errors containing secrets and regress all
+existing factory contracts before deploying the correction.

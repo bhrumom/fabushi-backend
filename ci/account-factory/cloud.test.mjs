@@ -57,3 +57,16 @@ test('cloud resources remain independent and runtime-independent factory is reus
 test('janitor fails closed on changed email instead of claiming clean',async()=>{
  const {db,janitor,input}=janitorFixture();await janitor.capture(input);db.exec("UPDATE users SET email='changed@ci.invalid' WHERE id=1");await assert.rejects(janitor.remove(input),/identity_changed/);assert.equal(db.prepare('SELECT count(*) AS n FROM users').get().n,2);
 });
+
+import {failureCategory,observedAuthFetch} from './cloud/diagnostics.mjs';
+test('failure diagnostics never expose upstream bodies, credentials, codes or error text',async()=>{
+ const secret='PRIVATE_PASSWORD_123456';let output;
+ const fn=observedAuthFetch(value=>{output=value;},async()=>new Response(`Error 1102 ${secret}`,{status:500}));
+ await fn('https://test.invalid/api/auth/browser/register',{});
+ assert.deepEqual(output,{route:'/api/auth/browser/register',status:500,category:'worker_cpu_limit'});
+ assert.ok(!JSON.stringify(output).includes(secret));assert.equal(failureCategory(Error(secret)),'unclassified_failure');
+ assert.equal(failureCategory(Error(`FOREIGN KEY constraint failed: ${secret}`)),'foreign_key_constraint');
+ const failing=observedAuthFetch(value=>{output=value;},async()=>{throw Error(secret);});
+ await assert.rejects(failing('https://test.invalid/api/auth/browser/attempts/private-id',{}),/auth_transport_failed/);
+ assert.deepEqual(output,{route:'/api/auth/browser/attempts/:id',status:'transport_failed',category:'unclassified_failure'});
+});
