@@ -80,7 +80,7 @@ class Operator:
         if old.get('phase') == 'outcome_unknown':
             raise RuntimeError('registration outcome unknown; use reconcile, never re-register')
         if old.get('expiresAt', 0) > time.time() + 30:
-            return self.metadata(dict(old, status='awaiting_private_otp'))
+            return self.metadata(dict(old, status=('awaiting_private_otp' if old.get('phase') == 'awaiting_private_otp' else 'email_submission_unconfirmed')))
         attempt = self.request('/api/auth/browser/start', {'platform': 'web', 'deviceId': DEVICE})
         query = urllib.parse.parse_qs(urllib.parse.urlparse(attempt['loginUrl']).query)
         state = {'username': USERNAME, 'email': EMAIL,

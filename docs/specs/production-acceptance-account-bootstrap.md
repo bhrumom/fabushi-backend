@@ -19,3 +19,20 @@ Accept ID01–06 separately: exact-head CI; actual fresh delivery; safe private 
 
 ## Provenance
 User API-account instructions and explicit production identity decision; normal Core account.rs and cell derivation in remote_computer.rs atc7d0e24. User confirmation covers dedicated account and mail infrastructure; Gmail explicitly withholds OTP content. The unified device sensitive-input tool provides the intended private OTP path.
+
+## Source compliance review / runtime gates
+| ID | Status | Evidence or remaining gate |
+| --- | --- | --- |
+| ID01 | passed in source | Canonical fixed production routes and normal register/login; no factory/SQL/internal issuer |
+| ID02 | passed in source | Atomic0600 state, root0700 directory, generated password, redacted failures; targeted private-state contracts |
+| ID03 | blocked on owner input | Private encrypted card/owner-only OTP file; no connector withholding bypass; runtime input not yet supplied |
+| ID04 | passed in source | Valid challenge reuse, expiry refusal, durable unknown outcome, canonical login reconciliation; duplicate register forbidden by response-loss contract |
+| ID05 | passed in source | Profile/session immutable ID equality, exact ordinary verified account, privileged-subject rejection, canonical cell derivation; actual identity pending |
+| ID06 | passed for source / runtime pending | Actions38743129472 exactea924d20 passed seven targeted contracts and Python compilation; final refinement requires exact-head check |
+
+Actual mail infrastructure delivery: Backend7110dc6c29466d9ffa7d500caadb0bf348a65b92,
+Actions38741571017, appSha256a87b23e97041ac664ed7350fd6da4f5bcf18980929f3ad66bce9aef59d570a28.
+Actual fixture with run marker arrived in Gmail inbox; a subsequent normal Core
+registration code arrived too. SMTP-only user and exact-address IAM policy, approved
+sender and activeDKIM are configured. Account creation remains blocked only on
+private owner OTP input; production MCP/private network acceptance remains separate.
