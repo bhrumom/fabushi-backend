@@ -71,6 +71,28 @@ jobs:
           stage="/tmp/fabushi-mail-$GITHUB_RUN_ID"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo python3 '$stage/install-relay.py' '$stage/app.py' '$stage/relay.json'" > "$RUNNER_TEMP/mail-install.json"
           jq --arg sha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" '. + {backendSha:$sha,runId:$run}' "$RUNNER_TEMP/mail-install.json" > "$RUNNER_TEMP/mail-deployment.json"
+      - name: Submit verification through actual authenticated production mail API
+        run: |
+          set -euo pipefail
+          MAIL_API_TOKEN="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" 'sudo python3 -' <<'PYTOKEN'
+          import pathlib, shlex
+          for line in pathlib.Path('/etc/fabushi-mail-api.env').read_text().splitlines():
+              if line.startswith('MAIL_API_TOKEN='):
+                  print(shlex.split(line.split('=', 1)[1])[0])
+                  break
+          PYTOKEN
+          )"
+          test -n "$MAIL_API_TOKEN"
+          echo "::add-mask::$MAIL_API_TOKEN"
+          export MAIL_API_TOKEN
+          ssh -o ExitOnForwardFailure=yes -L 127.0.0.1:18790:127.0.0.1:8790 -N "$DEPLOY_USER@$DEPLOY_HOST" &
+          tunnel_pid=$!
+          trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl --silent --fail http://127.0.0.1:18790/healthz >/dev/null; then break; fi
+            sleep 1
+          done
+          python3 ops/production-mail-api/submit-verification.py
       - name: Remove transient credential copies
         if: always()
         run: |
@@ -85,4 +107,6 @@ jobs:
         with:
           name: mail-deployment-${{ github.sha }}-${{ github.run_id }}
           if-no-files-found: error
-          path: ${{ runner.temp }}/mail-deployment.json
+          path: |
+            ${{ runner.temp }}/mail-deployment.json
+            ${{ runner.temp }}/mail-submission.json
