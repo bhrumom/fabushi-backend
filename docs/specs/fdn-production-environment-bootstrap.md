@@ -77,3 +77,13 @@ Actions run/job/count/exit/artifact separately from secret-name readback.
 ## Provenance
 User request2026-10-15; Backend#69,#75; Desktop#91; authenticated device inventory;
 current production workflow and four systemd units inspected via canonical GitHub API.
+
+## Bootstrap follow-up
+ENV-08: Validate the enrollment state key by canonical base64 shape and decoded32-byte
+length, independently from48-character authority/broker token requirements. Exercise
+valid/short/malformed keys in Actions without starting production services.
+ENV-09: A protected-main manual SSH probe may verify pinned SSH identity, aarch64,
+sudo availability and absence/presence of service configuration without deploying.
+Do not execute builds or tests on the server; this probe is read-only configuration
+inventory from Actions. Record only fixed booleans and architecture.
+Four FDN SSH input names confirmed encrypted in production at2026-10-15T01:01Z.

@@ -1,0 +1,47 @@
+name: FDN production SSH preflight
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.FABUSHI_FDN_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.FABUSHI_FDN_DEPLOY_USER }}
+      DEPLOY_KEY: ${{ secrets.FABUSHI_FDN_DEPLOY_SSH_KEY }}
+      KNOWN_HOSTS: ${{ secrets.FABUSHI_FDN_DEPLOY_KNOWN_HOSTS }}
+    steps:
+      - name: Require canonical main and all four inputs
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_KEY KNOWN_HOSTS; do test -n "${!name}"; done
+      - name: Inventory authenticated production controller without mutation
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 "$DEPLOY_USER@$DEPLOY_HOST" 'set -eu
+            test "$(uname -m)" = aarch64
+            sudo -n true
+            echo "architecture=linux/arm64"
+            echo "ssh_pinned_identity=passed"
+            echo "sudo_available=true"
+            for path in /etc/fabushi/fdn-network-worker.env /etc/fabushi/fdn-network-enrollment.env /etc/fabushi/fdn-official-device-mcp.env; do
+              if sudo test -f "$path"; then printf "%s=configured\n" "$path"; else printf "%s=not-configured\n" "$path"; fi
+            done' > fdn-ssh-inventory.txt
+          cat fdn-ssh-inventory.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fdn-production-ssh-${{ github.sha }}
+          path: fdn-ssh-inventory.txt
+          if-no-files-found: error
+      - name: Remove transient SSH identity
+        if: always()
+        run: rm -f "$HOME/.ssh/id_ed25519"

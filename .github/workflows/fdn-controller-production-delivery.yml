@@ -106,7 +106,7 @@ jobs:
           set -euo pipefail
           go test ./...
           go vet ./...
-          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o ../official-device-network-worker.bin .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o ../official-device-network-worker.bin .
       - name: Test shipping official device MCP
         working-directory: official-device-mcp
         run: |
@@ -130,7 +130,7 @@ jobs:
           find "$stage" -type f -print0 | sort -z | xargs -0 sha256sum > "$stage/MANIFEST.sha256"
           tar -C "$stage" -czf fdn-controller-stack.tgz .
           sha256sum fdn-controller-stack.tgz > fdn-controller-stack.tgz.sha256
-          jq -n --arg backendSha "$EXACT_SHA" --arg run "$GITHUB_RUN_ID"             '{backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,runId:$run,artifact:"fdn-controller-stack.tgz",installRoot:"/opt/fabushi-fdn/current",stateRoot:"/var/lib/fabushi-fdn",serviceAccount:"fabushi-fdn"}'             > fdn-controller-provenance.json
+          jq -n --arg backendSha "$EXACT_SHA" --arg run "$GITHUB_RUN_ID"             '{backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,runId:$run,artifact:"fdn-controller-stack.tgz",target:"linux/arm64",installRoot:"/opt/fabushi-fdn/current",stateRoot:"/var/lib/fabushi-fdn",serviceAccount:"fabushi-fdn"}'             > fdn-controller-provenance.json
       - uses: actions/upload-artifact@v4
         with:
           name: fdn-controller-stack-${{ env.EXACT_SHA }}
@@ -215,7 +215,7 @@ jobs:
       - name: Atomically install and health-check production controller
         run: |
           set -euo pipefail
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo install -d -m 0755 /etc/fabushi &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-network-worker.env /etc/fabushi/fdn-network-worker.env &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-network-enrollment.env /etc/fabushi/fdn-network-enrollment.env &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-official-device-mcp.env /etc/fabushi/fdn-official-device-mcp.env &&             sudo tar -xOf /tmp/fdn-controller-stack-$GITHUB_SHA.tgz ./fdn-network-coordinator/install-controller-stack.sh > /tmp/install-controller-stack.sh &&             sudo chmod 0755 /tmp/install-controller-stack.sh &&             sudo /tmp/install-controller-stack.sh /tmp/fdn-controller-stack-$GITHUB_SHA.tgz $GITHUB_SHA $CORE_SHA install &&             sudo /opt/fabushi-fdn/current/fdn-network-coordinator/install-controller-stack.sh ignored $GITHUB_SHA $CORE_SHA health &&             test \"\$(sudo cat /opt/fabushi-fdn/current/BACKEND_SHA)\" = \"$GITHUB_SHA\" &&             test \"\$(sudo cat /opt/fabushi-fdn/current/CORE_SHA)\" = \"$CORE_SHA\""
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo install -d -m 0755 /etc/fabushi &&             (getent group fabushi-fdn >/dev/null || sudo groupadd --system fabushi-fdn) &&             (id fabushi-fdn >/dev/null 2>&1 || sudo useradd --system --gid fabushi-fdn --home /var/lib/fabushi-fdn --shell /usr/sbin/nologin fabushi-fdn) &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-network-worker.env /etc/fabushi/fdn-network-worker.env &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-network-enrollment.env /etc/fabushi/fdn-network-enrollment.env &&             sudo install -o root -g fabushi-fdn -m 0640 /tmp/fdn-official-device-mcp.env /etc/fabushi/fdn-official-device-mcp.env &&             sudo tar -xOf /tmp/fdn-controller-stack-$GITHUB_SHA.tgz ./fdn-network-coordinator/install-controller-stack.sh > /tmp/install-controller-stack.sh &&             sudo chmod 0755 /tmp/install-controller-stack.sh &&             sudo /tmp/install-controller-stack.sh /tmp/fdn-controller-stack-$GITHUB_SHA.tgz $GITHUB_SHA $CORE_SHA install &&             sudo /opt/fabushi-fdn/current/fdn-network-coordinator/install-controller-stack.sh ignored $GITHUB_SHA $CORE_SHA health &&             test \"\$(sudo cat /opt/fabushi-fdn/current/BACKEND_SHA)\" = \"$GITHUB_SHA\" &&             test \"\$(sudo cat /opt/fabushi-fdn/current/CORE_SHA)\" = \"$CORE_SHA\""
       - name: Capture current and previous release provenance
         id: release-provenance
         run: |
