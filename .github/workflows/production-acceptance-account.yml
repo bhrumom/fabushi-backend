@@ -1,0 +1,85 @@
+name: Dedicated production account bootstrap
+on:
+  pull_request:
+    paths: ['ops/production-account/**', '.github/workflows/production-acceptance-account.yml']
+  push:
+    branches: [main]
+    paths: ['ops/production-account/**', '.github/workflows/production-acceptance-account.yml']
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Normal production account administration (no password/OTP inputs)
+        type: choice
+        options: [prepare, reconcile]
+        required: true
+        default: prepare
+permissions:
+  contents: read
+concurrency:
+  group: production-account-bootstrap
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    env:
+      EXACT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.EXACT_SHA }}
+          persist-credentials: false
+      - name: Verify canonical administration and private-state boundaries
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          python3 -m py_compile ops/production-account/bootstrap.py
+          python3 -m unittest discover -s ops/production-account -p 'test_*.py' -v
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.FABUSHI_FDN_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.FABUSHI_FDN_DEPLOY_USER }}
+      DEPLOY_KEY: ${{ secrets.FABUSHI_FDN_DEPLOY_SSH_KEY }}
+      KNOWN_HOSTS: ${{ secrets.FABUSHI_FDN_DEPLOY_KNOWN_HOSTS }}
+      OPERATION: ${{ inputs.operation }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require protected main and pinned deployment authority
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          case "$OPERATION" in prepare|reconcile) ;; *) exit 64;; esac
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_KEY KNOWN_HOSTS; do test -n "${!name}"; done
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/BACKEND_SHA"
+      - name: Install exact-source operator without account secrets in arguments
+        run: |
+          set -euo pipefail
+          stage="/tmp/fabushi-production-account-$GITHUB_RUN_ID"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "umask 077; mkdir '$stage'"
+          scp ops/production-account/bootstrap.py "$RUNNER_TEMP/BACKEND_SHA" "$DEPLOY_USER@$DEPLOY_HOST:$stage/"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo install -d -m 0755 /opt/fabushi-production-account && sudo install -m 0644 '$stage/bootstrap.py' '$stage/BACKEND_SHA' /opt/fabushi-production-account/ && sudo install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.fabushi-production-registration"
+      - name: Prepare normal challenge or reconcile uncertain registration
+        run: |
+          set -euo pipefail
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo python3 /opt/fabushi-production-account/bootstrap.py '$OPERATION'" > "$RUNNER_TEMP/production-account-operation.json"
+      - name: Remove transient deployment key
+        if: always()
+        run: rm -f "$HOME/.ssh/id_ed25519"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-account-operation-${{ github.sha }}-${{ github.run_id }}
+          if-no-files-found: error
+          path: ${{ runner.temp }}/production-account-operation.json
