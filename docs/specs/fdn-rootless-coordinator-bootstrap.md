@@ -57,3 +57,20 @@ do not delete volumes or revoke keys automatically. Preserve previous config
 release and deny-all policy. Other services unaffected. References:rootless Docker
 official documentation https://docs.docker.com/engine/security/rootless/;
 canonical0.29.5 compose/README;authenticated serverinventory2026-10-15.
+
+## RB06 source-preserving STUN repair (2026-10-15)
+Actual external run38696389447 now receives a valid STUN response but correctly
+fails stun_mapping_invalid. The dedicated daemon uses RootlessKit2.3.4 builtin
+port driver and Docker28.4.0; source IP is rewritten at this forwarding boundary,
+so STUN cannot report the external runner's real mapped address. Do not weaken
+public-address validation or treat a private mapped address as direct readiness.
+Install a dedicated fabushi-fdn docker.service user drop-in selecting existing
+slirp4netns1.2.1 for both network and port drivers. Restart only this dedicated
+rootless daemon if the drop-in changes; preserve rootful daemon, state, policy,
+keys, public port scopes and every other instance/service. No host networking or
+additional public access. Config/deployment only from protected-main Actions;
+real external probe must pass with globally routable mapped IPv4 before RB06 is
+accepted. Reverting only this owned drop-in/restoring the dedicated daemon pauses
+this rollout; never delete state. Missing slirp4netns blocks without fallback.
+Reference: Docker official troubleshooting, source IP propagation for prior
+RootlessKit versions: https://docs.docker.com/engine/security/rootless/troubleshoot/ .
