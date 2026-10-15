@@ -49,9 +49,10 @@ G02/G05/G16. No local workstation/server build,test,lint or generator execution.
 IN01–06, AC1 (stage) and AC2 (public TLS endpoint) passed at exact source
 `f644870335ac779d683ff28908fff434c6fb0558`. Stage run38692462081 and confirmed
 publish run38692737102 both succeeded (exit0). Actual artifact records active
-service, running healthy pinned Headscale image, DNS-only A publication, real
+service, running healthy pinned Headscale image, real
 certificate expiring2027-01-13, dedicated hostname vhosts and UDP3478 firewall
-allowance. Public HTTPS health passed; /metrics, /api/v1/node, /swagger and /debug
+allowance. Cloudflare UI separately confirmed the saved DNS-only A record.
+Public HTTPS health passed; /metrics, /api/v1/node, /swagger and /debug
 each returned403. Actual STUN packet reachability/control upgrade, enrollment and
 direct/DERP/WSS are separate unverified gates; health is not their acceptance.
 Rollback disables onlyfabushi-fdn HTTP/TLS sites and removes only the newUDP3478
