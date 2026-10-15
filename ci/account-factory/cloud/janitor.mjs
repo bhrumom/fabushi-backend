@@ -58,14 +58,20 @@ export class CloudJanitor {
     }
     return filters;
   }
-  async remove(input) {
-    const filters = await this.filters(input);
-    const allowed = ['account_refresh_tokens','account_auth_events','account_sessions','account_password_credentials','account_contact_points','account_identity_principals','account_principals','account_identities','email_username_mapping','account_email_challenges','account_oauth_attempts','users'];
-    // Do not silently cascade-delete resources beyond the accepted auth scope.
+  allowedTables() {
+    return ['account_refresh_tokens','account_auth_events','account_sessions','account_password_credentials','account_contact_points','account_identity_principals','account_principals','account_identities','email_username_mapping','account_email_challenges','account_oauth_attempts','users'];
+  }
+  async assertScope(filters) {
+    const allowed = this.allowedTables();
     for (const [table, items] of filters) if (!allowed.includes(table)) {
       const [row] = await this.all(`SELECT count(*) AS n FROM ${table} WHERE ${items.map(x=>x.sql).join(' OR ')}`, ...items.flatMap(x=>x.values));
       if (row.n) throw Error('janitor_scope_blocked');
     }
+  }
+  async remove(input) {
+    const filters = await this.filters(input);
+    const allowed = this.allowedTables();
+    await this.assertScope(filters);
     const statements=[];
     for (const table of allowed) {
       const items=filters.get(table); if (!items?.length) continue;

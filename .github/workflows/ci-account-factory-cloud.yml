@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 60
     environment: ci-isolated
     env:
-      CORE_SHA: f781e6c85375ba0945aa4fd4c19ead89e396dfdb
+      CORE_SHA: c7d0e24b7561c6f5d1bb3c0e975f599643252504
     steps:
       - name: Require trusted main and isolated deployment credential
         env:

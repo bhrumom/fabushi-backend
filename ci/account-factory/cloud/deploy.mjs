@@ -4,6 +4,7 @@ import { generateKeyPairSync, randomBytes, createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { requireIsolation } from '../factory-core.mjs';
+import { prepareRemoteSchema } from './remote-schema.mjs';
 if(process.env.GITHUB_ACTIONS!=='true'||process.env.GITHUB_REF!=='refs/heads/main'||!process.env.CLOUDFLARE_API_TOKEN) throw Error('not_configured');
 const r=JSON.parse(readFileSync(new URL('./resources.json',import.meta.url)));requireIsolation(r);
 const root=`https://api.cloudflare.com/client/v4/accounts/${r.accountId}`;
@@ -30,6 +31,7 @@ try{
  const existing=await query(r.accountDbId,"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'sqlite_%'");
  if(existing.some(x=>x.name==='ci_fixture_schema')){const [version]=await query(r.accountDbId,'SELECT digest FROM ci_fixture_schema');if(version?.digest!==schemaDigest)throw Error('schema_change_requires_migration');}
  else {if(existing.length)throw Error('nonempty_unowned_database');await query(r.accountDbId,schema);await query(r.accountDbId,'CREATE TABLE ci_fixture_schema(digest TEXT NOT NULL)');await query(r.accountDbId,'INSERT INTO ci_fixture_schema VALUES(?)',[schemaDigest]);}
+ report.remoteSchema=await prepareRemoteSchema({resources:r,query,schemaRoot:join('core','third_party/mahayana/mahayana-rs/mahayana-platform-worker/migrations')});
  for(const name of ['factory','auth']) {
   execFileSync(wrangler,['deploy','--config',join(dir,`${name}.json`)],{stdio:['ignore','pipe','pipe'],timeout:180000});
  }
