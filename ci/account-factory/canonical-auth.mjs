@@ -13,8 +13,9 @@ export class CanonicalAuthAdapter {
       headers: { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json' },
       body: form ? new URLSearchParams(body).toString() : JSON.stringify(body),
     });
-    if (!response.ok) throw new Error('auth_request_failed');
-    return html ? null : response.json();
+    if (!response.ok) { await response.body?.cancel(); throw new Error('auth_request_failed'); }
+    if (html) { await response.body?.cancel(); return null; }
+    return response.json();
   }
   async register({ username, email, password, deviceIds }) {
     const start = await this.request('/api/auth/browser/start', { deviceId: deviceIds[0], platform: 'desktop' });

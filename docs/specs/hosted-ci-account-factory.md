@@ -270,3 +270,15 @@ known bridge error codes and subrequest-limit text. Poll exact-source health in
 the acceptance runner too, since separate edge requests can briefly disagree.
 Use the diagnostics to distinguish infrastructure limits from ordinary auth errors;
 no automatic retry of uncertain account mutations or paid upgrade is allowed.
+
+HAF-16: Cloud 38665783121 shows A/B complete wrong-code rejection, registration
+and password login; C code request fails before any bridge callback (17th auth
+request; four prior successful HTML responses). Source review finds the adapter
+leaves successful HTML response bodies unread, retaining runtime connection slots.
+Explicitly cancel HTML bodies after checking status, since completion is proved
+by the authenticated poll; cancel rejected response bodies before throwing too.
+No request is retried and no code/password validator is bypassed. Adversarial
+contracts must prove both paths release the stream; real cloud rerun must prove
+all three accounts plus the second full lifecycle before accepting the diagnosis.
+Reference: Cloudflare Workers limits, simultaneous outgoing connections (6);
+https://developers.cloudflare.com/workers/platform/limits/.
