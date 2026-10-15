@@ -6,6 +6,10 @@ on:
         description: Verified canonical Platform Core main SHA
         type: string
         required: true
+      migrate_platform:
+        description: Apply reviewed pending canonical PLATFORM_DB migrations before deployment
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -108,6 +112,16 @@ jobs:
       - name: Capture ACCOUNT_DB recovery bookmark before mutation
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
         run: npx --yes wrangler@4.110.0 d1 time-travel info ACCOUNT_DB --json > "$RUNNER_TEMP/mcp-account-recovery.json"
+      - name: Capture PLATFORM_DB recovery bookmark before mutation
+        working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
+        run: npx --yes wrangler@4.110.0 d1 time-travel info PLATFORM_DB --json > "$RUNNER_TEMP/mcp-platform-recovery.json"
+      - name: Inventory pending canonical PLATFORM_DB migrations
+        working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
+        run: npx --yes wrangler@4.110.0 d1 migrations list PLATFORM_DB --remote > "$RUNNER_TEMP/mcp-platform-pending.txt"
+      - name: Apply reviewed canonical PLATFORM_DB migrations
+        if: inputs.migrate_platform
+        working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
+        run: npx --yes wrangler@4.110.0 d1 migrations apply PLATFORM_DB --remote
       - name: Apply additive account connection migrations
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
         run: npx --yes wrangler@4.110.0 d1 migrations apply ACCOUNT_DB --remote
@@ -140,9 +154,12 @@ jobs:
         run: |
           jq -n --arg coreSha "$CORE_SHA" --arg backendSha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" '{coreRepository:"bhrumom/fabushi-platform-core",coreSha:$coreSha,backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,runId:$run,worker:"mahayana-platform",route:"https://api.ombhrum.com/api/mcp/oauth/start",result:"deployed; real provider consent and packaged acceptance still required"}' > official-mcp-delivery.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: official-mcp-delivery-${{ inputs.core_sha }}
           if-no-files-found: error
           path: |
             official-mcp-delivery.json
             ${{ runner.temp }}/mcp-account-recovery.json
+            ${{ runner.temp }}/mcp-platform-recovery.json
+            ${{ runner.temp }}/mcp-platform-pending.txt

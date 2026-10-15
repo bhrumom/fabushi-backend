@@ -66,7 +66,13 @@ test('platform broker delivery resolves canonical credential aliases and uses th
   const platform = readFileSync(join(repoRoot, '.github/workflows/official-mcp-platform-delivery.yml'), 'utf8');
   for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) {
     const credentialLine = workflow.split('\n').find(line => line.trim().startsWith(name + ':')).trim();
-    assert.ok(platform.includes(credentialLine), `platform credential resolution differs: ${name}`);
+    // Preserve every canonical alias and its ordering, with only the explicitly
+    // approved production FDN credential appended for this delivery owner.
+    const expectedLine = name === 'CLOUDFLARE_API_TOKEN'
+      ? credentialLine.replace(' }}', ' || secrets.FABUSHI_FDN_CF_BOOTSTRAP_TOKEN }}')
+      : credentialLine;
+    assert.ok(platform.includes(expectedLine), `platform credential resolution differs: ${name}`);
+    assert.ok(!platform.includes('CI_CLOUDFLARE_API_TOKEN'), 'isolated factory credential must never enter production delivery');
   }
   assert.match(platform, /worker-build --release --no-panic-recovery --locked/);
   assert.match(platform, /Canonical build hook changed; refusing unverified rebuild/);
