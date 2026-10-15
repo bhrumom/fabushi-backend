@@ -70,3 +70,10 @@ test('failure diagnostics never expose upstream bodies, credentials, codes or er
  await assert.rejects(failing('https://test.invalid/api/auth/browser/attempts/private-id',{}),/auth_transport_failed/);
  assert.deepEqual(output,{route:'/api/auth/browser/attempts/:id',status:'transport_failed',category:'unclassified_failure'});
 });
+
+import {fixtureHandler} from './service.mjs';
+test('diagnostic observer failure cannot change invalid-OIDC denial or disclose errors',async()=>{
+ const handler=fixtureHandler({factory:{},policy:{},onError(){throw Error('PRIVATE_OBSERVER_FAILURE');}});
+ const response=await handler(new Request('https://fixture.invalid/v1/leases',{method:'POST',headers:{authorization:'Bearer invalid','content-type':'application/json'},body:'{"scenarioId":"test"}'}));
+ assert.equal(response.status,401);assert.deepEqual(await response.json(),{error:'oidc_denied'});
+});
