@@ -1,3 +1,4 @@
+import ipaddress
 import importlib.util
 import struct
 import unittest
@@ -19,6 +20,17 @@ class StunBoundary(unittest.TestCase):
 
     def test_valid_xor_mapping(self):
         self.assertTrue(probe.mapped_response(self.packet(), self.transaction, self.source))
+
+    def test_ipv4_mapped_ipv6_unmaps_and_private_stays_denied(self):
+        for address, allowed in [('::ffff:8.8.8.8', True), ('::ffff:127.0.0.1', False), ('::ffff:10.0.0.1', False), ('2001:4860:4860::8888', False)]:
+            mask = struct.pack('!I', probe.COOKIE) + self.transaction
+            encoded = bytes(a ^ b for a, b in zip(ipaddress.IPv6Address(address).packed, mask))
+            attrs = struct.pack('!HHBBH', 0x20, 20, 0, 2, 12345 ^ (probe.COOKIE >> 16)) + encoded
+            if allowed:
+                self.assertTrue(probe.mapped_response(self.packet(attrs), self.transaction, self.source))
+            else:
+                with self.assertRaises(ValueError):
+                    probe.mapped_response(self.packet(attrs), self.transaction, self.source)
 
     def test_wrong_source_or_transaction_or_cookie(self):
         for packet, transaction, source in [(self.packet(), self.transaction, ('127.0.0.1', 3478)),
