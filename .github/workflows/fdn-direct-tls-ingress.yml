@@ -1,0 +1,97 @@
+name: FDN direct TLS ingress
+on:
+  pull_request:
+    paths:
+      - fdn-network-coordinator/apache-fdn-*.conf
+      - fdn-network-coordinator/install-direct-ingress.sh
+      - .github/workflows/fdn-direct-tls-ingress.yml
+      - docs/specs/fdn-direct-tls-ingress.md
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Activate confirmed DNS-only public TLS and STUN ingress
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: fdn-direct-tls-ingress-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify actual Apache configuration with synthetic Actions certificate
+        run: |
+          set -euo pipefail
+          bash -n fdn-network-coordinator/install-direct-ingress.sh
+          sudo apt-get update -qq
+          sudo apt-get install -y apache2
+          sudo a2enmod ssl proxy proxy_http headers
+          sudo mkdir -p /etc/letsencrypt/live/fdn.ombhrum.com /var/www/fabushi-fdn-acme
+          sudo openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=fdn.ombhrum.com -keyout /etc/letsencrypt/live/fdn.ombhrum.com/privkey.pem -out /etc/letsencrypt/live/fdn.ombhrum.com/fullchain.pem 2>/dev/null
+          sudo cp fdn-network-coordinator/apache-fdn-http.conf /etc/apache2/sites-available/fabushi-fdn-http.conf
+          sudo cp fdn-network-coordinator/apache-fdn-tls.conf /etc/apache2/sites-available/fabushi-fdn-tls.conf
+          sudo a2ensite fabushi-fdn-http.conf fabushi-fdn-tls.conf
+          sudo apache2ctl configtest
+          tar -C fdn-network-coordinator -czf "$RUNNER_TEMP/fdn-direct-ingress.tgz" apache-fdn-http.conf apache-fdn-tls.conf install-direct-ingress.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fdn-direct-ingress-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/fdn-direct-ingress.tgz
+          if-no-files-found: error
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.FABUSHI_FDN_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.FABUSHI_FDN_DEPLOY_USER }}
+      MODE: ${{ inputs.publish && 'publish' || 'stage' }}
+    steps:
+      - run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/download-artifact@v5
+        with:
+          name: fdn-direct-ingress-${{ github.sha }}
+      - name: Prepare pinned SSH identity
+        env:
+          KEY: ${{ secrets.FABUSHI_FDN_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.FABUSHI_FDN_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+      - name: Stage or activate exact-source ingress
+        run: |
+          set -euo pipefail
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes fdn-direct-ingress.tgz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/fdn-direct-ingress-$GITHUB_SHA.tgz"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "tar -xOf /tmp/fdn-direct-ingress-$GITHUB_SHA.tgz install-direct-ingress.sh | sudo bash -s -- /tmp/fdn-direct-ingress-$GITHUB_SHA.tgz $GITHUB_SHA $MODE" > fdn-ingress-deployment.txt
+      - name: Verify real public TLS health and administrative denial
+        if: inputs.publish
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 15 https://fdn.ombhrum.com/health > /dev/null
+          for path in /metrics /api/v1/node /swagger /debug; do
+            status=$(curl --silent --show-error --max-time 15 -o /dev/null -w '%{http_code}' "https://fdn.ombhrum.com$path")
+            test "$status" = 403
+          done
+          echo 'real_tls_health=passed;public_admin_paths=denied' >> fdn-ingress-deployment.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fdn-ingress-deployed-${{ github.sha }}-${{ github.run_id }}
+          path: fdn-ingress-deployment.txt
+          if-no-files-found: error
+      - name: Remove temporary deployment material
+        if: always()
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "rm -f /tmp/fdn-direct-ingress-$GITHUB_SHA.tgz" || true
+          rm -f "$HOME/.ssh/id_ed25519"
