@@ -57,11 +57,13 @@ test('child cannot inherit OIDC, cloud, GitHub, SSH, passwords or runtime inject
 });
 test('two distinct real account and exact source evidence is mandatory', () => {
   const source = 'a'.repeat(40);
-  const value = { sourceSha: source, harnessSource: source, accountA: '1'.repeat(64), accountB: '2'.repeat(64), realDepartureClosedWindow: true, distinctInstallations: true, distinctOrigins: true, retainedAccountASetting: true };
+  const value = { sourceSha: source, harnessSource: source, issuerEnvironment: 'ci-isolated', sessionDelivery: 'private-fifo', accountA: '1'.repeat(64), accountB: '2'.repeat(64), realDepartureClosedWindow: true, distinctInstallations: true, distinctOrigins: true, retainedAccountASetting: true };
   assert.equal(verifyAccountEvidence(value, source), true);
   for (const field of ['realDepartureClosedWindow', 'distinctInstallations', 'distinctOrigins', 'retainedAccountASetting']) assert.throws(() => verifyAccountEvidence({ ...value, [field]: false }, source), /DFC_ACCOUNT_EVIDENCE_INVALID/);
   assert.throws(() => verifyAccountEvidence({ ...value, accountB: value.accountA }, source), /DFC_ACCOUNT_EVIDENCE_INVALID/);
   assert.throws(() => verifyAccountEvidence({ ...value, harnessSource: 'b'.repeat(40) }, source), /DFC_ACCOUNT_EVIDENCE_INVALID/);
+  assert.throws(() => verifyAccountEvidence({ ...value, issuerEnvironment: 'production' }, source), /DFC_ACCOUNT_EVIDENCE_INVALID/);
+  assert.throws(() => verifyAccountEvidence({ ...value, sessionDelivery: 'disk-json' }, source), /DFC_ACCOUNT_EVIDENCE_INVALID/);
 });
 test('factory routes stay isolated, memory delivery has no session JSON and cleanup is finally owned', () => {
   assert.notEqual(new URL(authOrigin).host, 'api.ombhrum.com');

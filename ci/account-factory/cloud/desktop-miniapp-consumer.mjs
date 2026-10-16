@@ -35,7 +35,7 @@ export function childEnvironment(input, additions) {
 }
 
 export function verifyAccountEvidence(value, sourceSha) {
-  if (value?.sourceSha !== sourceSha || value.harnessSource !== sourceSha || !/^[a-f0-9]{64}$/.test(value.accountA || '') || !/^[a-f0-9]{64}$/.test(value.accountB || '') || value.accountA === value.accountB || value.realDepartureClosedWindow !== true || value.distinctInstallations !== true || value.distinctOrigins !== true || value.retainedAccountASetting !== true) fail('DFC_ACCOUNT_EVIDENCE_INVALID');
+  if (value?.sourceSha !== sourceSha || value.harnessSource !== sourceSha || value.issuerEnvironment !== 'ci-isolated' || value.sessionDelivery !== 'private-fifo' || !/^[a-f0-9]{64}$/.test(value.accountA || '') || !/^[a-f0-9]{64}$/.test(value.accountB || '') || value.accountA === value.accountB || value.realDepartureClosedWindow !== true || value.distinctInstallations !== true || value.distinctOrigins !== true || value.retainedAccountASetting !== true) fail('DFC_ACCOUNT_EVIDENCE_INVALID');
   return true;
 }
 
