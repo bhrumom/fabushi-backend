@@ -3,6 +3,9 @@ name: FDN Account Enrollment Proxy
 on:
   pull_request:
     paths:
+      - "fabushi/web/src/routes/fdn-enrollment-gateway.js"
+      - "fabushi/web/src/router.js"
+      - "fabushi/web/tests/fdn-enrollment-gateway.test.js"
       - "ai-backend/src/fdn_network_enrollment_proxy.js"
       - "ai-backend/src/server.js"
       - "ai-backend/test/fdn_network_enrollment_proxy.test.js"
@@ -10,6 +13,9 @@ on:
   push:
     branches: [main]
     paths:
+      - "fabushi/web/src/routes/fdn-enrollment-gateway.js"
+      - "fabushi/web/src/router.js"
+      - "fabushi/web/tests/fdn-enrollment-gateway.test.js"
       - "ai-backend/src/fdn_network_enrollment_proxy.js"
       - "ai-backend/src/server.js"
       - "ai-backend/test/fdn_network_enrollment_proxy.test.js"
@@ -56,3 +62,5 @@ jobs:
           fi
       - name: Test account-bound enrollment proxy
         run: node --test test/fdn_network_enrollment_proxy.test.js
+      - name: Test canonical public enrollment gateway
+        run: node --test ../fabushi/web/tests/fdn-enrollment-gateway.test.js
