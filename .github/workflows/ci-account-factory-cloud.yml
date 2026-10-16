@@ -1,6 +1,20 @@
 name: Isolated Cloud Account Delivery
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [delivery, desktop-miniapp]
+        default: delivery
+      desktop_source_sha:
+        description: Canonical-main signed Desktop binary and harness source
+        type: string
+      desktop_artifact_id:
+        description: Successful canonical-main Desktop release artifact ID
+        type: string
+      desktop_archive_sha256:
+        description: Exact immutable GitHub artifact archive SHA256
+        type: string
 permissions:
   contents: read
   id-token: write
@@ -9,6 +23,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deliver:
+    if: ${{ inputs.mode == 'delivery' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: ci-isolated
@@ -78,4 +93,83 @@ jobs:
         with:
           name: cloud-account-evidence-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/
+          if-no-files-found: error
+  desktop-miniapp:
+    if: ${{ inputs.mode == 'desktop-miniapp' }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    runs-on: macos-15
+    timeout-minutes: 35
+    environment: ci-isolated
+    env:
+      DESKTOP_SOURCE_SHA: ${{ inputs.desktop_source_sha }}
+      DESKTOP_ARTIFACT_ID: ${{ inputs.desktop_artifact_id }}
+      DESKTOP_ARCHIVE_SHA256: ${{ inputs.desktop_archive_sha256 }}
+    steps:
+      - name: Require reviewed main and immutable public metadata
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$DESKTOP_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$DESKTOP_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$DESKTOP_ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: bhrumom/fabushi-desktop
+          ref: ${{ inputs.desktop_source_sha }}
+          path: desktop-source
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Check contracts and locked harness without cloud or OIDC credentials
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+        run: |
+          set -euo pipefail
+          node --test ci/account-factory/desktop-miniapp-consumer.test.mjs
+          npm --prefix desktop-source/desktop ci --ignore-scripts --prefer-offline --no-audit --no-fund
+          cd desktop-source/desktop
+          ./node_modules/.bin/tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop e2e/miniapp-packaged-acceptance.spec.ts
+      - name: Verify accepted canonical-main source, artifact, installed signature and Gatekeeper
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+        run: node ci/account-factory/cloud/desktop-miniapp-candidate.mjs
+      - name: Create the disposable owned RAM data volume before account allocation
+        run: |
+          set -euo pipefail
+          device="$(/usr/bin/hdiutil attach -nomount ram://1048576 | tr -d '[:space:]')"
+          [[ "$device" =~ ^/dev/disk[0-9]+$ ]]
+          echo "DFC_RAM_DEVICE=$device" >> "$GITHUB_ENV"
+          /usr/sbin/diskutil eraseVolume HFS+ "FabushiLease-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "$device"
+          echo "DFC_RAM_VOLUME=/Volumes/FabushiLease-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+      - name: Real ordinary account lease and signed native two-account isolation
+        timeout-minutes: 12
+        run: node ci/account-factory/cloud/desktop-miniapp-consumer.mjs
+      - name: Dispose only this run's owned RAM image
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -n "${DFC_RAM_DEVICE:-}" ]; then
+            [[ "$DFC_RAM_DEVICE" =~ ^/dev/disk[0-9]+$ ]]
+            /usr/bin/hdiutil detach "$DFC_RAM_DEVICE"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: desktop-miniapp-factory-${{ inputs.desktop_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            desktop-evidence/candidate.json
+            desktop-evidence/factory-acceptance.json
+            desktop-evidence/runtime/account-switch-*/account-isolation.json
+            desktop-evidence/runtime/account-switch-*/returned-account-A.png
           if-no-files-found: error
