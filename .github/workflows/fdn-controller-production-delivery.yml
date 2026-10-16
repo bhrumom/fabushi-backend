@@ -62,6 +62,7 @@ jobs:
         run: |
           set -euo pipefail
           bash -n fdn-network-coordinator/install-controller-stack.sh
+          sudo env PATH="$PATH" node --test fdn-network-coordinator/controller-installation.test.mjs
           bash -n fdn-network-coordinator/run-enrollment-service.sh
           bash -n fdn-network-coordinator/run-official-device-mcp-ingress-binder.sh
           node --test fdn-network-coordinator/enrollment-broker.test.mjs
@@ -257,7 +258,7 @@ jobs:
       - name: Remove transient deployment material
         if: always()
         run: |
-          rm -f "$HOME/.ssh/id_ed25519" "$RUNNER_TEMP"/*.env
           if [[ -n "${DEPLOY_HOST:-}" && -n "${DEPLOY_USER:-}" && -f "$HOME/.ssh/known_hosts" ]]; then
             ssh "$DEPLOY_USER@$DEPLOY_HOST" "rm -f /tmp/fdn-controller-stack-$GITHUB_SHA.tgz /tmp/fdn-network-worker.env /tmp/fdn-network-enrollment.env /tmp/fdn-official-device-mcp.env /tmp/install-controller-stack.sh" || true
           fi
+          rm -f "$HOME/.ssh/id_ed25519" "$RUNNER_TEMP"/*.env

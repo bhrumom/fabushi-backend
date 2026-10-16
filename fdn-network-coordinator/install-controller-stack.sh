@@ -23,12 +23,46 @@ ensure_layout() {
   install -d -o fabushi-fdn -g fabushi-fdn -m 0700 "$state"
 }
 
+unit_names="fabushi-fdn-enrollment.service fabushi-fdn-official-mcp-ingress.service fabushi-fdn-official-mcp-ingress.timer fabushi-fdn-network-worker.service fabushi-fdn-official-device-mcp.service"
+
+install_units() {
+  local release="$1" uid socket
+  for unit in $unit_names; do
+    install -m 0644 "$release/fdn-network-coordinator/systemd/$unit" "$units/$unit" || return 1
+  done
+  uid="$(id -u fabushi-fdn)"
+  socket="$(sed -n 's/^DOCKER_HOST=unix:\/\///p' "$etc_root/fdn-network-enrollment.env")"
+  [[ "$socket" = "/run/user/$uid/docker.sock" ]] || return 1
+  install -d -m 0755 "$units/fabushi-fdn-enrollment.service.d" || return 1
+  printf '[Service]\nBindReadOnlyPaths=%s\n' "$socket" > "$units/fabushi-fdn-enrollment.service.d/rootless-socket.conf" || return 1
+  systemctl daemon-reload
+}
+
 health() {
-  systemctl is-active --quiet fabushi-fdn-network-worker.service
-  systemctl is-active --quiet fabushi-fdn-enrollment.service
-  systemctl is-active --quiet fabushi-fdn-official-device-mcp.service
-  systemctl is-active --quiet fabushi-fdn-official-mcp-ingress.timer
+  systemctl is-active --quiet fabushi-fdn-network-worker.service &&
+  systemctl is-active --quiet fabushi-fdn-enrollment.service &&
+  systemctl is-active --quiet fabushi-fdn-official-device-mcp.service &&
+  systemctl is-active --quiet fabushi-fdn-official-mcp-ingress.timer &&
   curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8791/v1/fdn/status >/dev/null
+}
+
+activate() {
+  systemctl restart fabushi-fdn-network-worker.service || return 1
+  local ready=false deadline=$((SECONDS+95))
+  while (( SECONDS < deadline )); do
+    if curl --fail --silent --max-time 1 http://127.0.0.1:8791/v1/fdn/status >/dev/null; then ready=true; break; fi
+    sleep 1
+  done
+  [[ "$ready" = true ]] || return 1
+  systemctl restart fabushi-fdn-enrollment.service || return 1
+  systemctl restart fabushi-fdn-official-device-mcp.service || return 1
+  systemctl restart fabushi-fdn-official-mcp-ingress.timer || return 1
+  systemctl start fabushi-fdn-official-mcp-ingress.service || return 1
+  health
+}
+
+stop_new() {
+  systemctl stop fabushi-fdn-official-mcp-ingress.timer fabushi-fdn-official-device-mcp.service fabushi-fdn-enrollment.service fabushi-fdn-network-worker.service || true
 }
 
 case "$action" in
@@ -51,34 +85,37 @@ case "$action" in
 ' "$core_sha" > "$tmp/CORE_SHA"
     chown -R root:root "$tmp"
     chmod -R go-w "$tmp"
-    rm -rf "$release"
-    mv "$tmp" "$release"
+    if [[ -d "$release" ]]; then
+      # An immutable exact-source release is reused, never removed while current.
+      test "$(cat "$release/BACKEND_SHA")" = "$backend_sha"
+      test "$(cat "$release/CORE_SHA")" = "$core_sha"
+      rm -rf "$tmp"
+    else
+      mv "$tmp" "$release"
+    fi
 
     previous=""
     if [[ -L "$root/current" ]]; then
       previous="$(readlink -f "$root/current" || true)"
-      [[ -n "$previous" ]] && ln -sfn "$previous" "$root/previous"
+      if [[ "$previous" = "$release" ]]; then
+        previous="$(readlink -f "$root/previous" 2>/dev/null || true)"
+      else
+        [[ -n "$previous" ]] && ln -sfn "$previous" "$root/previous"
+      fi
     fi
     ln -sfn "$release" "$root/current.new"
     mv -Tf "$root/current.new" "$root/current"
 
-    for unit in       fabushi-fdn-enrollment.service       fabushi-fdn-official-mcp-ingress.service       fabushi-fdn-official-mcp-ingress.timer       fabushi-fdn-network-worker.service       fabushi-fdn-official-device-mcp.service
-    do
-      install -m 0644 "$release/fdn-network-coordinator/systemd/$unit" "$units/$unit"
-    done
-    systemctl daemon-reload
-    systemctl enable fabushi-fdn-network-worker.service fabushi-fdn-enrollment.service fabushi-fdn-official-device-mcp.service fabushi-fdn-official-mcp-ingress.timer
-    systemctl restart fabushi-fdn-network-worker.service
-    systemctl restart fabushi-fdn-enrollment.service
-    systemctl restart fabushi-fdn-official-device-mcp.service
-    systemctl restart fabushi-fdn-official-mcp-ingress.timer
-    systemctl start fabushi-fdn-official-mcp-ingress.service
-    if ! health; then
-      if [[ -n "$previous" && -d "$previous" ]]; then
+    if ! {
+      install_units "$release" &&
+      systemctl enable fabushi-fdn-network-worker.service fabushi-fdn-enrollment.service fabushi-fdn-official-device-mcp.service fabushi-fdn-official-mcp-ingress.timer &&
+      activate
+    }; then
+      stop_new
+      if [[ -n "$previous" && "$previous" != "$release" && -d "$previous" ]]; then
         ln -sfn "$previous" "$root/current.rollback"
         mv -Tf "$root/current.rollback" "$root/current"
-        systemctl restart fabushi-fdn-network-worker.service fabushi-fdn-enrollment.service fabushi-fdn-official-device-mcp.service
-        systemctl restart fabushi-fdn-official-mcp-ingress.timer
+        if ! { install_units "$previous" && activate; }; then stop_new; fi
       fi
       fail "health check failed; previous release restored when available"
     fi
@@ -92,11 +129,8 @@ case "$action" in
     ln -sfn "$previous" "$root/current.rollback"
     mv -Tf "$root/current.rollback" "$root/current"
     [[ -n "$current" ]] && ln -sfn "$current" "$root/previous"
-    systemctl daemon-reload
-    systemctl restart fabushi-fdn-network-worker.service fabushi-fdn-enrollment.service fabushi-fdn-official-device-mcp.service
-    systemctl restart fabushi-fdn-official-mcp-ingress.timer
-    systemctl start fabushi-fdn-official-mcp-ingress.service
-    health
+    install_units "$previous"
+    activate
     ;;
   health)
     health

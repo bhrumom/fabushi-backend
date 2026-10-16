@@ -164,3 +164,91 @@ manual registration. Core browser/start, browser/register/code, browser/register
 protected attempt poll are ordinary public registration APIs, not a test issuer.
 Server accepted send request, but actual mailbox delivery is not yet confirmed.
 Do not claim delivered email or a created account from a successful send response.
+
+
+## Controller administrative bootstrap (2026-10-15)
+
+CB01: The ordinary production subject has now been canonically registered and
+verified. Read immutable accountId and canonical cellId from root-only operator
+credentials; never embed ordinary login credentials in service env payloads.
+The coordinator admin may create exactly one controller node for this cell using
+its existing dedicated Headscale administrative owner. This is controller deployment,
+not target-device enrollment. The target broker still requires Core grant redemption
+before its mint script; no fabricated target grant, SQL binding or device token.
+
+CB02: Resolve exactly one Headscale user by exact canonical cell name, create only
+if absent, then require a unique positive numeric ID. Mint a nonreusable,
+nonephemeral 300-second controller preauthkey only after the immutable Actions build
+artifact has passed. Retain the key only in root-private bootstrap storage and
+protected service configuration. Never output its value. One node's persisted tsnet
+state is durable across restart; the consumed key grants no second enrollment.
+Missing state after key consumption requires an explicit new administrative mint;
+do not silently rotate/recreate nodes or extend key TTL. Unknown activation outcome
+requires node/state reconciliation before retry.
+
+CB03: Assemble three env payloads from verified identity, existing Core authority,
+loopback worker8791/enrollment8793/MCP8794, rootless uid993 daemon and distinct
+random broker, AES256 enrollment state and MCP vault keys. Preserve these durable
+keys idempotently in root-only storage. Preserve legacy MCP8792/ingress. Ordinary
+access/refresh/device tokens remain forbidden. Use the existing public MCP origin
+only for later validated cutover; staging a listener is not public acceptance.
+
+CB04: Transfer payloads only as GitHub sealed-box ciphertext encrypted with the
+production environment public key. Plaintext stays in trusted server memory/root
+storage and encrypted GitHub secrets. Verify secret names/timestamps only. Existing
+protected delivery still requires all seven inputs and exact Core gates. It may fail
+closed on missing payloads after building, then rerun only the failed deploy job
+immediately after mint to keep the 300-second validity window. No build/test runs
+on the server; activation and acceptance remain in GitHub Actions.
+
+CB05: Record build source/artifact, deployment attempt, actual systemd health and
+controller Core ingress projection. Registration, successful secret writes, or a
+public health endpoint alone do not satisfy production MCP/transport acceptance.
+On failure retain private journal and inspect sanitized state. Rollback stops only
+new services or uses existing previous release; never alter legacy service or
+delete production identity, persistent network state or vault keys.
+
+Acceptance: CB01 immutable identity/cell matched; CB02 one exact-cell controller
+with bounded oneuse key; CB03 all three real isolated payloads; CB04 secure secret
+writes plus protected Actions delivery; CB05 exact-source health/projection evidence.
+Every criterion remains pending until its own recorded observation. This operational
+extension preserves ENV01–09 and PA01–05 and the target enrollment grant boundary.
+
+## Observed activation failures / correction contract (2026-10-16)
+
+Run38746114659 attempt2 built and verified b8d82eb8 successfully; all seven
+production inputs and exact Core gates passed. Activation failed before ingress;
+new units were subsequently stopped after observing repeated startup failures.
+Legacy MCP remains running. No enrolled Headscale controller node exists yet.
+
+ST01: Enrollment keeps ProtectHome=tmpfs and all other hardening, with only its
+own dedicated rootless Docker unix socket bind mounted through a generated unit
+drop-in. Installer derives service UID, validates DOCKER_HOST matches that UID,
+and never exposes the entire /run/user tree or rootful daemon. Worker requires
+AF_NETLINK for upstream netmon.New interface monitoring; permit only that extra
+family without kernel/network-administration capabilities. Confirm this inferred
+worker startup cause by actual activation, not by claiming source inspection proves it.
+
+ST02: MCP service configuration must use the fixed endpoint path
+/v1/fdn/private-request. Startup failures remain fail closed. Preserve distinct
+vault/state keys and existing root-private journal across correction.
+
+ST03: Activation must wait boundedly (at most100 seconds) for worker HTTP status
+before starting the Core ingress binder; tsnet.Up already has a90-second bound.
+Every activation failure, including an early systemctl/binder error, must reach
+rollback handling rather than escape set-e. For first install stop only the new
+units/timer; with a previous different release restore its units/current symlink
+and services. Reinstalling the same SHA must not delete the current release tree
+or pretend it is a valid previous rollback. Preserve persistent state and env.
+
+ST04: Keep sanitized startup diagnosis to fixed categories (filesystem-permission,
+address-family, network-permission, timeout, unknown) based on typed errors; never
+log raw upstream errors, keys, URLs or callback payload. Actions must exercise
+these categories and deploy start-failure rollback/reinstall behavior. Existing
+coordinator, Go, MCP build/test contracts remain required. Final actual deployment
+health and Core ingress projection must pass at the exact new source.
+
+Release through a scoped Backend PR; no local/server builds/tests. A replacement
+controller preauthkey is permitted only after read-only reconciliation finds no
+enrolled node and no persisted identity; mint immediately before failed-job retry.
+Old keys stay expired, persistent service encryption keys remain unchanged.
