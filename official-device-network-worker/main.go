@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"tailscale.com/envknob"
@@ -229,6 +230,17 @@ func requiredEnv(name string) string {
 	return value
 }
 
+// Only fixed categories may leave the process; upstream errors may carry secrets.
+func startupFailureCategory(err error) string {
+ switch {
+ case errors.Is(err, syscall.EAFNOSUPPORT): return "address-family"
+ case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EROFS): return "filesystem-permission"
+ case errors.Is(err, syscall.EPERM): return "network-permission"
+ case errors.Is(err, context.DeadlineExceeded): return "timeout"
+ default: return "unknown"
+ }
+}
+
 func main() {
 	envknob.SetNoLogsNoSupport()
 
@@ -270,7 +282,7 @@ func main() {
 	authKey = ""
 	server.AuthKey = ""
 	if err != nil {
-		log.Fatal("Fabushi FDN network worker failed to reach running state")
+		log.Fatalf("Fabushi FDN network worker failed to reach running state: %s", startupFailureCategory(err))
 	}
 	defer server.Close()
 	selfNodeID, ok := preferredSelfNode(status.TailscaleIPs)
