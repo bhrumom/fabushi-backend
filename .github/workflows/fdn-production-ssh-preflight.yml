@@ -62,7 +62,7 @@ jobs:
           ' > fdn-service-inventory.txt
           python3 - <<'PYCODE'
           import json,os,pathlib
-          rows=pathlib.Path('fdn-service-inventory.txt').read_text().splitlines()
+          rows=[row for row in pathlib.Path('fdn-service-inventory.txt').read_text().splitlines() if row.strip()]
           assert len(rows)==10, 'unexpected service inventory shape'
           assert rows[0]==os.environ['RUNTIME_SHA'], 'runtime SHA mismatch'
           assert len(rows[1])==40 and all(c in '0123456789abcdef' for c in rows[1]), 'invalid Core SHA'
