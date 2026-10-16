@@ -265,3 +265,14 @@ real service through a release/current symlink, observe ready plus unauthenticat
 No change to grant/token/state authority or network identity. Preserve the already
 enrolled node and private tsnet identity; do not mint another key or create a node.
 The whole deployment is still failed until exact-source service health passes.
+
+## Read-only deployed-service inventory
+
+ENV10: Existing protected-main SSH inventory may accept an optional exact runtime
+SHA. With it, inventory the installed Backend/Core provenance, all three services,
+ingress timer/last binder result, worker ready HTTP, MCP8794 health HTTP and the
+unauthenticated enrollment POST status. Assertions execute in Actions against
+captured bounded metadata; no mutation or authorization relaxation. Record only
+known public health bodies, fixed status values and source hashes. Never copy
+service envs, tsnet identity, user/session/vault credentials or private process env.
+The result is service liveness/provenance, not OAuth/native/direct/DERP acceptance.
