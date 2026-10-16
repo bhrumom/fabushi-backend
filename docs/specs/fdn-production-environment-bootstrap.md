@@ -35,9 +35,10 @@ boundaries, and enable exact-source Actions delivery when real service prerequis
 
 ## Current / target state and architecture
 Server bhrum2 has legacy official MCP at loopback8792 and rootful Docker workloads.
-Dedicated fdnuid993 rootless Docker, Headscale0.29.5, Core authority,
+Dedicated fabushi-fdn(uid993) rootless Docker, Headscale0.29.5, Core authority,
 DNS-only fdn.ombhrum.com TLS ingress and public UDP3478 are now configured.
-Only the new controller/MCP/enrollment stack awaits the real account/cell payloads.
+Controller, enrollment and MCP stack4213b49 is now installed and healthy;
+production account/cell and all three service payloads are real and configured.
 Existing legacy service and ingress stay untouched until an accepted cutover plan.
 FDN new MCP defaults8790, already used by another service: production MCP port
 and ingress must be explicitly reconciled, not overwritten by a generated payload.
@@ -49,8 +50,8 @@ Use existing seven encrypted production secret names. Worker authority remains
 outside network worker. Partial bootstrap is not successful deploy. Arm64 mismatch,
 missing group, invalid32-byte state key, occupied ports, unavailable rootless Docker,
 unconfigured authority or unsafe fixture cleanup must fail before activation.
-The enrollment launcher currently requires48 characters for a32-byte base64 state
-key (44 chars); reconcile with the broker's decoded32-byte contract before deployment.
+The earlier48-character launcher mismatch was corrected to the broker's canonical
+decoded32-byte state-key contract before deployment.
 
 ## Plan / verification
 Record spec first, configure four independently valid SSH inputs, prepare delivery
@@ -63,12 +64,12 @@ and cleanup support pass; no production smoke using isolated test credentials.
 | --- | --- | --- |
 | ENV-01/02 | passed | Four encrypted production SSH values; probe38670452945 |
 | ENV-03/04 | passed | PR76 ARM64 and service identity bootstrap integrated |
-| ENV-05 | blocked | Infrastructure configured; actual production subject/cell and three service payloads pending |
+| ENV-05 | passed | Ordinary production account/cell, three protected payloads, deployed4213b49;38830333777/38830843065 |
 | ENV-06 | passed | Factory4ccf4f31 run38696016535 actual28/28, zero-row verifier; cancelled-run TTL38699994522 auth/platform0 |
 | ENV-07 | passed | Investigation only outside Actions; no builds/tests executed |
 | AC-1 four SSH inputs securely set | passed | Protected production secret names/timestamps and SSH probe38670452945 |
-| AC-2 all seven real inputs and deployed healthy exact-source stack | blocked | ENV-05 |
-| AC-3 production OAuth/direct/DERP/WSS/isolation/revoke/recovery | blocked | AC-2 and scoped fixture infrastructure |
+| AC-2 all seven real inputs and deployed healthy exact-source stack | passed |4213b49 run38830333777 plus independent38830843065 HTTP/provenance inventory |
+| AC-3 production OAuth/direct/DERP/WSS/isolation/revoke/recovery | blocked | Real Host/transport/OAuth/negative fixtures remain; liveness is not E2E |
 
 ## Release / rollback / evidence
 Use dedicated PR and protected production workflow. Remove added authorized key
@@ -129,9 +130,10 @@ never blindly re-register or mutate D1. On deployment uncertainty preserve journ
 and fail closed. Rollback stops only new FDN units/ingress, retaining account and
 existing legacy service. Account deletion or credential reset is a separate request.
 
-Current PA01 registration page prepared; PA02 API completion pending real email delivery; PA03–05
-blocked on actual production identity and subsequent deployment. Requirements are
-not relaxed by successful isolated factory or public infrastructure checks.
+PA01–04 now passed: canonical registration/private OTP completion established immutable
+ordinary production identity and cell; actual service configuration/deployment passed.
+PA05 verification stays Actions-only; full production E2E remains AC-3 blocked.
+Neither isolated factory nor public infrastructure checks substitute for those gates.
 
 ## Infrastructure / factory evidence refresh
 
@@ -155,15 +157,17 @@ not relaxed by successful isolated factory or public infrastructure checks.
 - Oracle NSG fabushi-fdn-bhrum2-stun attaches only target primary VNIC and allows
   stateful UDP3478 ingress. Shared subnet security list remains unchanged.
 
-Remaining AC-2/3 and PA03–05 stay blocked. Public endpoint probes do not establish
+AC-2 and PA03–04 now pass per the later production evidence. AC-3 stays blocked.
+Public endpoint probes do not establish
 private enrolled direct/DERP routing, reverse-WSS tool calls, per-account denial,
 revocation, response-loss/outcome_unknown, or an installed Host acceptance.
 
 User follow-up2026-10-15 requests standard API creation instead of assuming mandatory
 manual registration. Core browser/start, browser/register/code, browser/register and
 protected attempt poll are ordinary public registration APIs, not a test issuer.
-Server accepted send request, but actual mailbox delivery is not yet confirmed.
-Do not claim delivered email or a created account from a successful send response.
+The earlier send-only response did not establish delivery. This was later resolved
+by actual inbox delivery, encrypted owner OTP and canonical registration/profile
+readback; the successful send response itself was never used as account evidence.
 
 
 ## Controller administrative bootstrap (2026-10-15)
@@ -285,10 +289,33 @@ canonical marketplace-node-delivery.yml ARM64 build/full-test/prune/full-test,
 backup, immutable-release and rollback owner (marketplace-node-production-delivery
 MND01–06); do not replace its persisted environment, database or registry owner.
 The co-located API requires only a dedicated root0600 additive EnvironmentFile
-with FABUSHI_FDN_ENROLLMENT_BROKER_URL=http://127.0.0.1:8793 and the already-created
-broker credential, never Core authority or ordinary account tokens. Validate exact
+with FABUSHI_FDN_ENROLLMENT_BROKER_URL=http://127.0.0.1:8793, the already-created
+broker credential, and FABUSHI_FDN_HEADSCALE_CONTROL_URL=https://fdn.ombhrum.com.
+The proxy validates and returns this trusted control origin after account/grant
+correlation. Never provide Core authority or ordinary account tokens. Validate exact
 subject/generation denial through the existing account proxy contracts. Preserve
 all existing drop-ins and signing/reviewer configuration. Configure without secret
 output and let canonical delivery activate the existing service. Public gateway
 routing/Host enrollment is a separate gate requiring source discovery before any
 route changes. Do not infer end-to-end availability from a running coordinator.
+
+
+## Requirement-to-evidence review (2026-10-16)
+
+| Criteria | Status | Evidence / limits |
+| --- | --- | --- |
+| ENV01–04 | passed | Pinned restricted SSH, protected inputs; ARM64 artifact installed via38830333777 |
+| ENV05 / PA01–04 / CB01–04 | passed | Canonical ordinary account; exact cell; one controller node; sealed payload transfer;4213b49 real deployment |
+| ENV06 | passed | Isolated factory28/28 and zero-row/cancelled-run evidence above; no promotion |
+| ENV07–10 / PA05 verification boundary / CB05 | passed | Actions-only contracts/delivery;38830843065 exact4213b49 HTTP/status/provenance inventory |
+| ST01–04 | passed |003fe6e Actions38828838237 four startup/reinstall/rollback contracts; real worker Running + binder on118c4a2; durable identity preserved |
+| ST05 | passed | f831fb9 Actions38830016942 six service contracts, including actual symlink listener401;4213b49 full deployment and independent HTTP inventory |
+| ENV11 | partial / blocked on final activation | Account API4213b49 deployed38830720805; ARM64 full142+142 pass. Third trusted control origin added to private env; next canonical release must activate it. Public Host gateway is tracked by GW01–04 in fdn-001-account-enrollment-proxy.md |
+| AC-1 / AC-2 | passed | Seven real encrypted production inputs;4213b49/ c7d0e24; run38830333777 installed-and-health-checked;38830843065 four active units/timer, workerReady, MCPhealthy, enrollment401, ingress success |
+| AC-3 / full G05/G16 | blocked | Actual OAuth-to-Host transport, public direct/DERP/WSS, cross-account/revoke/response-loss evidence still required |
+
+Runtime bundle SHA256086e9a2f065825e10c40ee6bd5144be44805a87d68c8b2f602ad3ebb3a363da9.
+Inventory workflow sourceb06a45d differs from deployed runtime4213b49 only in
+operational spec/inventory additions; evidence identifies the exact installed source.
+No service-liveness result is labeled native/transport acceptance. New pipeline
+changes require their own exact source/run evidence before completion.
