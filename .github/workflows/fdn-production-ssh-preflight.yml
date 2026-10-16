@@ -1,6 +1,11 @@
 name: FDN production SSH preflight
 on:
   workflow_dispatch:
+    inputs:
+      runtime_sha:
+        description: Optional exact installed backend SHA for read-only service liveness
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
@@ -12,6 +17,7 @@ jobs:
       DEPLOY_HOST: ${{ secrets.FABUSHI_FDN_DEPLOY_HOST }}
       DEPLOY_USER: ${{ secrets.FABUSHI_FDN_DEPLOY_USER }}
       DEPLOY_KEY: ${{ secrets.FABUSHI_FDN_DEPLOY_SSH_KEY }}
+      RUNTIME_SHA: ${{ inputs.runtime_sha }}
       KNOWN_HOSTS: ${{ secrets.FABUSHI_FDN_DEPLOY_KNOWN_HOSTS }}
     steps:
       - name: Require canonical main and all four inputs
@@ -36,11 +42,47 @@ jobs:
               if sudo test -f "$path"; then printf "%s=configured\n" "$path"; else printf "%s=not-configured\n" "$path"; fi
             done' > fdn-ssh-inventory.txt
           cat fdn-ssh-inventory.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Read actual service health and provenance
+        if: inputs.runtime_sha != ''
+        run: |
+          set -euo pipefail
+          [[ "$RUNTIME_SHA" =~ ^[a-f0-9]{40}$ ]]
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" 'set -eu
+            sudo cat /opt/fabushi-fdn/current/BACKEND_SHA
+            sudo cat /opt/fabushi-fdn/current/CORE_SHA
+            for unit in fabushi-fdn-network-worker.service fabushi-fdn-enrollment.service fabushi-fdn-official-device-mcp.service fabushi-fdn-official-mcp-ingress.timer; do
+              systemctl is-active "$unit"
+            done
+            systemctl show fabushi-fdn-official-mcp-ingress.service -p Result --value
+            curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8791/v1/fdn/status
+            echo
+            curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8794/health
+            echo
+            curl --silent --show-error --max-time 5 -X POST -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8793/v1/internal/fdn/enrollment/start
+          ' > fdn-service-inventory.txt
+          python3 - <<'PYCODE'
+          import json,os,pathlib
+          rows=[row for row in pathlib.Path('fdn-service-inventory.txt').read_text().splitlines() if row.strip()]
+          assert len(rows)==10, 'unexpected service inventory shape'
+          assert rows[0]==os.environ['RUNTIME_SHA'], 'runtime SHA mismatch'
+          assert len(rows[1])==40 and all(c in '0123456789abcdef' for c in rows[1]), 'invalid Core SHA'
+          assert rows[2:6]==['active']*4, 'services/timer not active'
+          assert rows[6]=='success', 'ingress binder did not succeed'
+          worker=json.loads(rows[7]);assert worker.get('ready') is True
+          assert set(worker)=={'cellId','nodeId','ready'}, 'unexpected worker fields'
+          mcp=json.loads(rows[8]);assert mcp=={'ok':True,'service':'fabushi-device-control-mcp','mcpPath':'/mcp','agentPath':'/agent'}
+          assert rows[9]=='401', 'enrollment did not reject unauthenticated request'
+          pathlib.Path('fdn-service-inventory.json').write_text(json.dumps({'backendSha':rows[0],'coreSha':rows[1],'serviceChecks':4,'workerReady':True,'mcpHealthy':True,'unauthenticatedEnrollmentStatus':401,'ingressBinder':'success','result':'passed','claims':'service liveness only'},indent=2)+'\n')
+          PYCODE
+          cat fdn-service-inventory.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: fdn-production-ssh-${{ github.sha }}
-          path: fdn-ssh-inventory.txt
+          path: |
+            fdn-ssh-inventory.txt
+            fdn-service-inventory.txt
+            fdn-service-inventory.json
           if-no-files-found: error
       - name: Remove transient SSH identity
         if: always()
