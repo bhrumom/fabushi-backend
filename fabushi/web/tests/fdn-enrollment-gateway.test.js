@@ -21,6 +21,7 @@ test('unknown paths are unclaimed and invalid route/method/media/body never disp
   [input(start+'?url=https://attacker.invalid'),400],
   [input(start,{method:'GET',body:undefined}),405],
   [input(start,{headers:{'Content-Type':'text/plain'}}),415],
+  [input(start,{headers:{'Content-Type':'application/json','Authorization':'Basic private'}}),401],
   [input(start,{body:'x'.repeat(64*1024+1)}),413],
  ])assert.equal((await routeFdnEnrollmentGateway({pathname:start,request,fetchImpl})).status,status);
  assert.equal(calls,0);

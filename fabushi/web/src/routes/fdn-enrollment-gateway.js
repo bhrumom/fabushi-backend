@@ -41,6 +41,7 @@ export async function routeFdnEnrollmentGateway({ pathname, request, fetchImpl =
     if (body === null) return failure(413, 'request_too_large');
     const headers = new Headers({ 'Content-Type': 'application/json' });
     const authorization = request.headers.get('authorization');
+    if (authorization && !/^Bearer [A-Za-z0-9._~+\/=-]+$/.test(authorization)) return failure(401, 'unauthorized');
     if (authorization) headers.set('Authorization', authorization);
     const upstream = await fetchImpl(new Request(ORIGIN + pathname, {
       method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(15000),
