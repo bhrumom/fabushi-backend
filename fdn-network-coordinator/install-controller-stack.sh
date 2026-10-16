@@ -106,12 +106,11 @@ case "$action" in
     ln -sfn "$release" "$root/current.new"
     mv -Tf "$root/current.new" "$root/current"
 
-    if ! install_units "$release"; then
-      stop_new
-      fail "unit installation failed"
-    fi
-    systemctl enable fabushi-fdn-network-worker.service fabushi-fdn-enrollment.service fabushi-fdn-official-device-mcp.service fabushi-fdn-official-mcp-ingress.timer
-    if ! activate; then
+    if ! {
+      install_units "$release" &&
+      systemctl enable fabushi-fdn-network-worker.service fabushi-fdn-enrollment.service fabushi-fdn-official-device-mcp.service fabushi-fdn-official-mcp-ingress.timer &&
+      activate
+    }; then
       stop_new
       if [[ -n "$previous" && "$previous" != "$release" && -d "$previous" ]]; then
         ln -sfn "$previous" "$root/current.rollback"

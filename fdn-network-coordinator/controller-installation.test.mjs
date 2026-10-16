@@ -41,3 +41,9 @@ test('failed later release restores prior symlink and units and stops failed rec
  const r=run(next);assert.equal(r.status,64,r.stderr);assert.equal(readlinkSync(join(dir,'root/current')),join(dir,'root/releases',sha));
  const calls=readFileSync(join(dir,'calls'),'utf8');assert.ok((calls.match(/stop fabushi-fdn-official-mcp-ingress.timer/g)||[]).length>=2);
 });
+
+test('foreign daemon UID is rejected before worker activation and new services stop',t=>{
+ const {dir,run}=fixture(t);writeFileSync(join(dir,'etc/fdn-network-enrollment.env'),'DOCKER_HOST=unix:///run/user/994/docker.sock\n');
+ const r=run();assert.equal(r.status,64,r.stderr);
+ const calls=readFileSync(join(dir,'calls'),'utf8');assert.doesNotMatch(calls,/restart fabushi-fdn-network-worker.service/);assert.match(calls,/stop fabushi-fdn-official-mcp-ingress.timer/);
+});
