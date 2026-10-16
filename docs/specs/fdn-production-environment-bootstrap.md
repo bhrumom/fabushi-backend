@@ -276,3 +276,19 @@ captured bounded metadata; no mutation or authorization relaxation. Record only
 known public health bodies, fixed status values and source hashes. Never copy
 service envs, tsnet identity, user/session/vault credentials or private process env.
 The result is service liveness/provenance, not OAuth/native/direct/DERP acceptance.
+
+## Account-facing enrollment proxy deployment boundary
+
+ENV11: Read-only inventory found existing dacheng-ai-backend source9943899852
+predates registerFdnEnrollmentProxy and has neither broker setting. Reuse its
+canonical marketplace-node-delivery.yml ARM64 build/full-test/prune/full-test,
+backup, immutable-release and rollback owner (marketplace-node-production-delivery
+MND01–06); do not replace its persisted environment, database or registry owner.
+The co-located API requires only a dedicated root0600 additive EnvironmentFile
+with FABUSHI_FDN_ENROLLMENT_BROKER_URL=http://127.0.0.1:8793 and the already-created
+broker credential, never Core authority or ordinary account tokens. Validate exact
+subject/generation denial through the existing account proxy contracts. Preserve
+all existing drop-ins and signing/reviewer configuration. Configure without secret
+output and let canonical delivery activate the existing service. Public gateway
+routing/Host enrollment is a separate gate requiring source discovery before any
+route changes. Do not infer end-to-end availability from a running coordinator.
