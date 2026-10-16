@@ -310,7 +310,7 @@ route changes. Do not infer end-to-end availability from a running coordinator.
 | ENV07–10 / PA05 verification boundary / CB05 | passed | Actions-only contracts/delivery;38830843065 exact4213b49 HTTP/status/provenance inventory |
 | ST01–04 | passed |003fe6e Actions38828838237 four startup/reinstall/rollback contracts; real worker Running + binder on118c4a2; durable identity preserved |
 | ST05 | passed | f831fb9 Actions38830016942 six service contracts, including actual symlink listener401;4213b49 full deployment and independent HTTP inventory |
-| ENV11 | partial / blocked on final activation | Account API4213b49 deployed38830720805; ARM64 full142+142 pass. Third trusted control origin added to private env; next canonical release must activate it. Public Host gateway is tracked by GW01–04 in fdn-001-account-enrollment-proxy.md |
+| ENV11 | passed | Account API3c195ff deployed38831456633, ARM64 full142+142 pass; active process has all three broker/control settings. Public gateway3c195ff deployed38831459832, both routes401/owner verified. Real Host enrollment is still AC-3 |
 | AC-1 / AC-2 | passed | Seven real encrypted production inputs;4213b49/ c7d0e24; run38830333777 installed-and-health-checked;38830843065 four active units/timer, workerReady, MCPhealthy, enrollment401, ingress success |
 | AC-3 / full G05/G16 | blocked | Actual OAuth-to-Host transport, public direct/DERP/WSS, cross-account/revoke/response-loss evidence still required |
 
@@ -319,3 +319,16 @@ Inventory workflow sourceb06a45d differs from deployed runtime4213b49 only in
 operational spec/inventory additions; evidence identifies the exact installed source.
 No service-liveness result is labeled native/transport acceptance. New pipeline
 changes require their own exact source/run evidence before completion.
+
+
+Final environment delivery evidence: account API and public Worker both3c195ff138715cc5040bb8b36ddd1e4153363070.
+Worker38831459832 completed canonical security preflight, recovery bookmark,
+migrations, deploy, general health and both unauthenticated FDN route checks.
+Node38831456633 completed ARM64 preparation/full142+142, immutable deployment and
+public health. Read-only process configuration inventory confirmed the dedicated
+broker loopback/token and trusted Headscale control origin are active, with no
+values disclosed. Controller remains accepted4213b49/ Corec7d0e24; operational
+and gateway-only source changes do not replace its recorded runtime provenance.
+The two original external prerequisites (production configuration/runtime and real
+G11 browser/Box Actions) are configured and verified. Full production MCP/Host
+OAuth/direct/DERP/WSS/isolation/revoke/response-loss remains AC-3 blocked, not pass.
