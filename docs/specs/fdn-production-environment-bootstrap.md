@@ -252,3 +252,16 @@ Release through a scoped Backend PR; no local/server builds/tests. A replacement
 controller preauthkey is permitted only after read-only reconciliation finds no
 enrolled node and no persisted identity; mint immediately before failed-job retry.
 Old keys stay expired, persistent service encryption keys remain unchanged.
+
+## Symlink entrypoint correction (2026-10-16)
+
+ST05: Actual deployment38829239481 of118c4a2 confirmed the worker enters Running
+and Core ingress binds node100.88.207.67 generation1; MCP8794 listens. Enrollment
+exited0 because its argv current-symlink path differed from import.meta's resolved
+release path. Direct entry detection must compare canonical filesystem paths,
+while importing the module must remain side-effect free. Actions must launch the
+real service through a release/current symlink, observe ready plus unauthenticated
+401 without contacting Core, and require invalid configuration to exit nonzero.
+No change to grant/token/state authority or network identity. Preserve the already
+enrolled node and private tsnet identity; do not mint another key or create a node.
+The whole deployment is still failed until exact-source service health passes.
