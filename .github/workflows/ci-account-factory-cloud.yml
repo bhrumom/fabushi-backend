@@ -17,7 +17,6 @@ on:
         type: string
 permissions:
   contents: read
-  actions: read
   id-token: write
 concurrency:
   group: ci-isolated-cloud-accounts
@@ -97,6 +96,10 @@ jobs:
           if-no-files-found: error
   desktop-miniapp:
     if: ${{ inputs.mode == 'desktop-miniapp' }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     runs-on: macos-15
     timeout-minutes: 35
     environment: ci-isolated
@@ -165,6 +168,8 @@ jobs:
         with:
           name: desktop-miniapp-factory-${{ inputs.desktop_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            desktop-evidence/
-            desktop-source/desktop/test-results/
+            desktop-evidence/candidate.json
+            desktop-evidence/factory-acceptance.json
+            desktop-evidence/runtime/account-switch-*/account-isolation.json
+            desktop-evidence/runtime/account-switch-*/returned-account-A.png
           if-no-files-found: error

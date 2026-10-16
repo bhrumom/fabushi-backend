@@ -35,13 +35,17 @@ claim isolated credentials are production identities or physical/native transfer
   B removal closes B window, return to A retains A installation/origin/setting.
   Native issuer scoping/egress denial must be reviewed before running this mode.
 - DFC-06: finally cleanup with fresh same-run OIDC must return remaining=0 and
-  old ordinary sessions must reject. Missing/ambiguous cleanup fails evidence;
+  both delivered ordinary A/B sessions must independently reject with 401.
+  Missing/ambiguous cleanup fails evidence;
   independent existing TTL remains recovery after cancellation. Do not delete
   unrelated accounts or retry auth mutations. Unsupported owned resources block.
 - DFC-07: evidence includes Backend consumer/factory/Core/Desktop/binary/harness
   source, immutable archive digest, counts/exits, named assertions and cleanup,
   no credentials/profile/database/clipboard contents. Upload an explicit safe
   diagnostics directory only, never runner RAM volume or private runtime paths.
+  The upload allowlist is candidate.json, factory-acceptance.json and the two
+  reviewed account-switch JSON/mini-app screenshot files, not generic traces or
+  test-results trees. Actions artifact-read permission is consumer-job scoped.
 - DFC-08: run every executable check only in Actions, real macOS for signed app.
   Contracts test bad source/run/digest/issuer, same-user masquerading, poisoned
   child environment, invalid session delivery, incomplete assertions/cleanup.

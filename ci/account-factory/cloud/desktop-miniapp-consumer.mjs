@@ -39,6 +39,11 @@ export function verifyAccountEvidence(value, sourceSha) {
   return true;
 }
 
+export function verifyRevokedSessions(statuses) {
+  if (!Array.isArray(statuses) || statuses.length !== 2 || statuses.some((status) => status !== 401)) fail('DFC_CLEANUP_FAILED');
+  return true;
+}
+
 async function fifoDelivery(path, descriptor) {
   execFileSync('/usr/bin/mkfifo', ['-m', '600', path], { stdio: 'pipe' });
   const info = await lstat(path);
@@ -82,7 +87,7 @@ export async function runConsumer() {
   const privateRoot = join(volume, 'factory-private'); const temporary = join(volume, 'tmp');
   await mkdir(privateRoot, { mode: 0o700 }); await mkdir(temporary, { mode: 0o700 });
   const report = { kind: 'signed-desktop-miniapp-account-factory', consumerBackendSha: process.env.GITHUB_SHA, factoryBackendSha: factorySha, factoryCoreSha: coreSha, desktopSourceSha: sourceSha, binarySourceSha: sourceSha, harnessSourceSha: sourceSha, artifactId: candidate.artifactId, archiveSha256: candidate.archiveSha256, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, stage: 'health', overall: 'FAIL', assertions: {} };
-  let lease; let sessionA; let deliveries = []; let testPassed = false; let cleanupPassed = false;
+  let lease; let handedOffSessions = []; let deliveries = []; let testPassed = false; let cleanupPassed = false;
   async function oidc() {
     const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL); url.searchParams.set('audience', factoryOrigin);
     const response = await fetch(url, { headers: { authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` }, redirect: 'error', signal: AbortSignal.timeout(15_000) });
@@ -109,14 +114,14 @@ export async function runConsumer() {
       const response = await userInfo(account.sessions[0]); const data = await response.json();
       if (response.status !== 200 || String(data.id ?? data.user?.id) !== String(account.sessions[0].user.id)) fail('DFC_LIVE_IDENTITY_REJECTED');
     }
-    sessionA = a.sessions[0];
+    handedOffSessions = [a.sessions[0], b.sessions[0]];
     const pipes = ['A', 'B'].map((label) => join(privateRoot, `${label}.pipe`));
     for (let index = 0; index < pipes.length; index++) deliveries.push(await fifoDelivery(pipes[index], descriptors[index]));
     report.assertions.realDistinctOrdinaryAccounts = true; report.stage = 'signed-ui';
     const output = resolve('desktop-evidence/runtime'); await mkdir(output, { recursive: true });
     const child = spawn(process.execPath, ['node_modules/@playwright/test/cli.js', 'test', 'e2e/miniapp-packaged-acceptance.spec.ts', '--workers=1', '--grep', 'real account departure and two-account'], {
       cwd: resolve('desktop-source/desktop'), stdio: 'inherit',
-      env: childEnvironment(process.env, { FABUSHI_API_BASE_URL: authOrigin, FABUSHI_ACCOUNT_ENVIRONMENT: 'ci-isolated', FABUSHI_CI_ACCOUNT_SESSION_FILE: pipes[0], FABUSHI_CI_SECOND_ACCOUNT_SESSION_FILE: pipes[1], FABUSHI_CI_SESSION_DELIVERY: 'private-fifo', FABUSHI_MINIAPP_HARNESS_SOURCE: sourceSha, FABUSHI_NATIVE_APP_DATA_ROOT: join(volume, 'appData'), TMPDIR: temporary, MINIAPP_REAL_ACCEPTANCE: '1', MINIAPP_ACCOUNT_SWITCH_ACCEPTANCE: '1', MINIAPP_EVIDENCE_DIR: output, FABUSHI_FEATURE_HOST_MODE: 'production', FABUSHI_E2E: '0' }),
+      env: childEnvironment(process.env, { FABUSHI_API_BASE_URL: authOrigin, FABUSHI_ACCOUNT_ENVIRONMENT: 'ci-isolated', FABUSHI_CI_ACCOUNT_SESSION_FILE: pipes[0], FABUSHI_CI_SECOND_ACCOUNT_SESSION_FILE: pipes[1], FABUSHI_CI_SESSION_DELIVERY: 'private-fifo', FABUSHI_MINIAPP_HARNESS_SOURCE: sourceSha, SAND_APP_DATA_DIR: join(volume, 'appData'), SAND_TEMP_DIR: temporary, TMPDIR: temporary, MINIAPP_REAL_ACCEPTANCE: '1', MINIAPP_ACCOUNT_SWITCH_ACCEPTANCE: '1', MINIAPP_EVIDENCE_DIR: output, FABUSHI_FEATURE_HOST_MODE: 'production', FABUSHI_E2E: '0' }),
     });
     const abort = () => child.kill('SIGTERM'); process.once('SIGTERM', abort); process.once('SIGINT', abort);
     let status;
@@ -136,7 +141,10 @@ export async function runConsumer() {
     if (lease?.leaseId && /^[A-Za-z0-9_-]{1,200}$/.test(lease.leaseId)) {
       try {
         const response = await fixture(`/v1/leases/${lease.leaseId}`, 'DELETE'); const result = await response.json();
-        if (response.status !== 200 || result.remaining !== 0 || !sessionA || (await userInfo(sessionA)).status !== 401) fail('DFC_CLEANUP_FAILED');
+        if (response.status !== 200 || result.remaining !== 0) fail('DFC_CLEANUP_FAILED');
+        const revoked = await Promise.all(handedOffSessions.map(async (session) => (await userInfo(session)).status));
+        verifyRevokedSessions(revoked);
+        report.revokedSessionCount = revoked.length;
         report.assertions.zeroOwnedResidueAndRevocation = true; cleanupPassed = true;
       } catch { report.cleanup = 'blocked'; }
     }

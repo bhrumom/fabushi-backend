@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { requiredSteps, requiredChecks, validateCandidate } from './cloud/desktop-miniapp-candidate.mjs';
-import { authOrigin, factoryOrigin, nativeSessionDescriptor, childEnvironment, verifyAccountEvidence } from './cloud/desktop-miniapp-consumer.mjs';
+import { authOrigin, factoryOrigin, nativeSessionDescriptor, childEnvironment, verifyAccountEvidence, verifyRevokedSessions } from './cloud/desktop-miniapp-consumer.mjs';
 
 function candidate() {
   const sha = 'a'.repeat(40); const digest = 'b'.repeat(64);
@@ -72,4 +72,18 @@ test('factory routes stay isolated, memory delivery has no session JSON and clea
   assert.match(source, /mkfifo/); assert.match(source, /0o700/); assert.match(source, /0o600/);
   assert.match(source, /ram:\/\/1048576/); assert.match(source, /finally/); assert.match(source, /result\.remaining !== 0/);
   assert.doesNotMatch(source, /writeFile\([^\n]*(descriptor|session|lease\.accounts)/i);
+});
+test('cleanup independently rejects both delivered ordinary sessions', () => {
+  assert.equal(verifyRevokedSessions([401, 401]), true);
+  for (const statuses of [[], [401], [401, 200], [200, 401], [401, 500], [401, 401, 401]]) assert.throws(() => verifyRevokedSessions(statuses), /DFC_CLEANUP_FAILED/);
+});
+test('factory evidence upload is an explicit safe allowlist and permissions stay consumer-scoped', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/ci-account-factory-cloud.yml', import.meta.url), 'utf8');
+  const upload = workflow.split('name: desktop-miniapp-factory-')[1];
+  assert.doesNotMatch(upload, /test-results|trace|appData|factory-private|^\s+desktop-evidence\/\s*$/m);
+  assert.match(upload, /desktop-evidence\/factory-acceptance\.json/);
+  assert.doesNotMatch(workflow.split('jobs:')[0], /actions: read/);
+  const source = readFileSync(new URL('./cloud/desktop-miniapp-consumer.mjs', import.meta.url), 'utf8');
+  assert.match(source, /SAND_APP_DATA_DIR: join\(volume, 'appData'\)/);
+  assert.match(source, /SAND_TEMP_DIR: temporary/);
 });
