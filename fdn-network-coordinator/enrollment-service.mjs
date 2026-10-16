@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { realpathSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -180,7 +181,7 @@ async function main() {
   process.stdout.write(JSON.stringify({ ready: true, host, port }) + "\n");
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
     const code = error instanceof EnrollmentError ? error.code : "enrollment_service_failed";
     process.stderr.write(JSON.stringify({ error: code }) + "\n");
