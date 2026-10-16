@@ -285,8 +285,10 @@ canonical marketplace-node-delivery.yml ARM64 build/full-test/prune/full-test,
 backup, immutable-release and rollback owner (marketplace-node-production-delivery
 MND01–06); do not replace its persisted environment, database or registry owner.
 The co-located API requires only a dedicated root0600 additive EnvironmentFile
-with FABUSHI_FDN_ENROLLMENT_BROKER_URL=http://127.0.0.1:8793 and the already-created
-broker credential, never Core authority or ordinary account tokens. Validate exact
+with FABUSHI_FDN_ENROLLMENT_BROKER_URL=http://127.0.0.1:8793, the already-created
+broker credential, and FABUSHI_FDN_HEADSCALE_CONTROL_URL=https://fdn.ombhrum.com.
+The proxy validates and returns this trusted control origin after account/grant
+correlation. Never provide Core authority or ordinary account tokens. Validate exact
 subject/generation denial through the existing account proxy contracts. Preserve
 all existing drop-ins and signing/reviewer configuration. Configure without secret
 output and let canonical delivery activate the existing service. Public gateway
