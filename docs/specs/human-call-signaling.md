@@ -2,7 +2,7 @@
 
 Status: active
 Owner: Fabushi Backend / Social Signaling
-Last updated: 2026-10-05
+Last updated: 2026-10-12
 Related task: Fabushi Desktop FBCP Phase 1 / desktop PR #27 / ADR FBCP-ADR-003
 
 ## 1. Context
@@ -128,3 +128,108 @@ GitHub Actions only. Required contracts:
 | AC-1-AC-3 | passed | Backend implementation and executable contracts passed exact-HEAD CI run `37264867899`. |
 | AC-4 | pending | Desktop Host `FabushiNativeMessagingClient` still must bind the verified API into the existing `CallSessionStore` owner without renderer/Electron direct backend ownership. |
 | AC-5 | passed | Scope explicitly preserves remaining voice/video/WebRTC/media-device/UX and packaged cross-device acceptance work. |
+
+## 12. Phase 2 — Group/SFU existing-owner extension
+
+This phase extends the same canonical `human_call_channels` / `human_call_events` service. It MUST NOT introduce a second call store, standalone production signaling hub, Telegram/tgcalls runtime, or in-process test SFU.
+
+### 12.1 Durable membership
+
+- Add a monotonic `membership_revision` to each call channel.
+- Add durable member rows keyed by `(call_id,user_id)`, with role, lifecycle state, claimed media device, joined generation and optional left generation.
+- Existing creator and peer are backfilled as active members so one-to-one calls remain compatible.
+- Only an active authorized participant may read membership.
+- Participant mutation is generation-fenced and compare-and-swap fenced by `membership_revision`.
+- The creator/admin role may add or remove members. Adding a member requires the existing account relationship authorization policy; removing a member cannot silently rewrite historical events.
+- Canonical call read/list/event/media authorization uses active `human_call_members` rows. The creator/peer columns remain compatibility metadata, not authorization bypasses. Removing the legacy peer through the roster contract removes its access exactly like any other member; re-entry requires an explicit authorized add.
+- Stale generation, stale membership revision, foreign account, conflicting replay or terminal call mutation fails closed.
+
+### 12.2 Join/media lease boundary
+
+A production group media join MUST use a short-lived account/device-scoped lease that binds call id, member id, device id, reconnect generation, expiry, provider session/route identity and allowed publication/subscription capabilities. Provider administrative credentials MUST remain server-side and MUST NOT be returned to renderer code.
+
+The service contract represents media identities source-neutrally: member/participant id, publication id, track id, media kind, codec parameters and optional simulcast RID/layer. Publication/subscription authorization and route state are service-owned. The concrete SFU provider may own RTP/RTCP/TWCC packet mechanics, but observable behavior must preserve secure participant identity, per-receiver subscriptions, congestion/layer adaptation, keyframe recovery, generation fencing and deterministic teardown.
+
+Until a real production SFU provider/session API is configured and exercised, join/media-route endpoints remain blocked and MUST fail closed rather than returning fake routes, TURN-only success, local in-memory peers or the tgcalls Go test SFU.
+
+The production provider contract is Cloudflare Realtime SFU Connection API. Deployment binds `FABUSHI_REALTIME_SFU_APP_ID` as a non-secret application identifier and `FABUSHI_REALTIME_SFU_APP_SECRET` as a Worker secret. The App Secret MUST never appear in renderer responses, logs, URLs returned to clients, or persisted call event payloads.
+
+The first control-plane endpoint is `POST /api/social/calls/:callId/media/sessions` with `{ clientSessionId, generation, purpose }`, where purpose is `publish` or `subscribe`. It authenticates the account/device, requires active durable membership and the current reconnect generation, then persists an application-owned opaque media-session id before calling Cloudflare `POST /v1/apps/{appId}/sessions/new`. The provider `sessionId` is backend-private; clients receive only the application media-session id.
+
+Session allocation is explicitly outcome-aware. The durable state is `pending | ready | uncertain | failed | closed`. A repeated `clientSessionId` returns the existing `ready` application session, but a `pending` or `uncertain` allocation MUST fail closed and MUST NOT issue another provider allocation because Cloudflare cannot recover a lost `sessions/new` result by correlation id. A known provider rejection may become `failed` and requires a new client request id.
+
+Subsequent publication/subscription endpoints MUST accept application publication/media-session ids rather than arbitrary provider session ids. The backend resolves provider locators only after membership/ownership authorization. Per-provider-session mutations are serialized through one logical queue, and an operation requiring immediate renegotiation must complete its answer before the next mutation.
+
+Publishing uses `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/publications` with a current-generation `clientOperationId`, a local SDP offer, and a bounded list of application publication intents `{ clientPublicationId, trackName, mid, mediaKind }`. The target media session must be a `ready` `publish` session owned by the authenticated active member/device. The backend acquires the session's mutation fence before calling Cloudflare `tracks/new`; overlapping operations fail with conflict rather than racing SDP.
+
+The backend persists an operation record before the provider request. Exact retries of the same `clientOperationId` replay the stored sanitized result; conflicting retries fail. A lost/unknown `tracks/new` outcome marks both operation and media session `uncertain` and retires that connection from further mutation. A top-level provider error is also treated conservatively because it does not prove zero allocation.
+
+For an HTTP response, every returned track result is inspected. Successful items are persisted individually as application-owned publication records and failed items retain only sanitized public error codes. A partially successful batch is never replayed as a whole. Provider `sessionId` values remain private; discovery later exposes only application publication ids, member identity, media kind, track name and permitted simulcast metadata.
+
+A successful publication response that contains the SFU SDP answer moves the session mutation state to `awaiting_endpoint_apply`. The endpoint must apply that answer to its PeerConnection, then call `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/operations/:clientOperationId/applied`. Only that authenticated owner acknowledgement transitions the durable operation to `applied` and releases the session to `idle`. If endpoint application fails or its outcome is unknown, the session is retired/replaced instead of accepting another mutation.
+
+Publication discovery is `GET /api/social/calls/:callId/media/publications`. It is authorized by active canonical roster membership and exposes only current-generation application publication ids, member ids, track names and media kinds. Provider session ids and `FABUSHI_REALTIME_SFU_APP_SECRET` remain backend-private.
+
+Video publications may additionally declare a bounded ordered list of application-visible simulcast RIDs. The backend accepts that metadata only when each RID is also advertised by the submitted publication SDP (`a=rid:<rid> send` plus `a=simulcast:send`). The available RIDs are persisted on the canonical publication row and may be exposed through authorized publication discovery; provider session ids remain private.
+
+A directed video subscription may request an optional `simulcast` policy with `preferredRid`, `priorityOrdering`, and `ridNotAvailable`. The preferred RID must be one of the publication's available RIDs. The backend forwards only the validated policy to the remote `tracks/new` entry and persists the selected policy on the canonical subscription row. The provider values `none` and `asciibetical` are treated as explicit policy values, not renderer-owned truth. Dynamic layer switching uses `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/subscriptions/:subscriptionId/layer` with `{ clientMutationId, generation, simulcast }`. The backend validates the requested RID against the canonical publication, durably claims the layer mutation, serializes it through the existing receiving media session, and calls provider `PUT /tracks/update` with the receiving `mid`, private publisher session id, track name, and validated simulcast policy. Exact replay of an applied client mutation is idempotent; conflicting replay fails.
+
+A network, top-level, malformed, wrong-mid, or otherwise ambiguous `tracks/update` result marks the layer mutation `uncertain` and retires the receiving session, so it is never automatically replayed. A deterministic per-track rejection records `failed` and releases the session for an explicit new mutation. An unexpected immediate-renegotiation requirement is treated as unknown outcome and retires the session rather than silently accepting a layer change without endpoint negotiation. Only a verified per-track success atomically updates the canonical subscription policy, records the layer mutation `applied`, and returns the session mutation state to idle.
+
+Directed subscription uses `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/subscriptions` on a ready account/device-owned `subscribe` session. The backend resolves each application publication id to the private publisher provider session id + track name and calls Cloudflare `/tracks/new` with `location: "remote"`. Successful receiving mids are persisted in `human_call_media_subscriptions`; partial item failures are returned without replaying successful items. The SFU offer is persisted before it is returned.
+
+The endpoint applies the returned SFU offer, creates an SDP answer, then calls `POST .../operations/:clientOperationId/answer`. The backend forwards that answer to the receiving provider session through `/renegotiate`. Lost or ambiguous `tracks/new` or `/renegotiate` outcomes retire the receiving session and are never automatically retried; the caller must allocate a replacement provider session. The existing publish `/applied` acknowledgement is type-fenced and cannot acknowledge a subscribe negotiation.
+
+
+### 12.3 Ordering, recovery and teardown
+
+Membership mutations and media route lifecycle participate in the existing ordered/idempotent call event stream. A restarted client can replay channel state plus membership revision and rebuild only the current reconnect generation. Old member/device claims, leases, publications and subscriptions cannot resurrect after a newer generation or terminal call state.
+
+Leave/hangup tears down durable active membership and provider publications/subscriptions. Temporary provider/network failure may renew a current-generation lease and routes, but cannot duplicate members or fall back to a standalone signaling implementation.
+
+Restart/process recovery discovery uses `GET /api/social/calls/:callId/media/sessions`. It is authenticated by the existing account/device boundary and reads only canonical `human_call_media_sessions` rows owned by that exact account and device. It intentionally does not require the member to remain active: after reconnect generation retirement, terminal hangup, or roster removal, a restarted endpoint must still be able to rediscover its own pending/ready/uncertain application media-session ids and whether cleanup is required. The response is bounded, private/no-store, and exposes no provider session id, provider credential, or administrative secret. Discovery itself performs no provider side effect; cleanup remains an explicit close/teardown request with a client teardown id, and uncertain provider outcomes are never automatically replayed.
+
+The session-local track teardown uses `POST /api/social/calls/:callId/media/sessions/:mediaSessionId/close` with `{ clientTeardownId, generation }`. The authenticated account/device must own the application media session. Teardown is durable and idempotent by `(mediaSessionId, clientTeardownId)`; the request fingerprint binds the reconnect generation. The backend first retires the session from further mutation, then closes each currently ready publication/subscription mid through the provider `/tracks/close` operation with `force: true`. A successful item is marked closed immediately, so partial close results survive a later failure. Partial close results are never automatically replayed as a batch.
+
+Unknown network/HTTP/provider response outcomes mark the teardown and media session `uncertain`; deterministic per-track rejection marks the teardown failed while preserving already-closed items. The provider's `close_track_error` is the cleanup-idempotency exception: it means the requested mid is absent or already closed, so the canonical application row is persisted closed and teardown continues instead of treating that resource as a failed close. Neither genuinely failed nor uncertain state is automatically retried. Recovery requires an explicit resync and a new client teardown id, while the retired session remains unavailable for new publication/subscription mutation. A fully applied teardown marks the application session `closed` and leaves no ready session-local publication/subscription rows.
+
+### 12.4 Verification and acceptance
+
+GitHub Actions only. Required executable coverage:
+- schema migration backfills creator/peer membership and keeps existing one-to-one data readable;
+- authorized add/remove is atomic with membership-revision CAS;
+- unauthorized/foreign/stale-generation/stale-revision mutation fails;
+- exact mutation replay is idempotent and conflicting replay fails;
+- terminal calls reject membership mutation;
+- multi-device device claims do not transfer media ownership without the explicit current-generation contract;
+- legacy one-to-one signaling and TURN tests remain green.
+
+Full Group/SFU acceptance additionally requires a real shipping backend/SFU composition with at least three participants, concurrent audio/video, directed subscriptions, simulcast/layer adaptation where supported, participant churn, disconnect/reconnect generation fencing, process restart/replay, terminal teardown, and proof that provider/admin tokens never reach the renderer. Upstream tgcalls CLI/Go SFU is test authority only, never shipping evidence.
+
+### 12.5 Compliance status
+
+Verified predecessor scope includes durable roster plus exact-head Realtime SFU session allocation. The current descendant migrates legacy creator/peer read/list/event authorization onto the active canonical roster and atomically creates roster rows for newly created calls; creator/peer columns remain compatibility metadata only. The publication-mutation descendant implements a durable per-session mutation fence, request fingerprints, partial-result persistence, fail-closed uncertain retirement, application-owned publication ids and endpoint-applied acknowledgement. This text does not claim full Group/SFU acceptance until the descendant receives exact-head CI and deployed >=3-participant evidence.
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Durable membership/revision contract | passed | Exact-head `f8e6a4faccccfbdc9361f1a635a524abaea00347`: Human Messaging CI `38176377368` executed the group-membership contract with 22/22 tests passing; Production Worker Delivery CI `38176377341` also passed. The following spec-only descendant must preserve those gates. |
+| Real SFU join/media routing | in progress | Exact-head `1f00ac99926ddf93a3b3fa831f76308da37509b0` preserved green Human Messaging CI `38177201022` and Production Worker Delivery `38177201039` for durable roster/session allocation. The publication-mutation descendant must independently pass both workflows; deployed media exchange is not yet claimed. |
+| >=3 participant production E2E | blocked | Requires real SFU service composition and deployed acceptance environment. |
+
+
+
+Provider identity note (2026-10-12): Cloudflare Realtime Connection API resource identity is session + trackName + per-connection mid; it does not expose SSRC as an application control-plane resource identifier. Fabushi therefore keeps participant identity in canonical human_call_members/media-session ownership and RTP SSRC lifecycle in the endpoint WebRTC/media layer rather than introducing a second backend participant/SSRC store.
+
+
+Generation/reconnect retirement is durable and uses the existing media-session owner. When a reconnect transition advances the canonical call generation, the same D1 batch that writes the call/event retires every old-generation `pending`, `ready`, or `uncertain` media session as `uncertain` with `mutation_state=retired` and `generation_retired_cleanup_required`. Terminal call transitions use the same rule with `call_terminal_cleanup_required`. This is a fencing action, not a claim that provider resources are closed: session-local tracks remain subject to the existing explicit, idempotent `tracks/close` teardown owner, including unknown-outcome fencing and per-track reconciliation.
+
+Member removal retirement is equally canonical: the roster mutation batch retires that member's current-generation media sessions with `member_removed_cleanup_required` while updating `human_call_members` and the membership mutation record. The response exposes only a cleanup-required count, never provider session ids or app credentials. Zero matching media sessions is a valid mutation outcome; the roster mutation still commits. No second call/member/media store is introduced.
+
+
+### 12.3 Participant / RTP identity lifecycle
+
+The canonical application identity for group media is the durable `human_call_members` member plus the application-owned publication/subscription ids. Cloudflare Realtime SFU `sessionId` and `trackName` are privileged backend locators; `mid` is a per-PeerConnection transceiver identity and may differ between a publisher and each subscriber. RTP SSRC is not an application/server ownership key and MUST NOT become a second participant, publication, subscription, or authorization store.
+
+Endpoint WebRTC owns RTP/RTCP packet identities, including SSRC churn caused by sender restart, track replacement, codec renegotiation, or a replacement PeerConnection. The endpoint may observe SSRC in native WebRTC statistics for diagnostics and media-quality correlation, but it MUST bind that observation to the current generation + application publication/subscription + local transceiver `mid`, discard stale-generation observations, and rebuild that binding after reconnect/session replacement. The backend continues to authorize and discover media only through active canonical membership, current generation, ready media session, application publication id and track locator.
+
+When membership is removed, a call becomes terminal, or reconnect advances generation, the same canonical lifecycle batch retires matching media sessions so their publications immediately disappear from discovery while private provider locators remain available for explicit idempotent teardown. A provider response or late endpoint statistic from the retired generation cannot reactivate discovery. This preserves participant/SSRC lifecycle without inventing an SSRC database that the Connection API does not own.

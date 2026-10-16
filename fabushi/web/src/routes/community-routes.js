@@ -30,9 +30,20 @@ import {
 import {
   handleAppendHumanCallEvent,
   handleCreateHumanCall,
+  handleCreateHumanCallMediaSession,
+  handleListHumanCallMediaSessionsForRecovery,
+  handlePublishHumanCallMedia,
+  handleAcknowledgeHumanCallMediaOperationApplied,
+  handleDiscoverHumanCallMediaPublications,
+  handleSubscribeHumanCallMedia,
+  handleAnswerHumanCallMediaSubscription,
+  handleCloseHumanCallMediaSession,
+  handleUpdateHumanCallMediaSubscriptionLayer,
   handleGetHumanCall,
   handleGetHumanCallIceServers,
+  handleGetHumanCallMembers,
   handleListHumanCalls,
+  handleMutateHumanCallMember,
 } from '../handlers/call-signaling.js';
 import {
   handleToggleLike,
@@ -77,6 +88,59 @@ export async function routeCommunityRequest({ pathname, method, request, env, db
   if (pathname === '/api/social/calls' && method === 'POST') return handleCreateHumanCall(request, env, db);
   if (pathname === '/api/social/calls' && method === 'GET') return handleListHumanCalls(request, env, db);
   if (pathname === '/api/social/calls/ice' && method === 'GET') return handleGetHumanCallIceServers(request, env, db);
+  const callMediaSessionMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions$/);
+  if (callMediaSessionMatch && method === 'GET') {
+    return handleListHumanCallMediaSessionsForRecovery(request, env, db, callMediaSessionMatch[1]);
+  }
+  if (callMediaSessionMatch && method === 'POST') {
+    return handleCreateHumanCallMediaSession(request, env, db, callMediaSessionMatch[1]);
+  }
+  const callMediaDiscoveryMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/publications$/);
+  if (callMediaDiscoveryMatch && method === 'GET') {
+    return handleDiscoverHumanCallMediaPublications(request, env, db, callMediaDiscoveryMatch[1]);
+  }
+  const callMediaSubscriptionMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/subscriptions$/);
+  if (callMediaSubscriptionMatch && method === 'POST') {
+    return handleSubscribeHumanCallMedia(
+      request, env, db, callMediaSubscriptionMatch[1], callMediaSubscriptionMatch[2],
+    );
+  }
+  const callMediaSubscriptionAnswerMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/operations\/([A-Za-z0-9][A-Za-z0-9._:-]{3,127})\/answer$/);
+  if (callMediaSubscriptionAnswerMatch && method === 'POST') {
+    return handleAnswerHumanCallMediaSubscription(
+      request, env, db,
+      callMediaSubscriptionAnswerMatch[1],
+      callMediaSubscriptionAnswerMatch[2],
+      callMediaSubscriptionAnswerMatch[3],
+    );
+  }
+  const callMediaLayerMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/subscriptions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/layer$/);
+  if (callMediaLayerMatch && method === 'POST') {
+    return handleUpdateHumanCallMediaSubscriptionLayer(
+      request, env, db, callMediaLayerMatch[1], callMediaLayerMatch[2], callMediaLayerMatch[3],
+    );
+  }
+  const callMediaCloseMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/close$/);
+  if (callMediaCloseMatch && method === 'POST') {
+    return handleCloseHumanCallMediaSession(
+      request, env, db, callMediaCloseMatch[1], callMediaCloseMatch[2],
+    );
+  }
+  const callMediaPublicationMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/publications$/);
+  if (callMediaPublicationMatch && method === 'POST') {
+    return handlePublishHumanCallMedia(
+      request, env, db, callMediaPublicationMatch[1], callMediaPublicationMatch[2],
+    );
+  }
+  const callMediaAppliedMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/media\/sessions\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/operations\/([A-Za-z0-9][A-Za-z0-9._:-]{3,127})\/applied$/);
+  if (callMediaAppliedMatch && method === 'POST') {
+    return handleAcknowledgeHumanCallMediaOperationApplied(
+      request, env, db, callMediaAppliedMatch[1], callMediaAppliedMatch[2], callMediaAppliedMatch[3],
+    );
+  }
+  const callMembersMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/members$/);
+  if (callMembersMatch && method === 'GET') return handleGetHumanCallMembers(request, env, db, callMembersMatch[1]);
+  if (callMembersMatch && method === 'POST') return handleMutateHumanCallMember(request, env, db, callMembersMatch[1]);
   const callEventMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})\/events$/);
   if (callEventMatch && method === 'POST') return handleAppendHumanCallEvent(request, env, db, callEventMatch[1]);
   const callMatch = pathname.match(/^\/api\/social\/calls\/([A-Za-z0-9][A-Za-z0-9._:-]{7,127})$/);

@@ -6,6 +6,7 @@ import {
   handleCreateHumanCall,
   handleGetHumanCall,
   handleGetHumanCallIceServers,
+  handleListHumanCallMediaSessionsForRecovery,
   handleListHumanCalls,
 } from '../src/handlers/call-signaling.js';
 
@@ -31,7 +32,9 @@ function createDb({ failNextEventInsert = false } = {}) {
     users: [ALICE, BOB, CAROL],
     friends: new Set(['1:2', '2:1']),
     calls: new Map(),
+    members: new Map(),
     events: [],
+    mediaSessions: [],
     batchCalls: 0,
     lastChanges: 0,
     rollbackUpdateCalls: 0,
@@ -54,10 +57,15 @@ function createDb({ failNextEventInsert = false } = {}) {
         if (q.includes('FROM human_call_channels WHERE id = ? LIMIT 1')) {
           return state.calls.get(String(params[0])) || null;
         }
-        if (q.includes('FROM human_call_channels') && q.includes('(creator_user_id = ? OR peer_user_id = ?)')) {
-          const call = state.calls.get(String(params[0]));
-          return call && (call.creator_user_id === Number(params[1]) || call.peer_user_id === Number(params[2]))
-            ? { ...call } : null;
+        if (q.includes('FROM human_call_channels c') && q.includes('JOIN human_call_members m')) {
+          const userId = Number(params[0]);
+          const call = state.calls.get(String(params[1]));
+          const member = state.members.get(`${params[1]}:${userId}`);
+          return call && member?.state === 'active' ? { ...call } : null;
+        }
+        if (q.includes('FROM human_call_members') && q.includes('WHERE call_id = ? AND user_id = ?')) {
+          const member = state.members.get(`${params[0]}:${Number(params[1])}`);
+          return member ? { ...member } : null;
         }
         if (q.includes('FROM human_call_events') && q.includes('client_event_id = ?')) {
           return state.events.find((e) =>
@@ -72,12 +80,14 @@ function createDb({ failNextEventInsert = false } = {}) {
         throw new Error(`unhandled first query: ${q}`);
       },
       async all() {
-        if (q.includes('FROM human_call_channels') && q.includes('ORDER BY updated_at DESC')) {
+        if (q.includes('FROM human_call_channels c') && q.includes('JOIN human_call_members m')
+            && q.includes('ORDER BY c.updated_at DESC')) {
+          const userId = Number(params[0]);
           return {
             results: [...state.calls.values()]
-              .filter((call) => call.creator_user_id === Number(params[0]) || call.peer_user_id === Number(params[1]))
+              .filter((call) => state.members.get(`${call.id}:${userId}`)?.state === 'active')
               .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-              .slice(0, Number(params[2]))
+              .slice(0, Number(params[1]))
               .map((call) => ({ ...call })),
           };
         }
@@ -90,6 +100,23 @@ function createDb({ failNextEventInsert = false } = {}) {
               .map((e) => ({ ...e })),
           };
         }
+        if (q.includes('FROM human_call_media_sessions')
+            && q.includes('WHERE call_id = ? AND user_id = ? AND device_id = ?')) {
+          return {
+            results: state.mediaSessions
+              .filter((session) =>
+                session.call_id === String(params[0]) &&
+                session.user_id === Number(params[1]) &&
+                session.device_id === String(params[2]) &&
+                ['pending', 'ready', 'uncertain'].includes(session.status))
+              .sort((a, b) =>
+                Number(b.generation) - Number(a.generation) ||
+                String(b.created_at).localeCompare(String(a.created_at)) ||
+                String(b.id).localeCompare(String(a.id)))
+              .slice(0, 64)
+              .map((session) => ({ ...session })),
+          };
+        }
         throw new Error(`unhandled all query: ${q}`);
       },
       async run() {
@@ -99,8 +126,32 @@ function createDb({ failNextEventInsert = false } = {}) {
           state.calls.set(id, {
             id, creator_user_id: Number(creator), peer_user_id: Number(peer),
             creator_device_id: creatorDeviceId, peer_device_id: null,
-            state: 'invited', generation: 0, event_seq: 0, terminal_state: null,
+            state: 'invited', generation: 0, event_seq: 0, membership_revision: 0, terminal_state: null,
             created_at: createdAt, updated_at: updatedAt,
+          });
+          return { meta: { changes: 1 } };
+        }
+        if (q.startsWith('INSERT INTO human_call_members')) {
+          if (q.includes('WHERE changes() = 1') && state.lastChanges !== 1) {
+            return { meta: { changes: 0 } };
+          }
+          const creator = q.includes("'creator', 'active'");
+          const [callId, userId] = params;
+          const deviceId = creator ? params[2] : null;
+          const createdAt = creator ? params[3] : params[2];
+          const updatedAt = creator ? params[4] : params[3];
+          const key = `${callId}:${Number(userId)}`;
+          if (state.members.has(key)) throw new Error('constraint');
+          state.members.set(key, {
+            call_id: callId,
+            user_id: Number(userId),
+            role: creator ? 'creator' : 'member',
+            state: 'active',
+            device_id: deviceId,
+            joined_generation: 0,
+            left_generation: null,
+            created_at: createdAt,
+            updated_at: updatedAt,
           });
           return { meta: { changes: 1 } };
         }
@@ -139,6 +190,26 @@ function createDb({ failNextEventInsert = false } = {}) {
           }
           return { meta: { changes: 0 } };
         }
+        if (q.startsWith('UPDATE human_call_media_sessions')
+            && q.includes("mutation_state = 'retired'")) {
+          const [reason, updatedAt, callId, generation, maybeUserId] = params;
+          let changes = 0;
+          for (const session of state.mediaSessions) {
+            if (session.call_id !== String(callId)
+                || Number(session.generation) !== Number(generation)
+                || !['pending', 'ready', 'uncertain'].includes(session.status)
+                || session.mutation_state === 'retired'
+                || (maybeUserId != null && Number(session.user_id) !== Number(maybeUserId))) {
+              continue;
+            }
+            session.status = 'uncertain';
+            session.mutation_state = 'retired';
+            session.last_error_code = String(reason);
+            session.updated_at = updatedAt;
+            changes += 1;
+          }
+          return { meta: { changes } };
+        }
         if (q.startsWith('INSERT INTO human_call_events')) {
           if (q.includes('WHERE changes() = 1') && state.lastChanges !== 1) {
             return { meta: { changes: 0 } };
@@ -168,6 +239,9 @@ function createDb({ failNextEventInsert = false } = {}) {
     const callsSnapshot = new Map(
       [...state.calls.entries()].map(([id, call]) => [id, { ...call }]),
     );
+    const membersSnapshot = new Map(
+      [...state.members.entries()].map(([id, member]) => [id, { ...member }]),
+    );
     const eventsSnapshot = state.events.map((event) => ({ ...event }));
     const previousLastChanges = state.lastChanges;
     try {
@@ -181,6 +255,8 @@ function createDb({ failNextEventInsert = false } = {}) {
     } catch (error) {
       state.calls.clear();
       for (const [id, call] of callsSnapshot.entries()) state.calls.set(id, call);
+      state.members.clear();
+      for (const [id, member] of membersSnapshot.entries()) state.members.set(id, member);
       state.events.splice(0, state.events.length, ...eventsSnapshot);
       state.lastChanges = previousLastChanges;
       throw error;
@@ -190,6 +266,58 @@ function createDb({ failNextEventInsert = false } = {}) {
 }
 
 const ENV = { JWT_SECRET: 'human-call-signaling-contract-secret-at-least-32-bytes-long' };
+
+test('media recovery rediscovery survives restart and stays account-device scoped', async () => {
+  const db = createDb();
+  db.state.mediaSessions.push(
+    {
+      id: 'media_alice_retired_0001',
+      call_id: 'call-recovery-0001',
+      user_id: ALICE.id,
+      device_id: 'alice-laptop',
+      generation: 0,
+      purpose: 'publish',
+      provider_session_id: 'provider-private-laptop',
+      status: 'uncertain',
+      mutation_state: 'retired',
+      created_at: '2026-10-12T00:00:00.000Z',
+      updated_at: '2026-10-12T00:01:00.000Z',
+    },
+    {
+      id: 'media_alice_phone_0001',
+      call_id: 'call-recovery-0001',
+      user_id: ALICE.id,
+      device_id: 'alice-phone',
+      generation: 1,
+      purpose: 'subscribe',
+      provider_session_id: 'provider-private-phone',
+      status: 'ready',
+      mutation_state: 'idle',
+      created_at: '2026-10-12T00:02:00.000Z',
+      updated_at: '2026-10-12T00:02:00.000Z',
+    },
+  );
+
+  const response = await handleListHumanCallMediaSessionsForRecovery(
+    await makeRequest(
+      'https://api.example.com/api/social/calls/call-recovery-0001/media/sessions',
+      ALICE,
+      'alice-laptop',
+    ),
+    ENV,
+    db,
+    'call-recovery-0001',
+  );
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
+  assert.deepEqual(payload.mediaSessions.map((session) => session.mediaSessionId), [
+    'media_alice_retired_0001',
+  ]);
+  assert.equal(payload.mediaSessions[0].cleanupRequired, true);
+  assert.equal(payload.mediaSessions[0].mutationState, 'retired');
+  assert.equal(JSON.stringify(payload).includes('provider-private'), false);
+});
 
 test('TURN credentials stay server-side and issue bounded authenticated ICE configuration', async () => {
   const db = createDb();
@@ -282,6 +410,9 @@ test('call create is friend-scoped and stable across devices', async () => {
   assert.equal(retried.call.state, 'invited');
   assert.equal(retried.call.creatorDeviceId, 'alice-laptop');
   assert.equal(retried.call.peerDeviceId, null);
+  assert.equal(db.state.members.get(`${callId}:1`)?.role, 'creator');
+  assert.equal(db.state.members.get(`${callId}:1`)?.device_id, 'alice-laptop');
+  assert.equal(db.state.members.get(`${callId}:2`)?.role, 'member');
 
   const incoming = await handleListHumanCalls(
     await makeRequest('https://api.example.com/api/social/calls?limit=20', BOB, 'bob-phone'),
@@ -454,6 +585,48 @@ test('ordered events converge across participant devices with generation and ide
   );
   assert.equal(conflict.status, 409);
 
+  db.state.mediaSessions.push(
+    {
+      id: 'media-old-publish-1001',
+      call_id: callId,
+      user_id: ALICE.id,
+      device_id: 'alice-laptop',
+      generation: 0,
+      purpose: 'publish',
+      provider_session_id: 'provider-private-old-publish',
+      status: 'ready',
+      mutation_state: 'idle',
+      created_at: '2026-10-12T00:00:00.000Z',
+      updated_at: '2026-10-12T00:00:00.000Z',
+    },
+    {
+      id: 'media-old-subscribe-1001',
+      call_id: callId,
+      user_id: BOB.id,
+      device_id: 'bob-phone',
+      generation: 0,
+      purpose: 'subscribe',
+      provider_session_id: 'provider-private-old-subscribe',
+      status: 'ready',
+      mutation_state: 'idle',
+      created_at: '2026-10-12T00:00:01.000Z',
+      updated_at: '2026-10-12T00:00:01.000Z',
+    },
+    {
+      id: 'media-other-call-1001',
+      call_id: 'call-other-generation-fence',
+      user_id: ALICE.id,
+      device_id: 'alice-laptop',
+      generation: 0,
+      purpose: 'publish',
+      provider_session_id: 'provider-private-other-call',
+      status: 'ready',
+      mutation_state: 'idle',
+      created_at: '2026-10-12T00:00:02.000Z',
+      updated_at: '2026-10-12T00:00:02.000Z',
+    },
+  );
+
   const reconnect = await handleAppendHumanCallEvent(
     await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, ALICE, 'alice-laptop', {
       clientEventId: 'event-reconnect-1',
@@ -463,7 +636,35 @@ test('ordered events converge across participant devices with generation and ide
     }),
     ENV, db, callId,
   );
+  const reconnectPayload = await reconnect.json();
   assert.equal(reconnect.status, 201);
+  assert.deepEqual(reconnectPayload.mediaCleanup, { required: true, retiredSessionCount: 2 });
+  assert.deepEqual(
+    db.state.mediaSessions.filter((session) => session.call_id === callId).map((session) => ({
+      id: session.id,
+      status: session.status,
+      mutation_state: session.mutation_state,
+      last_error_code: session.last_error_code,
+    })),
+    [
+      {
+        id: 'media-old-publish-1001',
+        status: 'uncertain',
+        mutation_state: 'retired',
+        last_error_code: 'generation_retired_cleanup_required',
+      },
+      {
+        id: 'media-old-subscribe-1001',
+        status: 'uncertain',
+        mutation_state: 'retired',
+        last_error_code: 'generation_retired_cleanup_required',
+      },
+    ],
+  );
+  assert.equal(
+    db.state.mediaSessions.find((session) => session.id === 'media-other-call-1001').status,
+    'ready',
+  );
 
   const stale = await handleAppendHumanCallEvent(
     await makeRequest(`https://api.example.com/api/social/calls/${callId}/events`, BOB, 'bob-phone', {
@@ -559,7 +760,7 @@ test('call channel CAS and event append commit atomically in one D1 batch', asyn
   assert.equal(failed.status, 409);
   assert.deepEqual(db.state.calls.get(callId), before);
   assert.equal(db.state.events.length, 0);
-  assert.equal(db.state.batchCalls, 1);
+  assert.equal(db.state.batchCalls, 2);
   assert.equal(db.state.rollbackUpdateCalls, 0);
 
   const retried = await handleAppendHumanCallEvent(
@@ -575,6 +776,6 @@ test('call channel CAS and event append commit atomically in one D1 batch', asyn
   assert.equal(db.state.calls.get(callId).state, 'ringing');
   assert.equal(db.state.calls.get(callId).event_seq, 1);
   assert.equal(db.state.events.length, 1);
-  assert.equal(db.state.batchCalls, 2);
+  assert.equal(db.state.batchCalls, 3);
   assert.equal(db.state.rollbackUpdateCalls, 0);
 });
