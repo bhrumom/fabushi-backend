@@ -69,5 +69,22 @@ remain installed. Do not delete production identity, data, keys or network state
 AC-GW1 all focused contracts pass exact head; AC-GW2 real public401/marker for
 both routes at deployed exact source; AC-GW3 full target enrollment remains a
 separate requirement with real Host identity/grant and native authorization.
-Current GW01–04/AC-GW1–3 pending implementation/verification; no fake credentials
-or isolated factory promotion is acceptable as production enrollment evidence.
+GW01–04 and AC-GW1/2 now pass per the exact-source evidence below. AC-GW3 remains
+blocked on actual target enrollment. No fake credentials or isolated factory
+promotion is acceptable as production enrollment evidence.
+
+
+## Gateway compliance review (2026-10-16)
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| GW01/02 | passed | BackendPR104 source3c195ff; exact PRba6d23c Actions38831399822 passed7 proxy+4 gateway contracts; public38831459832 both paths401/owner marker |
+| GW03 | passed | Same gateway contracts: one dispatch on uncertain response, no redirect following/exposure, generic credential-free502; no failover path |
+| GW04 / AC-GW1 | passed | Exact PRhead proxy/gateway38831399822 and production static contract38831399637; no local/server tests |
+| AC-GW2 | passed | Public Worker3c195ff delivery38831459832 artifactfdn-public-gateway.json: start401,complete401, existing-account-api marker |
+| Existing API/broker prerequisites | passed | Controller4213b49 deployment38830333777 and health38830843065; Node3c195ff ARM64 full142+142+deploy38831456633 with active three-setting private proxy config |
+| AC-GW3 / full target enrollment | blocked | Requires real shipping Host device registration, actual Core grant, device authority and native permission/execution; route liveness/401 is not this evidence |
+
+No production identity, network state, ordinary user credential or service key is
+present in the public gateway proof artifact. Public legacy official MCP ingress
+has not been cut over; accepted staging service8794 is independently healthy.
