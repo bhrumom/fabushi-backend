@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
 const source=readFileSync(new URL('./install-controller-stack.sh',import.meta.url),'utf8');
+const guardSource=readFileSync(new URL('./install-official-device-mcp-egress-guard.sh',import.meta.url),'utf8');
 const sha='a'.repeat(40),next='b'.repeat(40),core='c'.repeat(40);
 function fixture(t) {
  const dir=mkdtempSync(join(tmpdir(),'fdn-install-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
@@ -19,6 +20,7 @@ function fixture(t) {
  }))writeFileSync(join(dir,'bin',name),'#!/bin/sh\n'+body+'\n',{mode:0o755});
  writeFileSync(join(dir,'stage/bin/official-device-network-worker'),'#!/bin/sh\nexit 0\n',{mode:0o755});
  writeFileSync(join(dir,'stage/official-device-mcp/bin/fabushi-remote-mcp.js'),'// fixture');
+ writeFileSync(join(dir,'stage/fdn-network-coordinator/install-official-device-mcp-egress-guard.sh'),guardSource,{mode:0o755});
  for(const n of ['enrollment.service','official-mcp-ingress.service','official-mcp-ingress.timer','network-worker.service','official-device-mcp.service'])writeFileSync(join(dir,'stage/fdn-network-coordinator/systemd/fabushi-fdn-'+n),'[Service]\n');
  const tar=spawnSync('tar',['-C',join(dir,'stage'),'-czf',join(dir,'bundle.tgz'),'.']);assert.equal(tar.status,0);
  const run=(revision=sha)=>spawnSync('bash',[join(dir,'installer'),join(dir,'bundle.tgz'),revision,core,'install'],{encoding:'utf8',env:{...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CALLS:join(dir,'calls'),FAIL:join(dir,'fail')}});
@@ -46,4 +48,24 @@ test('foreign daemon UID is rejected before worker activation and new services s
  const {dir,run}=fixture(t);writeFileSync(join(dir,'etc/fdn-network-enrollment.env'),'DOCKER_HOST=unix:///run/user/994/docker.sock\n');
  const r=run();assert.equal(r.status,64,r.stderr);
  const calls=readFileSync(join(dir,'calls'),'utf8');assert.doesNotMatch(calls,/restart fabushi-fdn-network-worker.service/);assert.match(calls,/stop fabushi-fdn-official-mcp-ingress.timer/);
+});
+
+test('official MCP egress guard installs a cgroup-scoped allowlist and reject-counter owner',t=>{
+ const dir=mkdtempSync(join(tmpdir(),'fdn-mcp-egress-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const bin=join(dir,'bin');mkdirSync(bin,{recursive:true});
+ const calls=join(dir,'calls');
+ const netfilter='#!/bin/sh\necho "$(basename "$0") $*" >> "$CALLS"\ncase " $* " in *" -D OUTPUT "*) exit 1;; esac\nexit 0\n';
+ for(const name of ['iptables','ip6tables'])writeFileSync(join(bin,name),netfilter,{mode:0o755});
+ writeFileSync(join(bin,'getent'),'#!/bin/sh\ncase "$1" in ahostsv4) echo "203.0.113.10 STREAM api.ombhrum.com";; ahostsv6) echo "2001:db8::10 STREAM api.ombhrum.com";; esac\n',{mode:0o755});
+ const guard=join(dir,'guard');writeFileSync(guard,guardSource,{mode:0o755});
+ const r=spawnSync('bash',[guard,'install'],{encoding:'utf8',env:{...process.env,PATH:bin+':'+process.env.PATH,CALLS:calls}});
+ assert.equal(r.status,0,r.stderr);
+ const log=readFileSync(calls,'utf8');
+ assert.match(log,/iptables .* -A FABUSHI_FDN_MCP_EGRESS -p tcp -d 203\.0\.113\.10 --dport 443 -j ACCEPT/);
+ assert.match(log,/iptables .* -A FABUSHI_FDN_MCP_EGRESS -m comment --comment fdn-g15-official-device-mcp-egress -j REJECT/);
+ assert.match(log,/iptables .* -I OUTPUT 1 -m cgroup --path system\.slice\/fabushi-fdn-official-device-mcp\.service -j FABUSHI_FDN_MCP_EGRESS/);
+ if(existsSync('/proc/net/if_inet6') && readFileSync('/proc/net/if_inet6','utf8').trim()){
+  assert.match(log,/ip6tables .* -A FABUSHI_FDN_MCP_EGRESS -p tcp -d 2001:db8::10 --dport 443 -j ACCEPT/);
+  assert.match(log,/ip6tables .* -A FABUSHI_FDN_MCP_EGRESS -m comment --comment fdn-g15-official-device-mcp-egress -j REJECT/);
+ }
 });
