@@ -1,0 +1,133 @@
+name: FDN G15 official device MCP production
+
+on:
+  pull_request:
+    paths:
+      - "official-device-mcp/**"
+      - "fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service"
+      - "fdn-network-coordinator/probe-official-device-mcp-g15.sh"
+      - ".github/workflows/fdn-g15-official-device-mcp-production.yml"
+  push:
+    branches: [main]
+    paths:
+      - "official-device-mcp/**"
+      - "fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service"
+      - "fdn-network-coordinator/probe-official-device-mcp-g15.sh"
+      - ".github/workflows/fdn-g15-official-device-mcp-production.yml"
+  workflow_dispatch:
+    inputs:
+      core_sha:
+        description: Verified current Platform Core main SHA deployed with this backend
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXACT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.EXACT_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Bind exact source and shipping process contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          test "$(git status --porcelain)" = ""
+          bash -n fdn-network-coordinator/probe-official-device-mcp-g15.sh
+          grep -Fx 'MemoryMax=150M' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -Fx 'TasksMax=256' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -F 'ExecStart=/usr/bin/node /opt/fabushi-fdn/current/official-device-mcp/bin/fabushi-remote-mcp.js' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -F 'assertOfficialDeviceMcpProductionStartup();' official-device-mcp/bin/fabushi-remote-mcp.js
+          grep -F 'const service = createFabushiRemoteMcpServer();' official-device-mcp/bin/fabushi-remote-mcp.js
+          git diff --exit-code
+
+  production-resource-privacy:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    env:
+      CORE_SHA: ${{ inputs.core_sha }}
+      DEPLOY_HOST: ${{ secrets.FABUSHI_FDN_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.FABUSHI_FDN_DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.FABUSHI_FDN_DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.FABUSHI_FDN_DEPLOY_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Require exact current main and deployment access
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$CORE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            test -n "${!name}"
+          done
+          python3 - <<'PY'
+          import json, os, urllib.request
+          req=urllib.request.Request("https://api.github.com/repos/bhrumom/fabushi-platform-core/git/ref/heads/main",headers={"Authorization":f"Bearer {os.environ['GITHUB_TOKEN']}","Accept":"application/vnd.github+json"})
+          with urllib.request.urlopen(req,timeout=15) as r: payload=json.load(r)
+          assert payload["object"]["sha"] == os.environ["CORE_SHA"], (payload["object"]["sha"], os.environ["CORE_SHA"])
+          PY
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Prepare SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/known_hosts"
+      - name: Measure real shipping systemd process for five minutes
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_backend="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" 'sudo cat /opt/fabushi-fdn/current/BACKEND_SHA')"
+          remote_core="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" 'sudo cat /opt/fabushi-fdn/current/CORE_SHA')"
+          test "$remote_backend" = "$GITHUB_SHA"
+          test "$remote_core" = "$CORE_SHA"
+          set +e
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo /opt/fabushi-fdn/current/fdn-network-coordinator/probe-official-device-mcp-g15.sh '$GITHUB_SHA' '$CORE_SHA' /tmp/fdn-g15-official-device-mcp.json"
+          rc=$?
+          set -e
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'sudo cat /tmp/fdn-g15-official-device-mcp.json' > fdn-g15-official-device-mcp.json
+          test -s fdn-g15-official-device-mcp.json
+          if [ "$rc" -eq 78 ]; then
+            echo "Production egress reject counter owner is not installed; bounded MCP G15 remains blocked." >&2
+            exit 78
+          fi
+          test "$rc" -eq 0
+      - name: Upload exact-main production evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fdn-g15-official-device-mcp-${{ github.sha }}
+          path: fdn-g15-official-device-mcp.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${DEPLOY_HOST:-}" && -n "${DEPLOY_USER:-}" && -f "$HOME/.ssh/known_hosts" ]]; then
+            ssh "$DEPLOY_USER@$DEPLOY_HOST" 'sudo rm -f /tmp/fdn-g15-official-device-mcp.json' || true
+          fi
+          rm -f "$HOME/.ssh/id_ed25519"
