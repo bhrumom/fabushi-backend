@@ -15,9 +15,10 @@ test "$(git status --porcelain)" = ""
 
 evidence_dir="${1:-evidence}"
 mkdir -p "$evidence_dir"
-work_dir="$RUNNER_TEMP/fdn-g15-resource-privacy-${GITHUB_RUN_ID:-local}"
+work_dir="/tmp/fdn-g15-resource-privacy-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 rm -rf "$work_dir"
 mkdir -p "$work_dir/headscale-state" "$work_dir/worker-state" "$work_dir/home"
+chmod 0755 "$work_dir"
 chmod 0700 "$work_dir/worker-state" "$work_dir/home"
 
 container="fdn-g15-headscale-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-1}"
