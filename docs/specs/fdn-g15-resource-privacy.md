@@ -62,6 +62,14 @@ being misclassified as undeclared privacy egress, does not change production
 worker behavior, and does not relax the zero unexpected-egress requirement.
 Real direct/DERP/fallback route evidence remains owned by G05.
 
+Tailscale v1.104.1 also performs automatic captive-portal detection and, by
+default, includes public Tailscale `/generate_204` endpoints. Headscale 0.29.5
+supports the upstream `disable-captive-portal-detection` node attribute, so this
+loopback-only G15 fixture applies that attribute to its real fixture node through
+the real Headscale policy. This is likewise fixture isolation of known network
+health behavior, not a relaxed egress threshold: the worker-owned rejected-packet
+count must still be exactly zero.
+
 The artifact contains only bounded status/resource data, the worker log, and
 SHA-256 checksums. The job fails on the live pre-auth key or common bearer/token
 and private-key patterns in evidence.

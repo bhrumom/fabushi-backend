@@ -53,12 +53,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Keep the G15 privacy fixture focused on undeclared egress. Tailscale's
+# automatic captive-portal detector otherwise probes public Tailscale
+# /generate_204 endpoints; Headscale 0.29.5 supports disabling that network
+# health behavior via a node attribute delivered by the real control plane.
 cat > "$work_dir/policy.hujson" <<'POLICY'
 {
   "groups": {},
   "tagOwners": {},
   "hosts": {},
-  "acls": []
+  "acls": [],
+  "nodeAttrs": [
+    {
+      "target": ["*"],
+      "attr": ["disable-captive-portal-detection"]
+    }
+  ]
 }
 POLICY
 
