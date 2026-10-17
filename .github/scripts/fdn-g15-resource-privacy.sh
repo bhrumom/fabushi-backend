@@ -423,7 +423,7 @@ grep -F '  auto_update_enabled: false' fdn-network-coordinator/config.yaml.templ
 grep -F 'disable_check_updates: true' fdn-network-coordinator/config.yaml.template >/dev/null
 grep -F '    global: []' fdn-network-coordinator/config.yaml.template >/dev/null
 
-FABUSHI_FDN_HEADSCALE_SERVER_URL=https://fdn.ombhrum.com bash fdn-network-coordinator/render-config.sh
+(cd fdn-network-coordinator && FABUSHI_FDN_HEADSCALE_SERVER_URL=https://fdn.ombhrum.com bash render-config.sh)
 python3 - <<'PY'
 from pathlib import Path
 text = Path("fdn-network-coordinator/runtime/config.yaml").read_text()
