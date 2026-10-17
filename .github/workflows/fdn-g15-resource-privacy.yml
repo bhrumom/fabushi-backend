@@ -1,0 +1,133 @@
+name: FDN G15 resource privacy
+
+on:
+  pull_request:
+    paths:
+      - "official-device-network-worker/**"
+      - "official-device-mcp/lib/device-disk-safety.js"
+      - "fdn-network-coordinator/config.yaml.template"
+      - "fdn-network-coordinator/render-config.sh"
+      - "fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service"
+      - ".github/scripts/fdn-g15-resource-privacy.sh"
+      - ".github/workflows/fdn-g15-resource-privacy.yml"
+      - "docs/specs/fdn-g15-resource-privacy.md"
+  push:
+    branches: [main]
+    paths:
+      - "official-device-network-worker/**"
+      - "official-device-mcp/lib/device-disk-safety.js"
+      - "fdn-network-coordinator/config.yaml.template"
+      - "fdn-network-coordinator/render-config.sh"
+      - "fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service"
+      - ".github/scripts/fdn-g15-resource-privacy.sh"
+      - ".github/workflows/fdn-g15-resource-privacy.yml"
+      - "docs/specs/fdn-g15-resource-privacy.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resource-privacy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bind exact tested HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git status --porcelain)" = ""
+
+      - name: Setup exact Go from module
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: official-device-network-worker/go.mod
+          cache: false
+
+      - name: Build shipping worker for resource probe
+        working-directory: official-device-network-worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = "go1.27.1"
+          grep -Fx 'require tailscale.com v1.104.1' go.mod
+          go mod verify
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$RUNNER_TEMP/official-device-network-worker" .
+          test -x "$RUNNER_TEMP/official-device-network-worker"
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Verify production resource fences are not relaxed
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fx 'MemoryMax=150M' fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service
+          grep -Fx 'TasksMax=256' fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service
+          grep -F 'ReadWritePaths=/var/lib/fabushi-fdn' fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service
+          grep -F 'return Math.max(ONE_GIB, Math.ceil(totalBytes * DEFAULT_RESERVE_FRACTION));' official-device-mcp/lib/device-disk-safety.js
+          grep -F 'export const DEFAULT_RESERVE_FRACTION = 0.05;' official-device-mcp/lib/device-disk-safety.js
+
+      - name: Measure real pinned worker steady state and privacy
+        shell: bash
+        run: bash .github/scripts/fdn-g15-resource-privacy.sh evidence
+
+      - name: Static secret and privacy artifact scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          roots = [Path("evidence")]
+          patterns = [
+              re.compile(rb"(?i)authorization:\s*bearer\s+[A-Za-z0-9._~+/-]{12,}"),
+              re.compile(rb"(?i)(?:access|refresh|device|mobile)[_-]?token\s*[:=]\s*[A-Za-z0-9._~+/-]{12,}"),
+              re.compile(rb"(?:hskey|tskey)-auth-[A-Za-z0-9_-]{8,}"),
+              re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+          ]
+          for root in roots:
+              for path in root.rglob("*"):
+                  if not path.is_file():
+                      continue
+                  data = path.read_bytes()
+                  for pattern in patterns:
+                      if pattern.search(data):
+                          raise SystemExit(f"secret-like material detected in {path}")
+          print("FDN_G15 secret_privacy_scan=pass")
+          PY
+
+      - name: Seal resource/privacy evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c evidence/SHA256SUMS
+          test "$(git status --porcelain)" = ""
+
+      - name: Upload exact-head G15 resource/privacy evidence
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fdn-g15-resource-privacy-${{ env.EXPECTED_SHA }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
+
+      - name: Report evidence identity
+        shell: bash
+        run: |
+          {
+            echo "source_sha=$EXPECTED_SHA"
+            echo "artifact_id=${{ steps.upload.outputs.artifact-id }}"
+            echo "artifact_digest=sha256:${{ steps.upload.outputs.artifact-digest }}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
