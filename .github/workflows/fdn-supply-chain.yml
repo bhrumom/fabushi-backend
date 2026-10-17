@@ -142,7 +142,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check .github/scripts/fdn-supply-chain-evidence.mjs
-          node .github/scripts/fdn-supply-chain-evidence.mjs             --out evidence             --npm-lock official-device-mcp/package-lock.json             --npm-audit evidence/npm-audit.json             --npm-tree evidence/npm-tree.json             --go-mod official-device-network-worker/go.mod             --go-sum official-device-network-worker/go.sum             --go-modules evidence/go-modules.tsv             --go-build-list evidence/go-build-list.txt             --go-packages evidence/go-packages.txt             --compose fdn-network-coordinator/docker-compose.yml             --tool-versions evidence/tool-versions.txt             --workflow .github/workflows/fdn-supply-chain.yml
+          node .github/scripts/fdn-supply-chain-evidence.mjs             --out evidence             --npm-lock official-device-mcp/package-lock.json             --npm-audit evidence/npm-audit.json             --npm-tree evidence/npm-tree.json             --go-mod official-device-network-worker/go.mod             --go-sum official-device-network-worker/go.sum             --go-modules evidence/go-modules.tsv             --go-packages evidence/go-packages.txt             --compose fdn-network-coordinator/docker-compose.yml             --tool-versions evidence/tool-versions.txt             --workflow .github/workflows/fdn-supply-chain.yml
           node --input-type=module <<'NODE'
           import { readFile } from "node:fs/promises";
           const bom = JSON.parse(await readFile("evidence/fdn-sbom.cdx.json", "utf8"));
