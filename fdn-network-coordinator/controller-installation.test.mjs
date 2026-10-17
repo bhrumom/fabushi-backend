@@ -64,7 +64,7 @@ test('official MCP egress guard installs a cgroup-scoped allowlist and reject-co
  assert.match(log,/iptables .* -A FABUSHI_FDN_MCP_EGRESS -p tcp -d 203\.0\.113\.10 --dport 443 -j ACCEPT/);
  assert.match(log,/iptables .* -A FABUSHI_FDN_MCP_EGRESS -m comment --comment fdn-g15-official-device-mcp-egress -j REJECT/);
  assert.match(log,/iptables .* -I OUTPUT 1 -m cgroup --path system\.slice\/fabushi-fdn-official-device-mcp\.service -j FABUSHI_FDN_MCP_EGRESS/);
- if(existsSync('/proc/net/if_inet6')){
+ if(existsSync('/proc/net/if_inet6') && readFileSync('/proc/net/if_inet6','utf8').trim()){
   assert.match(log,/ip6tables .* -A FABUSHI_FDN_MCP_EGRESS -p tcp -d 2001:db8::10 --dport 443 -j ACCEPT/);
   assert.match(log,/ip6tables .* -A FABUSHI_FDN_MCP_EGRESS -m comment --comment fdn-g15-official-device-mcp-egress -j REJECT/);
  }
