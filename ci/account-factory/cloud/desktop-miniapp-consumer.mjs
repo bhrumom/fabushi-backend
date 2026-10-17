@@ -44,6 +44,79 @@ export function verifyRevokedSessions(statuses) {
   return true;
 }
 
+// A spawned native UI harness may have changed account state before its process
+// disappears. Timeouts/signals therefore remain an unknown execution outcome;
+// callers must reconcile evidence and revoke the lease, never retry the UI action.
+export function waitForChildOutcome(child, {
+  timeoutMs = 11 * 60_000,
+  terminationGraceMs = 5_000,
+  killGraceMs = 5_000,
+} = {}) {
+  if (!child || typeof child.once !== 'function' || typeof child.kill !== 'function'
+      || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1
+      || !Number.isSafeInteger(terminationGraceMs) || terminationGraceMs < 0
+      || !Number.isSafeInteger(killGraceMs) || killGraceMs < 0) {
+    fail('DFC_CHILD_TIMEOUT_INVALID');
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let timedOut = false;
+    let timeout;
+    let terminateTimer;
+    let hardKillTimer;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearTimeout(terminateTimer);
+      clearTimeout(hardKillTimer);
+      resolve(result);
+    };
+    const onExit = (code, signal) => {
+      const outcome = timedOut || signal || !Number.isInteger(code)
+        ? 'unknown'
+        : code === 0 ? 'success' : 'failure';
+      finish({
+        exitCode: Number.isInteger(code) ? code : null,
+        signal: signal || null,
+        timedOut,
+        outcome,
+      });
+    };
+    const terminate = () => {
+      if (settled) return;
+      timedOut = true;
+      try { child.kill('SIGTERM'); } catch {}
+      terminateTimer = setTimeout(() => {
+        if (settled) return;
+        try { child.kill('SIGKILL'); } catch {}
+        hardKillTimer = setTimeout(() => finish({
+          exitCode: null,
+          signal: 'SIGKILL',
+          timedOut: true,
+          outcome: 'unknown',
+          terminationUnconfirmed: true,
+        }), killGraceMs);
+      }, terminationGraceMs);
+    };
+    child.once('exit', onExit);
+    child.once('error', (error) => {
+      if (!child.pid) {
+        finish({
+          exitCode: null,
+          signal: null,
+          timedOut: false,
+          outcome: 'not-started',
+          errorName: error?.name || 'Error',
+        });
+      } else {
+        terminate();
+      }
+    });
+    timeout = setTimeout(terminate, timeoutMs);
+  });
+}
+
 async function fifoDelivery(path, descriptor) {
   execFileSync('/usr/bin/mkfifo', ['-m', '600', path], { stdio: 'pipe' });
   const info = await lstat(path);
@@ -86,7 +159,7 @@ export async function runConsumer() {
   const volume = verifyRamVolume();
   const privateRoot = join(volume, 'factory-private'); const temporary = join(volume, 'tmp');
   await mkdir(privateRoot, { mode: 0o700 }); await mkdir(temporary, { mode: 0o700 });
-  const report = { kind: 'signed-desktop-miniapp-account-factory', consumerBackendSha: process.env.GITHUB_SHA, factoryBackendSha: factorySha, factoryCoreSha: coreSha, desktopSourceSha: sourceSha, binarySourceSha: sourceSha, harnessSourceSha: sourceSha, artifactId: candidate.artifactId, archiveSha256: candidate.archiveSha256, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, stage: 'health', overall: 'FAIL', assertions: {} };
+  const report = { kind: 'signed-desktop-miniapp-account-factory', consumerBackendSha: process.env.GITHUB_SHA, factoryBackendSha: factorySha, factoryCoreSha: coreSha, desktopSourceSha: sourceSha, binarySourceSha: sourceSha, harnessSourceSha: sourceSha, artifactId: candidate.artifactId, archiveSha256: candidate.archiveSha256, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, stage: 'health', overall: 'FAIL', executionOutcome: 'not-started', assertions: {} };
   let lease; let handedOffSessions = []; let deliveries = []; let testPassed = false; let cleanupPassed = false;
   async function oidc() {
     const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL); url.searchParams.set('audience', factoryOrigin);
@@ -124,11 +197,22 @@ export async function runConsumer() {
       env: childEnvironment(process.env, { FABUSHI_API_BASE_URL: authOrigin, FABUSHI_ACCOUNT_ENVIRONMENT: 'ci-isolated', FABUSHI_CI_ACCOUNT_SESSION_FILE: pipes[0], FABUSHI_CI_SECOND_ACCOUNT_SESSION_FILE: pipes[1], FABUSHI_CI_SESSION_DELIVERY: 'private-fifo', FABUSHI_MINIAPP_HARNESS_SOURCE: sourceSha, SAND_APP_DATA_DIR: join(volume, 'appData'), SAND_TEMP_DIR: temporary, TMPDIR: temporary, MINIAPP_REAL_ACCEPTANCE: '1', MINIAPP_ACCOUNT_SWITCH_ACCEPTANCE: '1', MINIAPP_EVIDENCE_DIR: output, FABUSHI_FEATURE_HOST_MODE: 'production', FABUSHI_E2E: '0' }),
     });
     const abort = () => child.kill('SIGTERM'); process.once('SIGTERM', abort); process.once('SIGINT', abort);
-    let status;
-    try { status = await new Promise((done, reject) => { child.once('exit', done); child.once('error', reject); }); }
-    finally { process.removeListener('SIGTERM', abort); process.removeListener('SIGINT', abort); }
-    report.harnessExitCode = status;
-    if (status !== 0 || deliveries.some((delivery) => delivery.failed())) fail('DFC_SIGNED_UI_FAILED');
+    let childOutcome;
+    try {
+      childOutcome = await waitForChildOutcome(child, {
+        timeoutMs: 11 * 60_000,
+        terminationGraceMs: 5_000,
+        killGraceMs: 5_000,
+      });
+    } finally {
+      process.removeListener('SIGTERM', abort);
+      process.removeListener('SIGINT', abort);
+    }
+    report.harnessExitCode = childOutcome.exitCode;
+    report.executionOutcome = childOutcome.outcome;
+    if (childOutcome.outcome === 'unknown') fail('DFC_SIGNED_UI_OUTCOME_UNKNOWN');
+    if (childOutcome.outcome === 'not-started') fail('DFC_SIGNED_UI_NOT_STARTED');
+    if (childOutcome.outcome !== 'success' || deliveries.some((delivery) => delivery.failed())) fail('DFC_SIGNED_UI_FAILED');
     const runs = (await readdir(output)).filter((name) => name.startsWith('account-switch-'));
     if (runs.length !== 1) fail('DFC_ACCOUNT_EVIDENCE_AMBIGUOUS');
     verifyAccountEvidence(JSON.parse(await readFile(join(output, runs[0], 'account-isolation.json'), 'utf8')), sourceSha);

@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { requiredSteps, requiredChecks, validateCandidate } from './cloud/desktop-miniapp-candidate.mjs';
-import { authOrigin, factoryOrigin, nativeSessionDescriptor, childEnvironment, verifyAccountEvidence, verifyRevokedSessions } from './cloud/desktop-miniapp-consumer.mjs';
+import { authOrigin, factoryOrigin, nativeSessionDescriptor, childEnvironment, verifyAccountEvidence, verifyRevokedSessions, waitForChildOutcome } from './cloud/desktop-miniapp-consumer.mjs';
 
 function candidate() {
   const sha = 'a'.repeat(40); const digest = 'b'.repeat(64);
@@ -77,6 +78,54 @@ test('cleanup independently rejects both delivered ordinary sessions', () => {
   assert.equal(verifyRevokedSessions([401, 401]), true);
   for (const statuses of [[], [401], [401, 200], [200, 401], [401, 500], [401, 401, 401]]) assert.throws(() => verifyRevokedSessions(statuses), /DFC_CLEANUP_FAILED/);
 });
+test('bounded child timeout is explicitly uncertain and escalates termination without retry', async () => {
+  const child = new EventEmitter();
+  child.pid = 42;
+  const signals = [];
+  child.kill = (signal) => {
+    signals.push(signal);
+    if (signal === 'SIGKILL') setImmediate(() => child.emit('exit', null, 'SIGKILL'));
+    return true;
+  };
+  const result = await waitForChildOutcome(child, {
+    timeoutMs: 5,
+    terminationGraceMs: 5,
+    killGraceMs: 5,
+  });
+  assert.equal(result.outcome, 'unknown');
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('child completion distinguishes confirmed success from failed and signalled outcomes', async () => {
+  const child = () => {
+    const value = new EventEmitter();
+    value.pid = 42;
+    value.kill = () => true;
+    return value;
+  };
+  const success = child();
+  setImmediate(() => success.emit('exit', 0, null));
+  assert.equal((await waitForChildOutcome(success, { timeoutMs: 1000 })).outcome, 'success');
+
+  const failure = child();
+  setImmediate(() => failure.emit('exit', 17, null));
+  assert.equal((await waitForChildOutcome(failure, { timeoutMs: 1000 })).outcome, 'failure');
+
+  const signalled = child();
+  setImmediate(() => signalled.emit('exit', null, 'SIGTERM'));
+  assert.equal((await waitForChildOutcome(signalled, { timeoutMs: 1000 })).outcome, 'unknown');
+});
+
+test('a harness that never starts is distinguished from an unknown side-effect result', async () => {
+  const child = new EventEmitter();
+  child.kill = () => true;
+  setImmediate(() => child.emit('error', Object.assign(new Error('spawn failed'), { code: 'ENOENT' })));
+  const result = await waitForChildOutcome(child, { timeoutMs: 1000 });
+  assert.equal(result.outcome, 'not-started');
+  assert.equal(result.errorName, 'Error');
+});
+
 test('factory evidence upload is an explicit safe allowlist and permissions stay consumer-scoped', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/ci-account-factory-cloud.yml', import.meta.url), 'utf8');
   const upload = workflow.split('name: desktop-miniapp-factory-')[1];
