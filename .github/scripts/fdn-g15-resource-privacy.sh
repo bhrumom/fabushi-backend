@@ -23,6 +23,7 @@ chmod 0700 "$work_dir/worker-state" "$work_dir/home"
 container="fdn-g15-headscale-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-1}"
 worker_log="$evidence_dir/network-worker.log"
 worker_binary="$RUNNER_TEMP/official-device-network-worker"
+worker_exec="/tmp/fdn-g15-official-device-network-worker-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-1}"
 probe_user="fdng15"
 worker_pid=""
 sudo_pid=""
@@ -45,6 +46,7 @@ cleanup() {
   if id "$probe_user" >/dev/null 2>&1; then
     sudo userdel "$probe_user" >/dev/null 2>&1 || true
   fi
+  sudo rm -f "$worker_exec" >/dev/null 2>&1 || true
   rm -rf "$work_dir"
 }
 trap cleanup EXIT
@@ -171,6 +173,7 @@ if ! id "$probe_user" >/dev/null 2>&1; then
   sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$probe_user"
 fi
 uid_value="$(id -u "$probe_user")"
+sudo install -o "$probe_user" -g "$probe_user" -m 0755 "$worker_binary" "$worker_exec"
 sudo chown -R "$probe_user":"$probe_user" "$work_dir/worker-state" "$work_dir/home"
 
 # The Actions resource fixture has one approved egress origin: its real pinned
@@ -188,12 +191,12 @@ sudo -u "$probe_user" env \
   FABUSHI_FDN_WORKER_HOSTNAME="g15-resource-worker" \
   FABUSHI_FDN_WORKER_BIND="127.0.0.1:8791" \
   FABUSHI_FDN_REMOTE_TARGET_PORT="8792" \
-  "$worker_binary" >"$worker_log" 2>&1 &
+  "$worker_exec" >"$worker_log" 2>&1 &
 sudo_pid="$!"
 
 status_ready=0
 for _ in $(seq 1 90); do
-  worker_pid="$(pgrep -u "$uid_value" -f "$worker_binary" | head -n1 || true)"
+  worker_pid="$(pgrep -u "$uid_value" -f "$worker_exec" | head -n1 || true)"
   if [[ -n "$worker_pid" ]] && curl --fail --silent --show-error --max-time 2 http://127.0.0.1:8791/v1/fdn/status > "$evidence_dir/network-worker-status.json"; then
     status_ready=1
     break
