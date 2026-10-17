@@ -58,6 +58,22 @@ cat > "$work_dir/policy.hujson" <<'POLICY'
 }
 POLICY
 
+cat > "$work_dir/derp.yaml" <<'YAML'
+regions:
+  901:
+    regionid: 901
+    regioncode: fabushi-g15-local
+    regionname: Fabushi G15 local fixture
+    nodes:
+      - name: 901a
+        regionid: 901
+        hostname: 127.0.0.1
+        ipv4: 127.0.0.1
+        stunport: 0
+        stunonly: false
+        derpport: 9443
+YAML
+
 cat > "$work_dir/headscale.yaml" <<'YAML'
 server_url: http://127.0.0.1:8080
 listen_addr: 127.0.0.1:8080
@@ -82,7 +98,8 @@ derp:
     private_key_path: /var/lib/headscale/derp_server_private.key
     automatically_add_embedded_derp_region: false
   urls: []
-  paths: []
+  paths:
+    - /etc/headscale/derp.yaml
   auto_update_enabled: false
   update_frequency: 24h
 disable_check_updates: true
@@ -124,6 +141,7 @@ YAML
 docker run -d --name "$container" --network host \
   -v "$work_dir/headscale.yaml:/etc/headscale/config.yaml:ro" \
   -v "$work_dir/policy.hujson:/etc/headscale/policy.hujson:ro" \
+  -v "$work_dir/derp.yaml:/etc/headscale/derp.yaml:ro" \
   -v "$work_dir/headscale-state:/var/lib/headscale" \
   docker.io/headscale/headscale:0.29.5 serve >/dev/null
 
