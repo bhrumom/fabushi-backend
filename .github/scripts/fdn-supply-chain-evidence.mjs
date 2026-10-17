@@ -64,66 +64,67 @@ function goPurl(name, version) {
 
 function detectLicense(text) {
   const lower = text.toLowerCase();
+  const normalized = lower.replace(/\s+/g, " ");
   const allowed = new Set();
   const denied = new Set();
 
-  if (lower.includes("gnu affero general public license")) denied.add("AGPL");
-  if (lower.includes("gnu lesser general public license")) denied.add("LGPL");
+  if (normalized.includes("gnu affero general public license")) denied.add("AGPL");
+  if (normalized.includes("gnu lesser general public license")) denied.add("LGPL");
   if (
-    lower.includes("gnu general public license") &&
-    !lower.includes("gnu affero general public license") &&
-    !lower.includes("gnu lesser general public license")
+    normalized.includes("gnu general public license") &&
+    !normalized.includes("gnu affero general public license") &&
+    !normalized.includes("gnu lesser general public license")
   ) {
     denied.add("GPL");
   }
-  if (lower.includes("server side public license")) denied.add("SSPL");
-  if (lower.includes("commons clause")) denied.add("Commons-Clause");
-  if (lower.includes("elastic license")) denied.add("Elastic-License");
-  if (lower.includes("business source license")) denied.add("BUSL");
+  if (normalized.includes("server side public license")) denied.add("SSPL");
+  if (normalized.includes("commons clause")) denied.add("Commons-Clause");
+  if (normalized.includes("elastic license")) denied.add("Elastic-License");
+  if (normalized.includes("business source license")) denied.add("BUSL");
 
   if (
-    lower.includes("apache license") &&
-    lower.includes("version 2.0")
+    normalized.includes("apache license") &&
+    normalized.includes("version 2.0")
   ) {
     allowed.add("Apache-2.0");
   }
-  if (lower.includes("mozilla public license version 2.0")) {
+  if (normalized.includes("mozilla public license version 2.0")) {
     allowed.add("MPL-2.0");
   }
-  if (lower.includes("boost software license")) {
+  if (normalized.includes("boost software license")) {
     allowed.add("Boost-1.0");
   }
   if (
-    lower.includes("creative commons zero") ||
-    lower.includes("cc0 1.0 universal")
+    normalized.includes("creative commons zero") ||
+    normalized.includes("cc0 1.0 universal")
   ) {
     allowed.add("CC0-1.0");
   }
   if (
-    lower.includes("permission is hereby granted, free of charge") &&
-    lower.includes("the software")
+    normalized.includes("permission is hereby granted, free of charge") &&
+    normalized.includes("the software")
   ) {
     allowed.add("MIT");
   }
   if (
-    lower.includes("permission to use, copy, modify, and/or distribute this software") &&
-    lower.includes("with or without fee")
+    normalized.includes("permission to use, copy, modify, and/or distribute this software") &&
+    normalized.includes("with or without fee")
   ) {
     allowed.add("ISC");
   }
   if (
-    lower.includes("redistribution and use in source and binary forms") &&
-    lower.includes("with or without modification")
+    normalized.includes("redistribution and use in source and binary forms") &&
+    normalized.includes("with or without modification")
   ) {
-    if (lower.includes("neither the name")) {
+    if (normalized.includes("neither the name")) {
       allowed.add("BSD-3-Clause");
     } else {
       allowed.add("BSD-2-Clause");
     }
   }
   if (
-    lower.includes("zero-clause bsd") ||
-    lower.includes("0bsd")
+    normalized.includes("zero-clause bsd") ||
+    normalized.includes("0bsd")
   ) {
     allowed.add("0BSD");
   }
