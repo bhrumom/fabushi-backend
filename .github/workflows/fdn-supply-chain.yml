@@ -128,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(go env GOVERSION)" = "go1.27.1"
-          go list -mod=readonly -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}{{end}}' ./... \
+          go list -mod=readonly -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}|{{.Version}}|{{.Dir}}{{end}}{{end}}' ./... \
             | sed '/^$/d' | sort -u > ../evidence/go-modules.tsv
           go list -mod=readonly -deps ./... > ../evidence/go-packages.txt
           go mod verify

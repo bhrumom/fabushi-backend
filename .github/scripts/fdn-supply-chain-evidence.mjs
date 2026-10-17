@@ -309,7 +309,7 @@ if (requiredVersions.length === 0) {
 const goRows = [];
 for (const line of (await readFile(args["go-modules"], "utf8")).trim().split("\n")) {
   if (!line) continue;
-  const fields = line.split("\t");
+  const fields = line.split("|");
   if (fields.length < 3) throw new Error("malformed Go module row: " + line);
   const [modulePath, version, moduleDir] = fields;
   if (version === "MAIN") continue;
