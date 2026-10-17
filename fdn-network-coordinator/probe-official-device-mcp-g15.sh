@@ -30,6 +30,42 @@ cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
 [[ "$cmdline" == *"/usr/bin/node"* || "$cmdline" == node* ]]
 [[ "$cmdline" == *"/opt/fabushi-fdn/current/official-device-mcp/bin/fabushi-remote-mcp.js"* ]]
 
+egress_chain="FABUSHI_FDN_MCP_EGRESS"
+egress_comment="fdn-g15-official-device-mcp-egress"
+egress_cgroup="system.slice/fabushi-fdn-official-device-mcp.service"
+
+stack_has_egress_owner() {
+  local cmd="$1" save_cmd save
+  save_cmd="${cmd}-save"
+  command -v "$cmd" >/dev/null 2>&1 || return 1
+  command -v "$save_cmd" >/dev/null 2>&1 || return 1
+  save="$("$save_cmd" 2>/dev/null || true)"
+  grep -F -- "-A $egress_chain " <<<"$save" | grep -F -- "--comment $egress_comment" | grep -F -- "-j REJECT" >/dev/null || return 1
+  grep -F -- "-A OUTPUT " <<<"$save" | grep -F -- "$egress_cgroup" | grep -F -- "-j $egress_chain" >/dev/null || return 1
+}
+
+read_stack_egress_counter() {
+  local cmd="$1"
+  "$cmd" -w -nvx -L "$egress_chain" 2>/dev/null | awk -v marker="$egress_comment" 'index($0,marker){sum += $1} END {print sum+0}'
+}
+
+egress_owner_present=false
+if stack_has_egress_owner iptables; then
+  if [[ -s /proc/net/if_inet6 ]]; then
+    if stack_has_egress_owner ip6tables; then egress_owner_present=true; fi
+  else
+    egress_owner_present=true
+  fi
+fi
+
+egress_start=""
+if [[ "$egress_owner_present" = true ]]; then
+  egress_start="$(read_stack_egress_counter iptables)"
+  if [[ -s /proc/net/if_inet6 ]]; then
+    egress_start=$((egress_start + $(read_stack_egress_counter ip6tables)))
+  fi
+fi
+
 clock_ticks="$(getconf CLK_TCK)"
 start_ticks="$(awk '{print $14 + $15}' "/proc/$pid/stat")"
 start_ns="$(date +%s%N)"
@@ -78,10 +114,15 @@ reserve_five_percent=$(((total_bytes + 19) / 20))
 reserve_bytes=$((1024 * 1024 * 1024))
 (( reserve_five_percent > reserve_bytes )) && reserve_bytes="$reserve_five_percent"
 
-egress_rule="$(iptables-save 2>/dev/null | grep -F -- '--comment fdn-g15-official-device-mcp-egress' || true)"
+egress_end=""
 egress_rejected=""
-if [[ -n "$egress_rule" ]]; then
-  egress_rejected="$(iptables -nvx -L OUTPUT | awk '/fdn-g15-official-device-mcp-egress/ {sum += $1} END {print sum+0}')"
+if [[ "$egress_owner_present" = true ]]; then
+  egress_end="$(read_stack_egress_counter iptables)"
+  if [[ -s /proc/net/if_inet6 ]]; then
+    egress_end=$((egress_end + $(read_stack_egress_counter ip6tables)))
+  fi
+  (( egress_end >= egress_start )) || fail "egress reject counter reset during the steady-state window"
+  egress_rejected=$((egress_end - egress_start))
 fi
 
 export FDN_MCP_BACKEND_SHA="$expected_backend_sha"
@@ -100,6 +141,8 @@ export FDN_MCP_FS_TOTAL="$total_bytes"
 export FDN_MCP_FS_AVAILABLE="$min_available_bytes"
 export FDN_MCP_FS_RESERVE="$reserve_bytes"
 export FDN_MCP_PRIVACY_SCAN="$privacy_scan"
+export FDN_MCP_EGRESS_START="$egress_start"
+export FDN_MCP_EGRESS_END="$egress_end"
 export FDN_MCP_EGRESS_REJECTED="$egress_rejected"
 
 python3 - "$output" <<'PY'
@@ -109,7 +152,11 @@ ticks=int(os.environ["FDN_MCP_DELTA_TICKS"])
 hz=int(os.environ["FDN_MCP_CLOCK_TICKS"])
 elapsed_s=elapsed_ns/1_000_000_000
 cpu=((ticks/hz)/elapsed_s)*100
+egress_start_raw=os.environ.get("FDN_MCP_EGRESS_START","")
+egress_end_raw=os.environ.get("FDN_MCP_EGRESS_END","")
 egress_raw=os.environ.get("FDN_MCP_EGRESS_REJECTED","")
+egress_start=int(egress_start_raw) if egress_start_raw else None
+egress_end=int(egress_end_raw) if egress_end_raw else None
 egress_count=int(egress_raw) if egress_raw else None
 report={
   "backendSha":os.environ["FDN_MCP_BACKEND_SHA"],
@@ -124,7 +171,8 @@ report={
     "diskReserveBytes":{"filesystemTotal":int(os.environ["FDN_MCP_FS_TOTAL"]),"minimumAvailableObserved":int(os.environ["FDN_MCP_FS_AVAILABLE"]),"requiredReserve":int(os.environ["FDN_MCP_FS_RESERVE"])},
   },
   "privacy":{"journalSecretScan":os.environ["FDN_MCP_PRIVACY_SCAN"]},
-  "egress":{"rejectedCount":egress_count,"counterOwner":"iptables OUTPUT comment fdn-g15-official-device-mcp-egress" if egress_count is not None else None},
+  "unexpectedWorkerOwnedPacketsRejected":egress_count,
+  "egress":{"startCount":egress_start,"endCount":egress_end,"rejectedCount":egress_count,"counterOwner":"cgroup-scoped netfilter chain FABUSHI_FDN_MCP_EGRESS / comment fdn-g15-official-device-mcp-egress" if egress_count is not None else None},
 }
 checks=[
  report["budgets"]["rssBytes"]["maxObserved"] < report["budgets"]["rssBytes"]["limit"],
@@ -134,6 +182,7 @@ checks=[
  report["budgets"]["journalBytes"]["observed"] <= report["budgets"]["journalBytes"]["limit"],
  report["budgets"]["diskReserveBytes"]["minimumAvailableObserved"] >= report["budgets"]["diskReserveBytes"]["requiredReserve"],
  report["privacy"]["journalSecretScan"] == "pass",
+ egress_count == 0,
 ]
 if egress_count is None:
   report["status"]="BLOCKED_EGRESS_REJECT_COUNTER"
@@ -150,6 +199,7 @@ for section in report["budgets"].values():
 report["budgets"]["cpuSingleCorePercent"]["pass"]=report["budgets"]["cpuSingleCorePercent"]["fiveMinuteAverage"] < 1.0
 report["budgets"]["journalBytes"]["pass"]=report["budgets"]["journalBytes"]["observed"] <= report["budgets"]["journalBytes"]["limit"]
 report["budgets"]["diskReserveBytes"]["pass"]=report["budgets"]["diskReserveBytes"]["minimumAvailableObserved"] >= report["budgets"]["diskReserveBytes"]["requiredReserve"]
+report["egress"]["pass"]=egress_count == 0 if egress_count is not None else False
 with open(sys.argv[1],"w",encoding="utf-8") as f: json.dump(report,f,indent=2,sort_keys=True)
 print(json.dumps(report,sort_keys=True))
 raise SystemExit(report["exitCode"])

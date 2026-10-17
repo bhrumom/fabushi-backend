@@ -5,6 +5,9 @@ on:
     paths:
       - "official-device-mcp/**"
       - "fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service"
+      - "fdn-network-coordinator/install-official-device-mcp-egress-guard.sh"
+      - "fdn-network-coordinator/install-controller-stack.sh"
+      - "fdn-network-coordinator/controller-installation.test.mjs"
       - "fdn-network-coordinator/probe-official-device-mcp-g15.sh"
       - ".github/workflows/fdn-g15-official-device-mcp-production.yml"
   push:
@@ -12,6 +15,9 @@ on:
     paths:
       - "official-device-mcp/**"
       - "fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service"
+      - "fdn-network-coordinator/install-official-device-mcp-egress-guard.sh"
+      - "fdn-network-coordinator/install-controller-stack.sh"
+      - "fdn-network-coordinator/controller-installation.test.mjs"
       - "fdn-network-coordinator/probe-official-device-mcp-g15.sh"
       - ".github/workflows/fdn-g15-official-device-mcp-production.yml"
   workflow_dispatch:
@@ -43,9 +49,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
           test "$(git status --porcelain)" = ""
           bash -n fdn-network-coordinator/probe-official-device-mcp-g15.sh
+          bash -n fdn-network-coordinator/install-official-device-mcp-egress-guard.sh
           grep -Fx 'MemoryMax=150M' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
           grep -Fx 'TasksMax=256' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
           grep -F 'ExecStart=/usr/bin/node /opt/fabushi-fdn/current/official-device-mcp/bin/fabushi-remote-mcp.js' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -F 'ExecStartPre=+/opt/fabushi-fdn/current/fdn-network-coordinator/install-official-device-mcp-egress-guard.sh install' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -F 'unexpectedWorkerOwnedPacketsRejected' fdn-network-coordinator/probe-official-device-mcp-g15.sh
+          grep -F 'fdn-g15-official-device-mcp-egress' fdn-network-coordinator/install-official-device-mcp-egress-guard.sh
+          sudo env PATH="$PATH" node --test fdn-network-coordinator/controller-installation.test.mjs
           grep -F 'assertOfficialDeviceMcpProductionStartup();' official-device-mcp/bin/fabushi-remote-mcp.js
           grep -F 'const service = createFabushiRemoteMcpServer();' official-device-mcp/bin/fabushi-remote-mcp.js
           git diff --exit-code

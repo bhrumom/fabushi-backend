@@ -8,6 +8,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/fabushi-fdn/current/official-device-mcp
 EnvironmentFile=/etc/fabushi/fdn-official-device-mcp.env
+ExecStartPre=+/opt/fabushi-fdn/current/fdn-network-coordinator/install-official-device-mcp-egress-guard.sh install
 ExecStart=/usr/bin/node /opt/fabushi-fdn/current/official-device-mcp/bin/fabushi-remote-mcp.js
 Restart=on-failure
 RestartSec=5

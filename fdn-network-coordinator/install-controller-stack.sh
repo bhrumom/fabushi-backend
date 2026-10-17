@@ -79,6 +79,7 @@ case "$action" in
     test -f "$tmp/fdn-network-coordinator/systemd/fabushi-fdn-enrollment.service"
     test -f "$tmp/fdn-network-coordinator/systemd/fabushi-fdn-network-worker.service"
     test -f "$tmp/fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service"
+    test -x "$tmp/fdn-network-coordinator/install-official-device-mcp-egress-guard.sh"
     printf '%s
 ' "$backend_sha" > "$tmp/BACKEND_SHA"
     printf '%s
@@ -137,6 +138,9 @@ case "$action" in
     ;;
   uninstall)
     systemctl disable --now fabushi-fdn-official-mcp-ingress.timer fabushi-fdn-official-device-mcp.service fabushi-fdn-enrollment.service fabushi-fdn-network-worker.service 2>/dev/null || true
+    if [[ -x "$root/current/fdn-network-coordinator/install-official-device-mcp-egress-guard.sh" ]]; then
+      "$root/current/fdn-network-coordinator/install-official-device-mcp-egress-guard.sh" remove || true
+    fi
     rm -f "$units"/fabushi-fdn-{network-worker,enrollment,official-device-mcp,official-mcp-ingress}.service
     rm -f "$units/fabushi-fdn-official-mcp-ingress.timer"
     systemctl daemon-reload
