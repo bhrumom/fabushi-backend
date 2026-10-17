@@ -2,7 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { requiredSteps, requiredChecks, validateCandidate } from './cloud/desktop-miniapp-candidate.mjs';
-import { authOrigin, factoryOrigin, nativeSessionDescriptor, childEnvironment, verifyAccountEvidence, verifyRevokedSessions } from './cloud/desktop-miniapp-consumer.mjs';
+import { authOrigin, factoryOrigin, factorySha, coreSha, nativeSessionDescriptor, childEnvironment, verifyAccountEvidence, verifyRevokedSessions } from './cloud/desktop-miniapp-consumer.mjs';
+
+test('factory health source pins stay exact and health matching stays strict', () => {
+  assert.equal(factorySha, 'b562310d96a2c843e9b94f39c5506eed51b126d5');
+  assert.equal(coreSha, 'c7d0e24b7561c6f5d1bb3c0e975f599643252504');
+  const source = readFileSync(new URL('./cloud/desktop-miniapp-consumer.mjs', import.meta.url), 'utf8');
+  assert.match(source, /health\.backendSha !== factorySha \|\| health\.coreSha !== coreSha/);
+  assert.match(source, /DFC_FACTORY_SOURCE_MISMATCH/);
+});
 
 function candidate() {
   const sha = 'a'.repeat(40); const digest = 'b'.repeat(64);

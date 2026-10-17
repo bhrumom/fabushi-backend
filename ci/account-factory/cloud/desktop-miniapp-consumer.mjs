@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 export const factoryOrigin = 'https://fabushi-ci-isolated-accounts.bhrumom.workers.dev';
 export const authOrigin = 'https://fabushi-ci-isolated-auth.bhrumom.workers.dev';
-export const factorySha = '4ccf4f31ce035b19a0b697828f091d320e04b77b';
+export const factorySha = 'b562310d96a2c843e9b94f39c5506eed51b126d5';
 export const coreSha = 'c7d0e24b7561c6f5d1bb3c0e975f599643252504';
 const fail = (code) => { throw Error(code); };
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
