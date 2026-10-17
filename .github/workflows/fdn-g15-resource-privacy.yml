@@ -111,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum -c evidence/SHA256SUMS
-          test "$(git status --porcelain)" = ""
+          git diff --exit-code
 
       - name: Upload exact-head G15 resource/privacy evidence
         id: upload
