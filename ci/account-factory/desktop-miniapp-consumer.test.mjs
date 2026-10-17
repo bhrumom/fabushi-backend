@@ -126,6 +126,44 @@ test('a harness that never starts is distinguished from an unknown side-effect r
   assert.equal(result.errorName, 'Error');
 });
 
+test('a post-spawn child error remains uncertain and records its termination reason', async () => {
+  const child = new EventEmitter();
+  child.pid = 42;
+  const signals = [];
+  child.kill = (signal) => {
+    signals.push(signal);
+    if (signal === 'SIGTERM') setImmediate(() => child.emit('exit', null, 'SIGTERM'));
+    return true;
+  };
+  setImmediate(() => child.emit('error', Object.assign(new Error('child stream failed'), { code: 'EPIPE' })));
+  const result = await waitForChildOutcome(child, {
+    timeoutMs: 1000,
+    terminationGraceMs: 50,
+    killGraceMs: 50,
+  });
+  assert.equal(result.outcome, 'unknown');
+  assert.equal(result.timedOut, false);
+  assert.equal(result.terminationReason, 'child-error');
+  assert.deepEqual(signals, ['SIGTERM']);
+});
+
+test('an unconfirmed hard kill remains unknown rather than implying completion', async () => {
+  const child = new EventEmitter();
+  child.pid = 42;
+  const signals = [];
+  child.kill = (signal) => { signals.push(signal); return true; };
+  const result = await waitForChildOutcome(child, {
+    timeoutMs: 5,
+    terminationGraceMs: 5,
+    killGraceMs: 5,
+  });
+  assert.equal(result.outcome, 'unknown');
+  assert.equal(result.timedOut, true);
+  assert.equal(result.terminationUnconfirmed, true);
+  assert.equal(result.terminationReason, 'timeout');
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+});
+
 test('factory evidence upload is an explicit safe allowlist and permissions stay consumer-scoped', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/ci-account-factory-cloud.yml', import.meta.url), 'utf8');
   const upload = workflow.split('name: desktop-miniapp-factory-')[1];
