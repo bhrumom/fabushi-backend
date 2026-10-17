@@ -54,6 +54,14 @@ destination is rejected and counted; a non-zero count fails the gate. This is a
 strict test fixture for undeclared telemetry/egress. Production's approved
 control origin remains `https://fdn.ombhrum.com`.
 
+Because Tailscale port mapping normally probes local gateways using UPnP,
+NAT-PMP, or PCP as part of legitimate NAT traversal, the loopback-only G15
+fixture sets `TS_DISABLE_PORTMAPPER=true` for the worker process. This is an
+Actions-fixture isolation knob only: it prevents G05 NAT-traversal traffic from
+being misclassified as undeclared privacy egress, does not change production
+worker behavior, and does not relax the zero unexpected-egress requirement.
+Real direct/DERP/fallback route evidence remains owned by G05.
+
 The artifact contains only bounded status/resource data, the worker log, and
 SHA-256 checksums. The job fails on the live pre-auth key or common bearer/token
 and private-key patterns in evidence.

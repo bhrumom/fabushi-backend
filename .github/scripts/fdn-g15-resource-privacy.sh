@@ -184,7 +184,11 @@ sudo chown -R "$probe_user":"$probe_user" "$work_dir/worker-state" "$work_dir/ho
 sudo iptables -I OUTPUT 1 -m owner --uid-owner "$uid_value" '!' -d 127.0.0.0/8 -m comment --comment fdn-g15-worker -j REJECT
 sudo ip6tables -I OUTPUT 1 -m owner --uid-owner "$uid_value" '!' -d ::1/128 -m comment --comment fdn-g15-worker -j REJECT
 
+# G15 isolates undeclared telemetry/privacy egress from G05 NAT-traversal behavior.
+# Tailscale's portmapper legitimately probes LAN gateways (UPnP/NAT-PMP/PCP),
+# so disable it only in this loopback-only Actions fixture; production is unchanged.
 sudo -u "$probe_user" env \
+  TS_DISABLE_PORTMAPPER=true \
   HOME="$work_dir/home" \
   FABUSHI_FDN_WORKER_CELL_ID="g15-resource-cell" \
   FABUSHI_FDN_WORKER_CONTROL_URL="http://127.0.0.1:8080" \
