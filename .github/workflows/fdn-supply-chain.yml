@@ -128,12 +128,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$(go env GOVERSION)" = "go1.27.1"
-          go mod download all
-          go mod verify
-          go list -mod=readonly -m -f '{{if .Main}}{{.Path}}	MAIN	{{.Dir}}{{else}}{{.Path}}	{{.Version}}	{{.Dir}}{{end}}' all > ../evidence/go-modules.tsv
+          go list -mod=readonly -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}{{end}}' ./... \
+            | sed '/^$/d' | sort -u > ../evidence/go-modules.tsv
           go list -mod=readonly -deps ./... > ../evidence/go-packages.txt
+          go mod verify
           git diff --exit-code -- go.mod go.sum
-          grep -Fx 'tailscale.com	v1.104.1' <(awk -F '	' '$1=="tailscale.com" {print $1 "	" $2}' ../evidence/go-modules.tsv)
+          grep -Fx 'require tailscale.com v1.104.1' go.mod
 
       - name: Generate and validate SBOM, licenses and provenance
         shell: bash
