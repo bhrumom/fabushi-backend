@@ -49,7 +49,7 @@ cleanup() {
     sudo userdel "$probe_user" >/dev/null 2>&1 || true
   fi
   sudo rm -f "$worker_exec" >/dev/null 2>&1 || true
-  rm -rf "$work_dir"
+  sudo rm -rf "$work_dir"
 }
 trap cleanup EXIT
 
@@ -228,7 +228,7 @@ for _ in $(seq 1 60); do
   sleep 5
   sudo -u "$probe_user" kill -0 "$worker_pid"
   rss_kib="$(awk '/^VmRSS:/ {print $2}' "/proc/$worker_pid/status")"
-  state_bytes="$(du -sb "$work_dir/worker-state" | awk '{print $1}')"
+  state_bytes="$(sudo -u "$probe_user" du -sb "$work_dir/worker-state" | awk '{print $1}')"
   log_bytes="$(stat -c %s "$worker_log")"
   read -r fs_total fs_available < <(df -B1 --output=size,avail "$work_dir/worker-state" | tail -n1)
   if (( rss_kib > max_rss_kib )); then max_rss_kib="$rss_kib"; fi
