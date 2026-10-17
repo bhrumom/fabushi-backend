@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { requiredSteps, requiredChecks, validateCandidate } from './cloud/desktop-miniapp-candidate.mjs';
-import { authOrigin, factoryOrigin, nativeSessionDescriptor, childEnvironment, verifyAccountEvidence, verifyRevokedSessions } from './cloud/desktop-miniapp-consumer.mjs';
+import { authOrigin, factoryOrigin, nativeSessionDescriptor, childEnvironment, verifyAccountEvidence, verifyRevokedSessions, waitForChildOutcome } from './cloud/desktop-miniapp-consumer.mjs';
 
 function candidate() {
   const sha = 'a'.repeat(40); const digest = 'b'.repeat(64);
@@ -77,6 +78,92 @@ test('cleanup independently rejects both delivered ordinary sessions', () => {
   assert.equal(verifyRevokedSessions([401, 401]), true);
   for (const statuses of [[], [401], [401, 200], [200, 401], [401, 500], [401, 401, 401]]) assert.throws(() => verifyRevokedSessions(statuses), /DFC_CLEANUP_FAILED/);
 });
+test('bounded child timeout is explicitly uncertain and escalates termination without retry', async () => {
+  const child = new EventEmitter();
+  child.pid = 42;
+  const signals = [];
+  child.kill = (signal) => {
+    signals.push(signal);
+    if (signal === 'SIGKILL') setImmediate(() => child.emit('exit', null, 'SIGKILL'));
+    return true;
+  };
+  const result = await waitForChildOutcome(child, {
+    timeoutMs: 5,
+    terminationGraceMs: 5,
+    killGraceMs: 5,
+  });
+  assert.equal(result.outcome, 'unknown');
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('child completion distinguishes confirmed success from failed and signalled outcomes', async () => {
+  const child = () => {
+    const value = new EventEmitter();
+    value.pid = 42;
+    value.kill = () => true;
+    return value;
+  };
+  const success = child();
+  setImmediate(() => success.emit('exit', 0, null));
+  assert.equal((await waitForChildOutcome(success, { timeoutMs: 1000 })).outcome, 'success');
+
+  const failure = child();
+  setImmediate(() => failure.emit('exit', 17, null));
+  assert.equal((await waitForChildOutcome(failure, { timeoutMs: 1000 })).outcome, 'failure');
+
+  const signalled = child();
+  setImmediate(() => signalled.emit('exit', null, 'SIGTERM'));
+  assert.equal((await waitForChildOutcome(signalled, { timeoutMs: 1000 })).outcome, 'unknown');
+});
+
+test('a harness that never starts is distinguished from an unknown side-effect result', async () => {
+  const child = new EventEmitter();
+  child.kill = () => true;
+  setImmediate(() => child.emit('error', Object.assign(new Error('spawn failed'), { code: 'ENOENT' })));
+  const result = await waitForChildOutcome(child, { timeoutMs: 1000 });
+  assert.equal(result.outcome, 'not-started');
+  assert.equal(result.errorName, 'Error');
+});
+
+test('a post-spawn child error remains uncertain and records its termination reason', async () => {
+  const child = new EventEmitter();
+  child.pid = 42;
+  const signals = [];
+  child.kill = (signal) => {
+    signals.push(signal);
+    if (signal === 'SIGTERM') setImmediate(() => child.emit('exit', null, 'SIGTERM'));
+    return true;
+  };
+  setImmediate(() => child.emit('error', Object.assign(new Error('child stream failed'), { code: 'EPIPE' })));
+  const result = await waitForChildOutcome(child, {
+    timeoutMs: 1000,
+    terminationGraceMs: 50,
+    killGraceMs: 50,
+  });
+  assert.equal(result.outcome, 'unknown');
+  assert.equal(result.timedOut, false);
+  assert.equal(result.terminationReason, 'child-error');
+  assert.deepEqual(signals, ['SIGTERM']);
+});
+
+test('an unconfirmed hard kill remains unknown rather than implying completion', async () => {
+  const child = new EventEmitter();
+  child.pid = 42;
+  const signals = [];
+  child.kill = (signal) => { signals.push(signal); return true; };
+  const result = await waitForChildOutcome(child, {
+    timeoutMs: 5,
+    terminationGraceMs: 5,
+    killGraceMs: 5,
+  });
+  assert.equal(result.outcome, 'unknown');
+  assert.equal(result.timedOut, true);
+  assert.equal(result.terminationUnconfirmed, true);
+  assert.equal(result.terminationReason, 'timeout');
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+});
+
 test('factory evidence upload is an explicit safe allowlist and permissions stay consumer-scoped', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/ci-account-factory-cloud.yml', import.meta.url), 'utf8');
   const upload = workflow.split('name: desktop-miniapp-factory-')[1];
@@ -86,4 +173,56 @@ test('factory evidence upload is an explicit safe allowlist and permissions stay
   const source = readFileSync(new URL('./cloud/desktop-miniapp-consumer.mjs', import.meta.url), 'utf8');
   assert.match(source, /SAND_APP_DATA_DIR: join\(volume, 'appData'\)/);
   assert.match(source, /SAND_TEMP_DIR: temporary/);
+});
+
+
+test('two-account descriptors remain disjoint and bound to each account identity', () => {
+  const a = ordinary();
+  const b = ordinary();
+  b.username = 'ci_factory_B';
+  b.deviceIds = ['factory-owned-device-B'];
+  b.sessions[0].user = { id: '456', username: 'ci_factory_B' };
+  b.sessions[0].accessToken = 'fixture-access-account-B-not-a-real-secret';
+  b.sessions[0].refreshToken = 'fixture-refresh-account-B-not-a-real-secret';
+  const descriptorA = nativeSessionDescriptor(a, 'A', { now, runId: '123', runAttempt: '1' });
+  const descriptorB = nativeSessionDescriptor(b, 'B', { now, runId: '123', runAttempt: '1' });
+  assert.notEqual(descriptorA.sessionId, descriptorB.sessionId);
+  assert.notEqual(descriptorA.username, descriptorB.username);
+  assert.notEqual(descriptorA.userId, descriptorB.userId);
+  assert.notEqual(descriptorA.deviceId, descriptorB.deviceId);
+  assert.notEqual(descriptorA.accessToken, descriptorB.accessToken);
+  for (const mutate of [
+    (value) => { value.sessions[0].user.username = 'ci_factory_A'; },
+    (value) => { value.sessions[0].deviceId = 'factory-owned-device'; },
+  ]) {
+    const crossed = structuredClone(b);
+    mutate(crossed);
+    assert.throws(() => nativeSessionDescriptor(crossed, 'B', { now, runId: '123', runAttempt: '1' }), /DFC_/);
+  }
+});
+
+test('revocation blocks both account sessions and restored A uses a fresh scoped descriptor', () => {
+  assert.equal(verifyRevokedSessions([401, 401]), true);
+  for (const statuses of [[401, 200], [200, 401], [401, 500]]) {
+    assert.throws(() => verifyRevokedSessions(statuses), /DFC_CLEANUP_FAILED/);
+  }
+  const a = ordinary();
+  const before = nativeSessionDescriptor(a, 'A', { now, runId: '123', runAttempt: '1' });
+  const b = ordinary();
+  b.username = 'ci_factory_B';
+  b.deviceIds = ['factory-owned-device-B'];
+  b.sessions[0].user = { id: '456', username: 'ci_factory_B' };
+  b.sessions[0].accessToken = 'fixture-access-account-B-not-a-real-secret';
+  b.sessions[0].refreshToken = 'fixture-refresh-account-B-not-a-real-secret';
+  const duringB = nativeSessionDescriptor(b, 'B', { now, runId: '123', runAttempt: '1' });
+  const restoredA = nativeSessionDescriptor(a, 'A', { now, runId: '124', runAttempt: '1' });
+  assert.notEqual(before.sessionId, duringB.sessionId);
+  assert.notEqual(duringB.sessionId, restoredA.sessionId);
+  assert.equal(restoredA.username, before.username);
+  assert.equal(restoredA.userId, before.userId);
+  assert.equal(restoredA.deviceId, before.deviceId);
+  const source = 'a'.repeat(40);
+  const evidence = { sourceSha: source, harnessSource: source, issuerEnvironment: 'ci-isolated', sessionDelivery: 'private-fifo', accountA: '1'.repeat(64), accountB: '2'.repeat(64), realDepartureClosedWindow: true, distinctInstallations: true, distinctOrigins: true, retainedAccountASetting: true };
+  assert.equal(verifyAccountEvidence(evidence, source), true);
+  assert.throws(() => verifyAccountEvidence({ ...evidence, retainedAccountASetting: false }, source), /DFC_ACCOUNT_EVIDENCE_INVALID/);
 });
