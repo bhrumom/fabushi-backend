@@ -138,7 +138,9 @@ done
 test "$ready" -eq 1
 
 docker exec "$container" headscale users create g15-resource >/dev/null
-auth_key="$(docker exec "$container" headscale preauthkeys create --user g15-resource | tr -d '\r' | tail -n1)"
+user_id="$(docker exec "$container" headscale users list --name g15-resource --output json | python3 -c 'import json,sys; rows=json.load(sys.stdin); assert len(rows)==1; print(rows[0]["id"])')"
+[[ "$user_id" =~ ^[0-9]+$ ]]
+auth_key="$(docker exec "$container" headscale preauthkeys create --user "$user_id" | tr -d '\r' | tail -n1)"
 test "${#auth_key}" -ge 20
 
 if ! id "$probe_user" >/dev/null 2>&1; then
