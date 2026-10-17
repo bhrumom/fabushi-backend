@@ -135,7 +135,13 @@ for _ in $(seq 1 60); do
   fi
   sleep 1
 done
-test "$ready" -eq 1
+if [[ "$ready" -ne 1 ]]; then
+  echo "Headscale fixture did not become ready" >&2
+  docker ps -a --filter "name=^/$container$" >&2 || true
+  docker logs "$container" >&2 || true
+  docker inspect "$container" --format '{{json .State}}' >&2 || true
+  exit 1
+fi
 
 docker exec "$container" headscale users create g15-resource >/dev/null
 user_id="$(docker exec "$container" headscale users list --name g15-resource --output json | python3 -c 'import json,sys; rows=json.load(sys.stdin); assert len(rows)==1; print(rows[0]["id"])')"
