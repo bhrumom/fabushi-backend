@@ -34,9 +34,10 @@ uid_value=""
 cleanup() {
   set +e
   if [[ -n "$worker_pid" ]]; then
-    kill "$worker_pid" 2>/dev/null || true
+    sudo kill "$worker_pid" 2>/dev/null || true
   fi
   if [[ -n "$sudo_pid" ]]; then
+    kill "$sudo_pid" 2>/dev/null || true
     wait "$sudo_pid" 2>/dev/null || true
   fi
   docker rm -f "$container" >/dev/null 2>&1 || true
@@ -225,7 +226,7 @@ total_bytes=0
 
 for _ in $(seq 1 60); do
   sleep 5
-  kill -0 "$worker_pid"
+  sudo -u "$probe_user" kill -0 "$worker_pid"
   rss_kib="$(awk '/^VmRSS:/ {print $2}' "/proc/$worker_pid/status")"
   state_bytes="$(du -sb "$work_dir/worker-state" | awk '{print $1}')"
   log_bytes="$(stat -c %s "$worker_log")"
