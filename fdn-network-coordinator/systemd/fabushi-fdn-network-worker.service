@@ -28,6 +28,8 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 StateDirectory=fabushi-fdn
 StateDirectoryMode=0700
 ReadWritePaths=/var/lib/fabushi-fdn
+MemoryMax=150M
+TasksMax=256
 
 [Install]
 WantedBy=multi-user.target
