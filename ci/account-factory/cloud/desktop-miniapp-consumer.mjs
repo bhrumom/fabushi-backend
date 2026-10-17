@@ -61,6 +61,8 @@ export function waitForChildOutcome(child, {
   return new Promise((resolve) => {
     let settled = false;
     let timedOut = false;
+    let terminationStarted = false;
+    let terminationReason = null;
     let timeout;
     let terminateTimer;
     let hardKillTimer;
@@ -73,7 +75,7 @@ export function waitForChildOutcome(child, {
       resolve(result);
     };
     const onExit = (code, signal) => {
-      const outcome = timedOut || signal || !Number.isInteger(code)
+      const outcome = terminationStarted || signal || !Number.isInteger(code)
         ? 'unknown'
         : code === 0 ? 'success' : 'failure';
       finish({
@@ -81,11 +83,15 @@ export function waitForChildOutcome(child, {
         signal: signal || null,
         timedOut,
         outcome,
+        ...(terminationReason ? { terminationReason } : {}),
       });
     };
-    const terminate = () => {
-      if (settled) return;
-      timedOut = true;
+    const terminate = (reason) => {
+      if (settled || terminationStarted) return;
+      terminationStarted = true;
+      terminationReason = reason;
+      timedOut = reason === 'timeout';
+      clearTimeout(timeout);
       try { child.kill('SIGTERM'); } catch {}
       terminateTimer = setTimeout(() => {
         if (settled) return;
@@ -93,9 +99,10 @@ export function waitForChildOutcome(child, {
         hardKillTimer = setTimeout(() => finish({
           exitCode: null,
           signal: 'SIGKILL',
-          timedOut: true,
+          timedOut,
           outcome: 'unknown',
           terminationUnconfirmed: true,
+          terminationReason,
         }), killGraceMs);
       }, terminationGraceMs);
     };
@@ -110,10 +117,10 @@ export function waitForChildOutcome(child, {
           errorName: error?.name || 'Error',
         });
       } else {
-        terminate();
+        terminate('child-error');
       }
     });
-    timeout = setTimeout(terminate, timeoutMs);
+    timeout = setTimeout(() => terminate('timeout'), timeoutMs);
   });
 }
 
