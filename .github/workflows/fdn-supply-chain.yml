@@ -1,0 +1,202 @@
+name: FDN G15 supply chain
+
+on:
+  pull_request:
+    paths:
+      - "official-device-mcp/package.json"
+      - "official-device-mcp/package-lock.json"
+      - "official-device-network-worker/go.mod"
+      - "official-device-network-worker/go.sum"
+      - "fdn-network-coordinator/docker-compose.yml"
+      - ".github/scripts/fdn-supply-chain-evidence.mjs"
+      - ".github/workflows/fdn-supply-chain.yml"
+      - "docs/specs/fdn-g15-supply-chain.md"
+  push:
+    branches: [main]
+    paths:
+      - "official-device-mcp/package.json"
+      - "official-device-mcp/package-lock.json"
+      - "official-device-network-worker/go.mod"
+      - "official-device-network-worker/go.sum"
+      - "fdn-network-coordinator/docker-compose.yml"
+      - ".github/scripts/fdn-supply-chain-evidence.mjs"
+      - ".github/workflows/fdn-supply-chain.yml"
+      - "docs/specs/fdn-g15-supply-chain.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  supply-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 1
+
+      - name: Bind exact tested HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_SHA"
+          test "$(git status --porcelain)" = ""
+
+      - name: Setup exact Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24.22.0"
+
+      - name: Setup exact Go from module
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: official-device-network-worker/go.mod
+          cache: false
+
+      - name: Record exact tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          {
+            node --version
+            npm --version
+            go version
+            git --version
+          } | tee evidence/tool-versions.txt
+          test "$(node --version)" = "v24.22.0"
+          test "$(go env GOVERSION)" = "go1.27.1"
+
+      - name: Validate exact action pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const source = await readFile(".github/workflows/fdn-supply-chain.yml", "utf8");
+          const uses = source.split("\n").filter((line) => /^\s*-?\s*uses:\s*/.test(line));
+          if (uses.length === 0) throw new Error("expected pinned actions");
+          for (const line of uses) {
+            if (!/@[0-9a-f]{40}(?:\s+#.*)?\s*$/.test(line)) {
+              throw new Error("non-exact action pin: " + line.trim());
+            }
+          }
+          console.log("FDN_G15 action_pin_count=" + uses.length);
+          NODE
+
+      - name: Materialize exact npm production graph
+        working-directory: official-device-mcp
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ls --omit=dev --all --json > ../evidence/npm-tree.json
+          git diff --exit-code -- package.json package-lock.json
+
+      - name: Audit npm production graph
+        working-directory: official-device-mcp
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          npm audit --omit=dev --audit-level=low --json > ../evidence/npm-audit.json
+          audit_status=$?
+          set -e
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const audit = JSON.parse(await readFile("../evidence/npm-audit.json", "utf8"));
+          const v = audit?.metadata?.vulnerabilities;
+          if (!v || typeof v.total !== "number") throw new Error("audit metadata missing");
+          console.log("FDN_G15 npm_audit=" + JSON.stringify(v));
+          if (v.total !== 0) throw new Error("production dependency vulnerabilities detected");
+          NODE
+          test "$audit_status" -eq 0
+
+      - name: Materialize exact Go production graph
+        working-directory: official-device-network-worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = "go1.27.1"
+          go mod download all
+          go mod verify
+          go list -mod=readonly -m -f '{{if .Main}}{{.Path}}	MAIN	{{.Dir}}{{else}}{{.Path}}	{{.Version}}	{{.Dir}}{{end}}' all > ../evidence/go-modules.tsv
+          go list -mod=readonly -deps ./... > ../evidence/go-packages.txt
+          git diff --exit-code -- go.mod go.sum
+          grep -Fx 'tailscale.com	v1.104.1' <(awk -F '	' '$1=="tailscale.com" {print $1 "	" $2}' ../evidence/go-modules.tsv)
+
+      - name: Generate and validate SBOM, licenses and provenance
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ env.EXPECTED_SHA }}
+        run: |
+          set -euo pipefail
+          node --check .github/scripts/fdn-supply-chain-evidence.mjs
+          node .github/scripts/fdn-supply-chain-evidence.mjs             --out evidence             --npm-lock official-device-mcp/package-lock.json             --npm-audit evidence/npm-audit.json             --npm-tree evidence/npm-tree.json             --go-mod official-device-network-worker/go.mod             --go-sum official-device-network-worker/go.sum             --go-modules evidence/go-modules.tsv             --go-packages evidence/go-packages.txt             --compose fdn-network-coordinator/docker-compose.yml             --tool-versions evidence/tool-versions.txt             --workflow .github/workflows/fdn-supply-chain.yml
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const bom = JSON.parse(await readFile("evidence/fdn-sbom.cdx.json", "utf8"));
+          if (bom.bomFormat !== "CycloneDX" || bom.specVersion !== "1.6") {
+            throw new Error("invalid CycloneDX document");
+          }
+          if (!Array.isArray(bom.components) || bom.components.length === 0) {
+            throw new Error("empty CycloneDX component set");
+          }
+          console.log("FDN_G15 cyclonedx_components=" + bom.components.length);
+          NODE
+
+      - name: Seal evidence checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          find evidence -maxdepth 1 -type f ! -name SHA256SUMS -print0             | sort -z             | xargs -0 sha256sum > evidence/SHA256SUMS
+          test -s evidence/SHA256SUMS
+          cat evidence/SHA256SUMS
+
+      - name: Upload bounded G15 evidence
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fdn-g15-supply-chain-${{ env.EXPECTED_SHA }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
+
+      - name: Attest artifact build provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: fdn-g15-supply-chain-${{ env.EXPECTED_SHA }}
+          subject-digest: sha256:${{ steps.upload.outputs.artifact-digest }}
+
+      - name: Attest CycloneDX SBOM
+        id: sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: fdn-g15-supply-chain-${{ env.EXPECTED_SHA }}
+          subject-digest: sha256:${{ steps.upload.outputs.artifact-digest }}
+          sbom-path: evidence/fdn-sbom.cdx.json
+
+      - name: Report immutable evidence identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "source_sha=$EXPECTED_SHA"
+            echo "artifact_id=${{ steps.upload.outputs.artifact-id }}"
+            echo "artifact_digest=sha256:${{ steps.upload.outputs.artifact-digest }}"
+            echo "provenance_attestation_id=${{ steps.provenance.outputs.attestation-id }}"
+            echo "provenance_attestation_url=${{ steps.provenance.outputs.attestation-url }}"
+            echo "sbom_attestation_id=${{ steps.sbom.outputs.attestation-id }}"
+            echo "sbom_attestation_url=${{ steps.sbom.outputs.attestation-url }}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
