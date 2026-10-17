@@ -174,3 +174,55 @@ test('factory evidence upload is an explicit safe allowlist and permissions stay
   assert.match(source, /SAND_APP_DATA_DIR: join\(volume, 'appData'\)/);
   assert.match(source, /SAND_TEMP_DIR: temporary/);
 });
+
+
+test('two-account descriptors remain disjoint and bound to each account identity', () => {
+  const a = ordinary();
+  const b = ordinary();
+  b.username = 'ci_factory_B';
+  b.deviceIds = ['factory-owned-device-B'];
+  b.sessions[0].user = { id: '456', username: 'ci_factory_B' };
+  b.sessions[0].accessToken = 'fixture-access-account-B-not-a-real-secret';
+  b.sessions[0].refreshToken = 'fixture-refresh-account-B-not-a-real-secret';
+  const descriptorA = nativeSessionDescriptor(a, 'A', { now, runId: '123', runAttempt: '1' });
+  const descriptorB = nativeSessionDescriptor(b, 'B', { now, runId: '123', runAttempt: '1' });
+  assert.notEqual(descriptorA.sessionId, descriptorB.sessionId);
+  assert.notEqual(descriptorA.username, descriptorB.username);
+  assert.notEqual(descriptorA.userId, descriptorB.userId);
+  assert.notEqual(descriptorA.deviceId, descriptorB.deviceId);
+  assert.notEqual(descriptorA.accessToken, descriptorB.accessToken);
+  for (const mutate of [
+    (value) => { value.sessions[0].user.username = 'ci_factory_A'; },
+    (value) => { value.sessions[0].deviceId = 'factory-owned-device'; },
+  ]) {
+    const crossed = structuredClone(b);
+    mutate(crossed);
+    assert.throws(() => nativeSessionDescriptor(crossed, 'B', { now, runId: '123', runAttempt: '1' }), /DFC_/);
+  }
+});
+
+test('revocation blocks both account sessions and restored A uses a fresh scoped descriptor', () => {
+  assert.equal(verifyRevokedSessions([401, 401]), true);
+  for (const statuses of [[401, 200], [200, 401], [401, 500]]) {
+    assert.throws(() => verifyRevokedSessions(statuses), /DFC_CLEANUP_FAILED/);
+  }
+  const a = ordinary();
+  const before = nativeSessionDescriptor(a, 'A', { now, runId: '123', runAttempt: '1' });
+  const b = ordinary();
+  b.username = 'ci_factory_B';
+  b.deviceIds = ['factory-owned-device-B'];
+  b.sessions[0].user = { id: '456', username: 'ci_factory_B' };
+  b.sessions[0].accessToken = 'fixture-access-account-B-not-a-real-secret';
+  b.sessions[0].refreshToken = 'fixture-refresh-account-B-not-a-real-secret';
+  const duringB = nativeSessionDescriptor(b, 'B', { now, runId: '123', runAttempt: '1' });
+  const restoredA = nativeSessionDescriptor(a, 'A', { now, runId: '124', runAttempt: '1' });
+  assert.notEqual(before.sessionId, duringB.sessionId);
+  assert.notEqual(duringB.sessionId, restoredA.sessionId);
+  assert.equal(restoredA.username, before.username);
+  assert.equal(restoredA.userId, before.userId);
+  assert.equal(restoredA.deviceId, before.deviceId);
+  const source = 'a'.repeat(40);
+  const evidence = { sourceSha: source, harnessSource: source, issuerEnvironment: 'ci-isolated', sessionDelivery: 'private-fifo', accountA: '1'.repeat(64), accountB: '2'.repeat(64), realDepartureClosedWindow: true, distinctInstallations: true, distinctOrigins: true, retainedAccountASetting: true };
+  assert.equal(verifyAccountEvidence(evidence, source), true);
+  assert.throws(() => verifyAccountEvidence({ ...evidence, retainedAccountASetting: false }, source), /DFC_ACCOUNT_EVIDENCE_INVALID/);
+});
