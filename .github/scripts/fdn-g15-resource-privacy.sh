@@ -42,6 +42,8 @@ cleanup() {
   fi
   docker rm -f "$container" >/dev/null 2>&1 || true
   if [[ -n "$uid_value" ]]; then
+    sudo iptables -D OUTPUT -m owner --uid-owner "$uid_value" '!' -d 127.0.0.0/8 -m comment --comment fdn-g15-worker-diag -j LOG --log-prefix "FDN-G15-WORKER4 " 2>/dev/null || true
+    sudo ip6tables -D OUTPUT -m owner --uid-owner "$uid_value" '!' -d ::1/128 -m comment --comment fdn-g15-worker-diag -j LOG --log-prefix "FDN-G15-WORKER6 " 2>/dev/null || true
     sudo iptables -D OUTPUT -m owner --uid-owner "$uid_value" '!' -d 127.0.0.0/8 -m comment --comment fdn-g15-worker -j REJECT 2>/dev/null || true
     sudo ip6tables -D OUTPUT -m owner --uid-owner "$uid_value" '!' -d ::1/128 -m comment --comment fdn-g15-worker -j REJECT 2>/dev/null || true
   fi
@@ -193,6 +195,11 @@ sudo chown -R "$probe_user":"$probe_user" "$work_dir/worker-state" "$work_dir/ho
 # and counted. This also catches unexpected telemetry/support traffic.
 sudo iptables -I OUTPUT 1 -m owner --uid-owner "$uid_value" '!' -d 127.0.0.0/8 -m comment --comment fdn-g15-worker -j REJECT
 sudo ip6tables -I OUTPUT 1 -m owner --uid-owner "$uid_value" '!' -d ::1/128 -m comment --comment fdn-g15-worker -j REJECT
+# Log packet headers immediately before the zero-tolerance reject rule so a
+# failing Actions fixture identifies the real protocol/destination without ever
+# allowing the packet. No payload is logged and production is unchanged.
+sudo iptables -I OUTPUT 1 -m owner --uid-owner "$uid_value" '!' -d 127.0.0.0/8 -m comment --comment fdn-g15-worker-diag -j LOG --log-prefix "FDN-G15-WORKER4 "
+sudo ip6tables -I OUTPUT 1 -m owner --uid-owner "$uid_value" '!' -d ::1/128 -m comment --comment fdn-g15-worker-diag -j LOG --log-prefix "FDN-G15-WORKER6 "
 
 # G15 isolates undeclared telemetry/privacy egress from G05 NAT-traversal behavior.
 # Tailscale's portmapper legitimately probes LAN gateways (UPnP/NAT-PMP/PCP),
@@ -284,6 +291,12 @@ export FDN_G15_MIN_AVAILABLE_BYTES="$min_available_bytes"
 export FDN_G15_RESERVE_BYTES="$reserve_bytes"
 export FDN_G15_BLOCKED_PACKETS="$blocked_packets"
 export FDN_G15_RUN_ID="${GITHUB_RUN_ID:-}"
+
+if (( blocked_packets > 0 )); then
+  echo "FDN_G15 rejected_packet_headers_begin"
+  sudo dmesg | grep -E 'FDN-G15-WORKER[46] ' | tail -n 20 || true
+  echo "FDN_G15 rejected_packet_headers_end"
+fi
 
 python3 - "$evidence_dir/fdn-g15-resource-privacy.json" <<'PY'
 import json, os, sys
