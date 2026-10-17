@@ -30,6 +30,8 @@ worker_pid=""
 sudo_pid=""
 auth_key=""
 uid_value=""
+metadata_sink_pid=""
+metadata_sink_port="8793"
 
 cleanup() {
   set +e
@@ -41,7 +43,12 @@ cleanup() {
     wait "$sudo_pid" 2>/dev/null || true
   fi
   docker rm -f "$container" >/dev/null 2>&1 || true
+  if [[ -n "$metadata_sink_pid" ]]; then
+    kill "$metadata_sink_pid" 2>/dev/null || true
+    wait "$metadata_sink_pid" 2>/dev/null || true
+  fi
   if [[ -n "$uid_value" ]]; then
+    sudo iptables -t nat -D OUTPUT -m owner --uid-owner "$uid_value" -d 169.254.169.254/32 -p tcp --dport 80 -m comment --comment fdn-g15-cloud-metadata-sink -j DNAT --to-destination "127.0.0.1:$metadata_sink_port" 2>/dev/null || true
     sudo iptables -D OUTPUT -m owner --uid-owner "$uid_value" '!' -d 127.0.0.0/8 -m comment --comment fdn-g15-worker-diag -j LOG --log-prefix "FDN-G15-WORKER4 " 2>/dev/null || true
     sudo ip6tables -D OUTPUT -m owner --uid-owner "$uid_value" '!' -d ::1/128 -m comment --comment fdn-g15-worker-diag -j LOG --log-prefix "FDN-G15-WORKER6 " 2>/dev/null || true
     sudo iptables -D OUTPUT -m owner --uid-owner "$uid_value" '!' -d 127.0.0.0/8 -m comment --comment fdn-g15-worker -j REJECT 2>/dev/null || true
@@ -189,6 +196,40 @@ fi
 uid_value="$(id -u "$probe_user")"
 sudo install -o "$probe_user" -g "$probe_user" -m 0755 "$worker_binary" "$worker_exec"
 sudo chown -R "$probe_user":"$probe_user" "$work_dir/worker-state" "$work_dir/home"
+
+# GitHub-hosted Ubuntu reports Azure-style DMI ("Virtual Machine"), so pinned
+# Tailscale v1.104.1 util/cloudenv performs its normal cloud metadata probe to
+# 169.254.169.254:80 before deciding that this fixture is not a supported cloud.
+# The shipping Desktop worker is not a cloud VM. Redirect only this probe-user's
+# metadata request into a loopback 404 sink so the fixture models that production
+# environment without permitting metadata or Internet egress.
+python3 - "$metadata_sink_port" <<'PY' >/dev/null 2>&1 &
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import sys
+
+class Handler(BaseHTTPRequestHandler):
+    def _not_cloud(self):
+        self.send_response(404)
+        self.end_headers()
+    do_GET = _not_cloud
+    do_PUT = _not_cloud
+    def log_message(self, *_):
+        pass
+
+HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+PY
+metadata_sink_pid="$!"
+for _ in $(seq 1 20); do
+  if curl --silent --output /dev/null --max-time 1 -X PUT "http://127.0.0.1:$metadata_sink_port/latest/api/token"; then
+    break
+  fi
+  sleep 0.1
+done
+kill -0 "$metadata_sink_pid"
+sudo iptables -t nat -I OUTPUT 1 -m owner --uid-owner "$uid_value" \
+  -d 169.254.169.254/32 -p tcp --dport 80 \
+  -m comment --comment fdn-g15-cloud-metadata-sink \
+  -j DNAT --to-destination "127.0.0.1:$metadata_sink_port"
 
 # The Actions resource fixture has one approved egress origin: its real pinned
 # Headscale control server on loopback. Any other worker-owned packet is rejected
