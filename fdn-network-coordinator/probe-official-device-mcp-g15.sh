@@ -51,7 +51,7 @@ read_stack_egress_counter() {
 
 egress_owner_present=false
 if stack_has_egress_owner iptables; then
-  if [[ -s /proc/net/if_inet6 ]]; then
+  if grep -q '[^[:space:]]' /proc/net/if_inet6 2>/dev/null; then
     if stack_has_egress_owner ip6tables; then egress_owner_present=true; fi
   else
     egress_owner_present=true
@@ -61,7 +61,7 @@ fi
 egress_start=""
 if [[ "$egress_owner_present" = true ]]; then
   egress_start="$(read_stack_egress_counter iptables)"
-  if [[ -s /proc/net/if_inet6 ]]; then
+  if grep -q '[^[:space:]]' /proc/net/if_inet6 2>/dev/null; then
     egress_start=$((egress_start + $(read_stack_egress_counter ip6tables)))
   fi
 fi
@@ -118,7 +118,7 @@ egress_end=""
 egress_rejected=""
 if [[ "$egress_owner_present" = true ]]; then
   egress_end="$(read_stack_egress_counter iptables)"
-  if [[ -s /proc/net/if_inet6 ]]; then
+  if grep -q '[^[:space:]]' /proc/net/if_inet6 2>/dev/null; then
     egress_end=$((egress_end + $(read_stack_egress_counter ip6tables)))
   fi
   (( egress_end >= egress_start )) || fail "egress reject counter reset during the steady-state window"

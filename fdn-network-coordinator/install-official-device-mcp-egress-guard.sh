@@ -14,7 +14,7 @@ command -v iptables >/dev/null || fail "iptables is required"
 command -v getent >/dev/null || fail "getent is required"
 
 ipv6_enabled=false
-if [[ -s /proc/net/if_inet6 ]]; then
+if grep -q '[^[:space:]]' /proc/net/if_inet6 2>/dev/null; then
   command -v ip6tables >/dev/null || fail "ip6tables is required while IPv6 is enabled"
   ipv6_enabled=true
 fi
