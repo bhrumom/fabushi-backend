@@ -199,6 +199,7 @@ for (const required of [
   "go-mod",
   "go-sum",
   "go-modules",
+  "go-build-list",
   "go-packages",
   "compose",
   "tool-versions",
@@ -306,6 +307,29 @@ if (requiredVersions.length === 0) {
   throw new Error("Go requirement inventory is empty");
 }
 
+const goBuildList = (await readFile(args["go-build-list"], "utf8"))
+  .split("\n")
+  .filter(Boolean);
+if (goBuildList.length < 2) {
+  throw new Error("Go module build list is unexpectedly empty");
+}
+let buildListModules = 0;
+let sawTailscaleBuildList = false;
+for (const line of goBuildList) {
+  const fields = line.trim().split(/\s+/);
+  if (fields.length === 1) continue;
+  if (fields.length !== 2 || !exactGoVersion(fields[1])) {
+    throw new Error("Go build-list module is not exactly versioned: " + line);
+  }
+  buildListModules += 1;
+  if (fields[0] === "tailscale.com" && fields[1] === "v1.104.1") {
+    sawTailscaleBuildList = true;
+  }
+}
+if (!sawTailscaleBuildList) {
+  throw new Error("Go build list must contain tailscale.com v1.104.1");
+}
+
 const goRows = [];
 for (const line of (await readFile(args["go-modules"], "utf8")).trim().split("\n")) {
   if (!line) continue;
@@ -384,7 +408,10 @@ for (const row of npmRows) {
     name: row.name,
     version: row.version,
     purl,
-    hashes: [{ alg: "SHA-512", content: row.integrity.replace(/^sha512-/, "") }],
+    hashes: [{
+      alg: "SHA-512",
+      content: Buffer.from(row.integrity.replace(/^sha512-/, ""), "base64").toString("hex"),
+    }],
     licenses: [{ license: { id: row.license } }],
     properties: [
       { name: "fabushi:ecosystem", value: "npm" },
@@ -452,6 +479,7 @@ const summary = {
   npmLicenseCounts: npmLicenseReport.counts,
   npmAuditVulnerabilities: vulnerabilities,
   goModules: goRows.length,
+  goBuildListModules: buildListModules,
   goPackages: goPackageLines.length,
   tailscale: "v1.104.1",
   headscale: "0.29.5",
@@ -468,6 +496,7 @@ const evidenceFiles = [
   args["go-mod"],
   args["go-sum"],
   args["go-modules"],
+  args["go-build-list"],
   args["go-packages"],
   args.compose,
   args["tool-versions"],
@@ -503,6 +532,7 @@ console.log("FDN_G15 source_sha=" + sourceSha);
 console.log("FDN_G15 npm_production_packages=" + npmRows.length);
 console.log("FDN_G15 npm_audit_total=" + vulnerabilities.total);
 console.log("FDN_G15 go_modules=" + goRows.length);
+console.log("FDN_G15 go_build_list_modules=" + buildListModules);
 console.log("FDN_G15 go_packages=" + goPackageLines.length);
 console.log("FDN_G15 tailscale=v1.104.1");
 console.log("FDN_G15 headscale=0.29.5");

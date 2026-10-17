@@ -54,10 +54,13 @@ release promotion.
 
 ### Go/Tailscale graph
 
-- `go mod download all`, `go mod verify`, and readonly graph/package listing must
-  succeed without changing `go.mod` or `go.sum`.
+- Readonly `go list -deps ./...`, readonly `go list -m all`, and `go mod verify`
+  must succeed without changing `go.mod` or `go.sum`. CI must not repair or
+  expand the committed checksum file as part of verification.
+- The complete readonly Go module build list must use exact versions, while SBOM
+  and license scanning cover the modules reached by the shipping worker package graph.
 - `replace` directives are forbidden in this production worker module.
-- Every non-main module must have an exact version and a resolved module directory.
+- Every shipping module must have an exact version and a resolved module directory.
 - `tailscale.com` must remain exactly `v1.104.1` with matching `go.sum`
   entries.
 - Every module must expose a recognizable license in its module root. A permissive
@@ -69,7 +72,8 @@ release promotion.
 - Coordinator source must remain exactly `docker.io/headscale/headscale:0.29.5`
   and must reject floating `latest`, `stable` and `main` tags.
 - CI generates and validates a CycloneDX 1.6 JSON SBOM containing the real npm
-  production graph and real readonly Go module graph.
+  production graph and real readonly shipping Go package/module graph, while retaining
+  the complete exact Go module build list as evidence.
 - CI emits license reports, audit output, dependency inventories, SHA-256 checksums
   and a source-bound provenance manifest.
 - The evidence directory is uploaded as a GitHub Actions artifact. The workflow
