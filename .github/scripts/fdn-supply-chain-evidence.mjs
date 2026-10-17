@@ -107,7 +107,10 @@ function detectLicense(text) {
     allowed.add("MIT");
   }
   if (
-    normalized.includes("permission to use, copy, modify, and/or distribute this software") &&
+    (
+      normalized.includes("permission to use, copy, modify, and/or distribute this software") ||
+      normalized.includes("permission to use, copy, modify, and distribute this software")
+    ) &&
     normalized.includes("with or without fee")
   ) {
     allowed.add("ISC");
