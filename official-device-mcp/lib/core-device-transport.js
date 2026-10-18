@@ -58,6 +58,8 @@ function validateAccountClient(accountClient) {
 export function createCoreDeviceTransport(options = {}) {
   const accountClient = validateAccountClient(options.accountClient);
   const privateTransport = validateTransport(options.privateTransport);
+  const fallbackTransport = options.fallbackTransport ? validateTransport(options.fallbackTransport) : null;
+  if (fallbackTransport === privateTransport) throw new TypeError("Primary and fallback private transports must be distinct.");
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
 
   async function resolveNetworkRoute(context) {
@@ -92,16 +94,28 @@ export function createCoreDeviceTransport(options = {}) {
 
   async function privateRequest(context, payload, timeoutSeconds, route = null) {
     const currentRoute = route ?? await resolveNetworkRoute(context);
-    const response = await privateTransport.request({
+    const request = {
       accountId: context.accountId,
       deviceId: context.deviceId,
       cellId: currentRoute.cellId,
       nodeId: currentRoute.nodeId,
       networkGeneration: Number(currentRoute.generation),
       networkExpiresAt: Number(currentRoute.expiresAt),
+      networkRoute: currentRoute,
       payload,
       timeoutSeconds,
-    });
+      signal: context.signal,
+    };
+    let response;
+    try {
+      response = await privateTransport.request(request);
+    } catch (error) {
+      // Only a correlated worker response proving no request bytes were dispatched
+      // can switch transports. Socket/write/result failures remain uncertain and
+      // must never be replayed through a second path.
+      if (!fallbackTransport || error?.notDispatched !== true || context.signal?.aborted) throw error;
+      response = await fallbackTransport.request(request);
+    }
     if (!response || typeof response !== "object" || Array.isArray(response)) {
       throw new Error("Private target transport returned an invalid response.");
     }
