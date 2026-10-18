@@ -35,6 +35,7 @@ func TestStartupFailureCategoryPreservesSafeCategoriesFromTailscaleStateMessages
 		{name: "state message EAFNOSUPPORT", err: errors.New("tsnet.Up: backend: address family not supported by protocol"), category: "address-family"},
 		{name: "state message EPERM", err: errors.New("tsnet.Up: backend: operation not permitted"), category: "network-permission"},
 		{name: "state message timeout", err: errors.New("tsnet.Up: backend: operation timed out"), category: "timeout"},
+		{name: "expired enrollment key", err: errors.New("tsnet.Up: backend: authkey expired"), category: "authentication"},
 		{name: "unknown does not disclose message", err: errors.New("credential=secret callback=https://private.invalid"), category: "unknown"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
