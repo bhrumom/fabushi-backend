@@ -713,5 +713,8 @@ test("authenticated reverse-WebSocket private transport sends cancellation and r
   }
   controller.abort();
   await assert.rejects(pending, error => error?.outcomeUnknown === true && /cancelled after dispatch/u.test(error.message));
+  for (let attempt = 0; attempt < 100 && !received.some(message => message.type === "fdnPrivateCancel"); attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
   assert.ok(received.some(message => message.type === "fdnPrivateCancel" && typeof message.requestId === "string"));
 });
