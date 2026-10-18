@@ -263,6 +263,12 @@ func startupFailureCategory(err error) string {
 		strings.Contains(message, "timed out"),
 		strings.Contains(message, "timeout"):
 		return "timeout"
+	case strings.Contains(message, "authkey expired"),
+		strings.Contains(message, "auth key expired"),
+		strings.Contains(message, "invalid auth key"),
+		strings.Contains(message, "authentication failed"),
+		strings.Contains(message, "machine authorization required"):
+		return "authentication"
 	default:
 		return "unknown"
 	}
