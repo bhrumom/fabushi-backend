@@ -12,6 +12,7 @@ etc_root=/etc/fabushi
 units=/etc/systemd/system
 
 fail() { echo "fabushi-fdn install: $*" >&2; exit 64; }
+health_failure() { printf 'fabushi-fdn install: health check failed at stage=%s\n' "$1" >&2; }
 [[ $EUID -eq 0 ]] || fail "root is required"
 [[ "$backend_sha" =~ ^[a-f0-9]{40}$ ]] || fail "invalid backend sha"
 [[ "$core_sha" =~ ^[a-f0-9]{40}$ ]] || fail "invalid core sha"
@@ -39,25 +40,35 @@ install_units() {
 }
 
 health() {
-  systemctl is-active --quiet fabushi-fdn-network-worker.service &&
-  systemctl is-active --quiet fabushi-fdn-enrollment.service &&
-  systemctl is-active --quiet fabushi-fdn-official-device-mcp.service &&
-  systemctl is-active --quiet fabushi-fdn-official-mcp-ingress.timer &&
-  curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8791/v1/fdn/status >/dev/null
+  systemctl is-active --quiet fabushi-fdn-network-worker.service >/dev/null 2>&1 ||
+    { health_failure "service health"; return 1; }
+  systemctl is-active --quiet fabushi-fdn-enrollment.service >/dev/null 2>&1 ||
+    { health_failure "service health"; return 1; }
+  systemctl is-active --quiet fabushi-fdn-official-device-mcp.service >/dev/null 2>&1 ||
+    { health_failure "service health"; return 1; }
+  systemctl is-active --quiet fabushi-fdn-official-mcp-ingress.timer >/dev/null 2>&1 ||
+    { health_failure "service health"; return 1; }
+  curl --fail --silent --max-time 5 http://127.0.0.1:8791/v1/fdn/status >/dev/null 2>&1 ||
+    { health_failure "HTTP health check"; return 1; }
 }
 
 activate() {
-  systemctl restart fabushi-fdn-network-worker.service || return 1
+  systemctl restart fabushi-fdn-network-worker.service >/dev/null 2>&1 ||
+    { health_failure "service activation"; return 1; }
   local ready=false deadline=$((SECONDS+95))
   while (( SECONDS < deadline )); do
-    if curl --fail --silent --max-time 1 http://127.0.0.1:8791/v1/fdn/status >/dev/null; then ready=true; break; fi
+    if curl --fail --silent --max-time 1 http://127.0.0.1:8791/v1/fdn/status >/dev/null 2>&1; then ready=true; break; fi
     sleep 1
   done
-  [[ "$ready" = true ]] || return 1
-  systemctl restart fabushi-fdn-enrollment.service || return 1
-  systemctl restart fabushi-fdn-official-device-mcp.service || return 1
-  systemctl restart fabushi-fdn-official-mcp-ingress.timer || return 1
-  systemctl start fabushi-fdn-official-mcp-ingress.service || return 1
+  [[ "$ready" = true ]] || { health_failure "worker readiness"; return 1; }
+  systemctl restart fabushi-fdn-enrollment.service >/dev/null 2>&1 ||
+    { health_failure "service activation"; return 1; }
+  systemctl restart fabushi-fdn-official-device-mcp.service >/dev/null 2>&1 ||
+    { health_failure "service activation"; return 1; }
+  systemctl restart fabushi-fdn-official-mcp-ingress.timer >/dev/null 2>&1 ||
+    { health_failure "service activation"; return 1; }
+  systemctl start fabushi-fdn-official-mcp-ingress.service >/dev/null 2>&1 ||
+    { health_failure "service activation"; return 1; }
   health
 }
 
