@@ -158,6 +158,8 @@ egress_raw=os.environ.get("FDN_MCP_EGRESS_REJECTED","")
 egress_start=int(egress_start_raw) if egress_start_raw else None
 egress_end=int(egress_end_raw) if egress_end_raw else None
 egress_count=int(egress_raw) if egress_raw else None
+egress_sample_complete = egress_start is not None and egress_end is not None and egress_count is not None
+egress_sample_consistent = egress_sample_complete and egress_count == egress_end - egress_start
 report={
   "backendSha":os.environ["FDN_MCP_BACKEND_SHA"],
   "coreSha":os.environ["FDN_MCP_CORE_SHA"],
@@ -172,7 +174,7 @@ report={
   },
   "privacy":{"journalSecretScan":os.environ["FDN_MCP_PRIVACY_SCAN"]},
   "unexpectedWorkerOwnedPacketsRejected":egress_count,
-  "egress":{"startCount":egress_start,"endCount":egress_end,"rejectedCount":egress_count,"counterOwner":"cgroup-scoped netfilter chain FABUSHI_FDN_MCP_EGRESS / comment fdn-g15-official-device-mcp-egress" if egress_count is not None else None},
+  "egress":{"startCount":egress_start,"endCount":egress_end,"rejectedCount":egress_count,"counterOwner":"cgroup-scoped netfilter chain FABUSHI_FDN_MCP_EGRESS / comment fdn-g15-official-device-mcp-egress" if egress_sample_complete else None},
 }
 checks=[
  report["budgets"]["rssBytes"]["maxObserved"] < report["budgets"]["rssBytes"]["limit"],
@@ -182,24 +184,27 @@ checks=[
  report["budgets"]["journalBytes"]["observed"] <= report["budgets"]["journalBytes"]["limit"],
  report["budgets"]["diskReserveBytes"]["minimumAvailableObserved"] >= report["budgets"]["diskReserveBytes"]["requiredReserve"],
  report["privacy"]["journalSecretScan"] == "pass",
- egress_count == 0,
+
 ]
-if egress_count is None:
-  report["status"]="BLOCKED_EGRESS_REJECT_COUNTER"
-  report["exitCode"]=78
-elif all(checks):
-  report["status"]="PASS"
-  report["exitCode"]=0
-else:
+if not all(checks) or (egress_sample_complete and not egress_sample_consistent):
   report["status"]="FAIL"
   report["exitCode"]=1
+elif not egress_sample_complete:
+  report["status"]="BLOCKED_EGRESS_REJECT_COUNTER"
+  report["exitCode"]=78
+elif egress_count != 0:
+  report["status"]="FAIL"
+  report["exitCode"]=1
+else:
+  report["status"]="PASS"
+  report["exitCode"]=0
 for section in report["budgets"].values():
   if "limit" in section and "maxObserved" in section:
     section["pass"]=section["maxObserved"] < section["limit"] if section is report["budgets"]["rssBytes"] else section["maxObserved"] <= section["limit"]
 report["budgets"]["cpuSingleCorePercent"]["pass"]=report["budgets"]["cpuSingleCorePercent"]["fiveMinuteAverage"] < 1.0
 report["budgets"]["journalBytes"]["pass"]=report["budgets"]["journalBytes"]["observed"] <= report["budgets"]["journalBytes"]["limit"]
 report["budgets"]["diskReserveBytes"]["pass"]=report["budgets"]["diskReserveBytes"]["minimumAvailableObserved"] >= report["budgets"]["diskReserveBytes"]["requiredReserve"]
-report["egress"]["pass"]=egress_count == 0 if egress_count is not None else False
+report["egress"]["pass"]=egress_sample_consistent and egress_count == 0
 with open(sys.argv[1],"w",encoding="utf-8") as f: json.dump(report,f,indent=2,sort_keys=True)
 print(json.dumps(report,sort_keys=True))
 raise SystemExit(report["exitCode"])

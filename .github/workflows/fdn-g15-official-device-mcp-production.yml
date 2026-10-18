@@ -9,6 +9,8 @@ on:
       - "fdn-network-coordinator/install-controller-stack.sh"
       - "fdn-network-coordinator/controller-installation.test.mjs"
       - "fdn-network-coordinator/probe-official-device-mcp-g15.sh"
+      - "fdn-network-coordinator/probe-official-device-mcp-g15.test.mjs"
+      - "docs/specs/fdn-g15-official-device-mcp-production.md"
       - ".github/workflows/fdn-g15-official-device-mcp-production.yml"
   push:
     branches: [main]
@@ -19,6 +21,8 @@ on:
       - "fdn-network-coordinator/install-controller-stack.sh"
       - "fdn-network-coordinator/controller-installation.test.mjs"
       - "fdn-network-coordinator/probe-official-device-mcp-g15.sh"
+      - "fdn-network-coordinator/probe-official-device-mcp-g15.test.mjs"
+      - "docs/specs/fdn-g15-official-device-mcp-production.md"
       - ".github/workflows/fdn-g15-official-device-mcp-production.yml"
   workflow_dispatch:
     inputs:
@@ -49,6 +53,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
           test "$(git status --porcelain)" = ""
           bash -n fdn-network-coordinator/probe-official-device-mcp-g15.sh
+          node --test fdn-network-coordinator/probe-official-device-mcp-g15.test.mjs
           bash -n fdn-network-coordinator/install-official-device-mcp-egress-guard.sh
           grep -Fx 'MemoryMax=150M' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
           grep -Fx 'TasksMax=256' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
