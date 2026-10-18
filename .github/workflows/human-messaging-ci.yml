@@ -12,10 +12,18 @@ on:
       - "fabushi/web/migrations/20261005_human_call_signaling.sql"
       - "fabushi/web/migrations/20261005_human_call_convergence.sql"
       - "fabushi/web/migrations/20261005_human_call_device_claim.sql"
+      - "fabushi/web/migrations/20261012_human_call_group_membership.sql"
+      - "fabushi/web/migrations/20261012_human_call_sfu_sessions.sql"
+      - "fabushi/web/migrations/20261013_human_call_sfu_publications.sql"
+      - "fabushi/web/migrations/20261014_human_call_sfu_subscriptions.sql"
+      - "fabushi/web/migrations/20261015_human_call_sfu_teardowns.sql"
+      - "fabushi/web/migrations/20261016_human_call_sfu_simulcast.sql"
+      - "fabushi/web/migrations/20261017_human_call_sfu_layer_mutations.sql"
       - "fabushi/web/tests/friends-and-messages-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
       - "fabushi/web/tests/human-call-signaling-behavior.test.js"
+      - "fabushi/web/tests/human-call-group-membership-contract.test.js"
       - "docs/specs/human-direct-messaging-extensions.md"
       - "docs/specs/human-call-signaling.md"
       - ".github/workflows/human-messaging-ci.yml"
@@ -32,6 +40,15 @@ jobs:
         working-directory: fabushi/web
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Bind exact tested HEAD
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -41,5 +58,5 @@ jobs:
         run: node --check src/routes/community-routes.js
       - name: Check call signaling syntax
         run: node --check src/handlers/call-signaling.js
-      - name: Run existing and Phase 1 messaging contracts
-        run: node --test tests/friends-and-messages-contract.test.js tests/human-messaging-extensions-contract.test.js tests/human-messaging-extensions-behavior.test.js tests/human-call-signaling-behavior.test.js
+      - name: Run existing and Human Call contracts
+        run: node --test tests/friends-and-messages-contract.test.js tests/human-messaging-extensions-contract.test.js tests/human-messaging-extensions-behavior.test.js tests/human-call-signaling-behavior.test.js tests/human-call-group-membership-contract.test.js
