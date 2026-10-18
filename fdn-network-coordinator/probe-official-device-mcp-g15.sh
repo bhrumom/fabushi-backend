@@ -184,15 +184,17 @@ checks=[
  report["privacy"]["journalSecretScan"] == "pass",
  egress_count == 0,
 ]
-if egress_count is None:
-  report["status"]="BLOCKED_EGRESS_REJECT_COUNTER"
-  report["exitCode"]=78
-elif all(checks):
-  report["status"]="PASS"
-  report["exitCode"]=0
-else:
+# Known privacy/resource/egress failures outrank a missing counter owner.
+# BLOCKED is reserved for an otherwise-clean report whose egress counter is unavailable.
+if not all(checks[:-1]) or (egress_count is not None and egress_count != 0):
   report["status"]="FAIL"
   report["exitCode"]=1
+elif egress_count is None:
+  report["status"]="BLOCKED_EGRESS_REJECT_COUNTER"
+  report["exitCode"]=78
+else:
+  report["status"]="PASS"
+  report["exitCode"]=0
 for section in report["budgets"].values():
   if "limit" in section and "maxObserved" in section:
     section["pass"]=section["maxObserved"] < section["limit"] if section is report["budgets"]["rssBytes"] else section["maxObserved"] <= section["limit"]

@@ -9,6 +9,7 @@ on:
       - "fdn-network-coordinator/install-controller-stack.sh"
       - "fdn-network-coordinator/controller-installation.test.mjs"
       - "fdn-network-coordinator/probe-official-device-mcp-g15.sh"
+      - ".github/scripts/test-probe-official-device-mcp-g15.py"
       - ".github/workflows/fdn-g15-official-device-mcp-production.yml"
   push:
     branches: [main]
@@ -19,6 +20,7 @@ on:
       - "fdn-network-coordinator/install-controller-stack.sh"
       - "fdn-network-coordinator/controller-installation.test.mjs"
       - "fdn-network-coordinator/probe-official-device-mcp-g15.sh"
+      - ".github/scripts/test-probe-official-device-mcp-g15.py"
       - ".github/workflows/fdn-g15-official-device-mcp-production.yml"
   workflow_dispatch:
     inputs:
@@ -50,6 +52,7 @@ jobs:
           test "$(git status --porcelain)" = ""
           bash -n fdn-network-coordinator/probe-official-device-mcp-g15.sh
           bash -n fdn-network-coordinator/install-official-device-mcp-egress-guard.sh
+          python3 .github/scripts/test-probe-official-device-mcp-g15.py -v
           grep -Fx 'MemoryMax=150M' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
           grep -Fx 'TasksMax=256' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
           grep -F 'ExecStart=/usr/bin/node /opt/fabushi-fdn/current/official-device-mcp/bin/fabushi-remote-mcp.js' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
