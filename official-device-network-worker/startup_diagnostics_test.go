@@ -36,6 +36,11 @@ func TestStartupFailureCategoryPreservesSafeCategoriesFromTailscaleStateMessages
 		{name: "state message EPERM", err: errors.New("tsnet.Up: backend: operation not permitted"), category: "network-permission"},
 		{name: "state message timeout", err: errors.New("tsnet.Up: backend: operation timed out"), category: "timeout"},
 		{name: "expired enrollment key", err: errors.New("tsnet.Up: backend: authkey expired"), category: "authentication"},
+		{name: "expired enrollment key with space", err: errors.New("tsnet.Up: backend: auth key expired"), category: "authentication"},
+		{name: "invalid enrollment key", err: errors.New("tsnet.Up: backend: invalid auth key credential=secret"), category: "authentication"},
+		{name: "authentication failed", err: errors.New("tsnet.Up: backend: authentication failed"), category: "authentication"},
+		{name: "machine authorization required", err: errors.New("tsnet.Up: backend: machine authorization required"), category: "authentication"},
+		{name: "nil error remains unknown", err: nil, category: "unknown"},
 		{name: "unknown does not disclose message", err: errors.New("credential=secret callback=https://private.invalid"), category: "unknown"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
