@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -75,9 +76,12 @@ func TestDispatchWritesOneFrameAndReadsOneCorrelatedJSONResult(t *testing.T) {
 		_, _ = io.WriteString(server, `{"type":"toolDescription","available":false}`+"\n")
 	}()
 
-	result, err := dispatchPrivateRequest(context.Background(), dial, req, defaultTargetPort)
+	result, dispatchState, err := dispatchPrivateRequest(context.Background(), dial, req, defaultTargetPort)
 	if err != nil {
 		t.Fatalf("dispatch failed: %v", err)
+	}
+	if dispatchState != "completed" {
+		t.Fatalf("unexpected dispatch state %q", dispatchState)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(result, &decoded); err != nil {
@@ -85,6 +89,44 @@ func TestDispatchWritesOneFrameAndReadsOneCorrelatedJSONResult(t *testing.T) {
 	}
 	if decoded["type"] != "toolDescription" {
 		t.Fatalf("unexpected result %#v", decoded)
+	}
+}
+
+func TestDispatchDialFailureIsExplicitlyNotDispatched(t *testing.T) {
+	req := validRequest()
+	_, state, err := dispatchPrivateRequest(context.Background(), func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("offline")
+	}, req, defaultTargetPort)
+	if err == nil || state != "not_dispatched" {
+		t.Fatalf("expected safe pre-dispatch failure, state=%q err=%v", state, err)
+	}
+}
+
+func TestHTTPHandlerReturnsCorrelatedPreDispatchFailure(t *testing.T) {
+	req := validRequest()
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dial := func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("offline")
+	}
+	httpReq := httptest.NewRequest(http.MethodPost, privateRequestPath, strings.NewReader(string(body)))
+	recorder := httptest.NewRecorder()
+	handler("cell-fdn-account-a", "100.64.0.2", defaultTargetPort, dial, func() time.Time {
+		return time.Unix(1_800_000_000, 0)
+	}).ServeHTTP(recorder, httpReq)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for not-dispatched request, got %d", recorder.Code)
+	}
+	var response workerResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("response JSON invalid: %v", err)
+	}
+	if response.OK || response.DispatchState != "not_dispatched" ||
+		response.RequestID != req.RequestID || response.DeviceID != req.DeviceID ||
+		response.NodeID != req.NodeID || response.Generation != req.Generation {
+		t.Fatalf("unexpected pre-dispatch response: %#v", response)
 	}
 }
 
