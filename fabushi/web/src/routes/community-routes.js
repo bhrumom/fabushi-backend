@@ -35,6 +35,15 @@ import {
   handleListHumanCalls,
 } from '../handlers/call-signaling.js';
 import {
+  handleActivateStoryStealth,
+  handleDeleteStory,
+  handleGetStoryStealth,
+  handleListStories,
+  handlePublishStory,
+  handleReactStory,
+  handleViewStory,
+} from '../handlers/stories.js';
+import {
   handleToggleLike,
   handleGetLikeCount,
   handleBatchGetLikeCounts,
@@ -74,6 +83,17 @@ export async function routeCommunityRequest({ pathname, method, request, env, db
   if (messageResourceMatch && method === 'GET') return handleGetDirectMessageResource(request, env, db, messageResourceMatch[1]);
   const messageReactionMatch = pathname.match(/^\/api\/social\/messages\/(\d+)\/reactions$/);
   if (messageReactionMatch && method === 'POST') return handleSetDirectMessageReaction(request, env, db, messageReactionMatch[1]);
+  if (pathname === '/api/social/stories' && method === 'GET') return handleListStories(request, env, db);
+  if (pathname === '/api/social/stories' && method === 'POST') return handlePublishStory(request, env, db);
+  if (pathname === '/api/social/story-stealth' && method === 'GET') return handleGetStoryStealth(request, env, db);
+  if (pathname === '/api/social/story-stealth/activate' && method === 'POST') return handleActivateStoryStealth(request, env, db);
+  const storyViewMatch = pathname.match(/^\/api\/social\/stories\/([^/]+)\/view$/);
+  if (storyViewMatch && method === 'POST') return handleViewStory(request, env, db, storyViewMatch[1]);
+  const storyReactionMatch = pathname.match(/^\/api\/social\/stories\/([^/]+)\/reaction$/);
+  if (storyReactionMatch && method === 'POST') return handleReactStory(request, env, db, storyReactionMatch[1]);
+  const storyDeleteMatch = pathname.match(/^\/api\/social\/stories\/([^/]+)$/);
+  if (storyDeleteMatch && method === 'DELETE') return handleDeleteStory(request, env, db, storyDeleteMatch[1]);
+
   if (pathname === '/api/social/calls' && method === 'POST') return handleCreateHumanCall(request, env, db);
   if (pathname === '/api/social/calls' && method === 'GET') return handleListHumanCalls(request, env, db);
   if (pathname === '/api/social/calls/ice' && method === 'GET') return handleGetHumanCallIceServers(request, env, db);
