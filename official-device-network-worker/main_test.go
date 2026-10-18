@@ -50,6 +50,36 @@ func TestValidateRequestFencesCellPeerPortExpiryAndFrame(t *testing.T) {
 	}
 }
 
+func TestValidateRequestRejectsFrameIdentityMismatch(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	cases := []struct {
+		name   string
+		mutate func(*workerRequest)
+	}{
+		{
+			name: "device id",
+			mutate: func(req *workerRequest) {
+				req.Frame = strings.Replace(req.Frame, "\"deviceId\":\"device-fdn-1\"", "\"deviceId\":\"device-fdn-2\"", 1)
+			},
+		},
+		{
+			name: "network generation",
+			mutate: func(req *workerRequest) {
+				req.Frame = strings.Replace(req.Frame, "\"networkGeneration\":17", "\"networkGeneration\":18", 1)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := validRequest()
+			tc.mutate(&req)
+			if err := validateRequest(req, "cell-fdn-account-a", defaultTargetPort, now); err == nil {
+				t.Fatal("mismatched target frame identity was accepted")
+			}
+		})
+	}
+}
+
 func TestDispatchWritesOneFrameAndReadsOneCorrelatedJSONResult(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
