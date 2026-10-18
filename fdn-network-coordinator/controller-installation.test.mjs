@@ -11,7 +11,7 @@ const sha='a'.repeat(40),next='b'.repeat(40),core='c'.repeat(40);
 function fixture(t,{workerReadyTimeoutSeconds=95}={}) {
  const dir=mkdtempSync(join(tmpdir(),'fdn-install-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  for (const p of ['bin','etc','units','stage/bin','stage/official-device-mcp/bin','stage/fdn-network-coordinator/systemd']) mkdirSync(join(dir,p),{recursive:true});
- const script=source.replace('root=/opt/fabushi-fdn',\`root=\${dir}/root\`).replace('state=/var/lib/fabushi-fdn',\`state=\${dir}/state\`).replace('etc_root=/etc/fabushi',\`etc_root=\${dir}/etc\`).replace('units=/etc/systemd/system',\`units=\${dir}/units\`).replace('install -d -o fabushi-fdn -g fabushi-fdn','install -d').replace('deadline=$((SECONDS+95))',\`deadline=$((SECONDS+\${workerReadyTimeoutSeconds}))\`);
+ const script=source.replace('root=/opt/fabushi-fdn',`root=${dir}/root`).replace('state=/var/lib/fabushi-fdn',`state=${dir}/state`).replace('etc_root=/etc/fabushi',`etc_root=${dir}/etc`).replace('units=/etc/systemd/system',`units=${dir}/units`).replace('install -d -o fabushi-fdn -g fabushi-fdn','install -d').replace('deadline=$((SECONDS+95))',`deadline=$((SECONDS+${workerReadyTimeoutSeconds}))`);
  writeFileSync(join(dir,'installer'),script);
  writeFileSync(join(dir,'etc/fdn-network-enrollment.env'),'DOCKER_HOST=unix:///run/user/993/docker.sock\n');
  for (const [name,body] of Object.entries({
