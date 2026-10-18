@@ -161,6 +161,7 @@ function rejectPendingForSocket(socket, reason) {
     if (pending.socket !== socket) continue;
     pendingPrivateRequests.delete(requestId);
     clearTimeout(pending.timer);
+    pending.signal?.removeEventListener("abort", pending.onAbort);
     pending.reject(new DeviceCallOutcomeUnknownError(`${reason} Private transport outcome is unknown.`, requestId));
   }
 }
@@ -330,6 +331,7 @@ async function handleAgentMessage(socket, raw, options) {
     if (!pending || pending.registryKey !== socket.registryKey || pending.socket !== socket) return;
     pendingPrivateRequests.delete(requestId);
     clearTimeout(pending.timer);
+    pending.signal?.removeEventListener("abort", pending.onAbort);
     if (Buffer.byteLength(JSON.stringify(message.result ?? null)) > MAX_PRIVATE_TRANSPORT_BYTES) {
       pending.reject(new DeviceCallOutcomeUnknownError("Authenticated reverse-WebSocket private result exceeded the bounded transport size.", requestId));
       return;
@@ -579,6 +581,7 @@ export async function requestRegisteredDevicePrivateTransport(
   deviceId,
   payload,
   timeoutSeconds = DEFAULT_CALL_TIMEOUT_SECONDS,
+  signal = undefined,
 ) {
   const key = registryKey(String(accountId || "").trim(), String(deviceId || "").trim());
   const device = devices.get(key);
@@ -593,6 +596,15 @@ export async function requestRegisteredDevicePrivateTransport(
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new TypeError("FDN private transport payload must be an object.");
   }
+  if (String(payload.deviceId || "") !== String(deviceId)
+      || !Number.isSafeInteger(Number(payload.networkGeneration))
+      || Number(payload.networkGeneration) <= 0
+      || (payload.sessionId != null && !String(payload.sessionId).trim())) {
+    throw new Error("FDN private transport payload failed device/session binding.");
+  }
+  if (signal && typeof signal.aborted === "boolean" && signal.aborted) {
+    throw new Error("FDN private transport was cancelled before dispatch.");
+  }
   const encodedPayload = JSON.stringify(payload);
   if (Buffer.byteLength(encodedPayload) > MAX_PRIVATE_TRANSPORT_BYTES) {
     throw new Error("FDN private transport payload exceeds the bounded reverse-WebSocket limit.");
@@ -603,40 +615,54 @@ export async function requestRegisteredDevicePrivateTransport(
     MAX_CALL_TIMEOUT_SECONDS,
   ) * 1000;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pendingPrivateRequests.delete(requestId);
-      reject(new DeviceCallOutcomeUnknownError(
-        `Authenticated reverse-WebSocket private request timed out after ${timeoutMs / 1000} seconds.`,
-        requestId,
-      ));
-    }, timeoutMs);
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+    };
+    const finishUnknown = (reason, sendCancel = false) => {
+      if (settled) return;
+      settled = true;
+      if (pendingPrivateRequests.get(requestId)?.onAbort === onAbort) pendingPrivateRequests.delete(requestId);
+      cleanup();
+      if (sendCancel && device.socket.readyState === 1) {
+        device.socket.send(JSON.stringify({ type: "fdnPrivateCancel", requestId }), () => {});
+      }
+      reject(new DeviceCallOutcomeUnknownError(reason, requestId));
+    };
+    const onAbort = () => finishUnknown(
+      "Authenticated reverse-WebSocket private request was cancelled after dispatch; outcome is unknown.",
+      true,
+    );
+    const timer = setTimeout(() => finishUnknown(
+      `Authenticated reverse-WebSocket private request timed out after ${timeoutMs / 1000} seconds; outcome is unknown.`,
+      true,
+    ), timeoutMs);
     pendingPrivateRequests.set(requestId, {
       registryKey: key,
       socket: device.socket,
-      resolve,
-      reject,
+      resolve: (value) => { if (settled) return; settled = true; cleanup(); resolve(value); },
+      reject: (error) => { if (settled) return; settled = true; cleanup(); reject(error); },
       timer,
+      signal,
+      onAbort,
     });
+    signal?.addEventListener?.("abort", onAbort, { once: true });
     device.socket.send(JSON.stringify({
       type: "fdnPrivate",
       requestId,
       payload,
     }), (error) => {
-      if (!error) return;
-      pendingPrivateRequests.delete(requestId);
-      clearTimeout(timer);
-      reject(new DeviceCallOutcomeUnknownError(
-        "Authenticated reverse-WebSocket private request transport failed after dispatch.",
-        requestId,
-      ));
+      if (!error || settled) return;
+      finishUnknown("Authenticated reverse-WebSocket private request transport failed after dispatch; outcome is unknown.");
     });
   });
 }
 
 export function createAuthenticatedReverseWebSocketPrivateTransport() {
   return {
-    async request({ accountId, deviceId, payload, timeoutSeconds }) {
-      return requestRegisteredDevicePrivateTransport(accountId, deviceId, payload, timeoutSeconds);
+    async request({ accountId, deviceId, payload, timeoutSeconds, signal }) {
+      return requestRegisteredDevicePrivateTransport(accountId, deviceId, payload, timeoutSeconds, signal);
     },
   };
 }
