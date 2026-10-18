@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PROBE = ROOT / "fdn-network-coordinator" / "probe-official-device-mcp-g15.sh"
-MARKER = "python3 - " + chr(34) + "$output" + chr(34) + " <<'PY'\\n"
+MARKER = "python3 - " + chr(34) + "$output" + chr(34) + " <<'PY'\n"
 
 
 def load_report_program():
@@ -20,7 +20,7 @@ def load_report_program():
         raise AssertionError("expected exactly one inline G15 report classifier")
     tail = source.split(MARKER, 1)[1]
     try:
-        program, _ = tail.split("\\nPY\\n", 1)
+        program, _ = tail.split("\nPY\n", 1)
     except ValueError as error:
         raise AssertionError("G15 report classifier heredoc is not terminated") from error
     return program
