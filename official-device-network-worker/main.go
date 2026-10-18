@@ -231,7 +231,14 @@ func requiredEnv(name string) string {
 }
 
 // Only fixed categories may leave the process; upstream errors may carry secrets.
+// Tailscale's tsnet.Server.Up wraps ordinary Go errors with %w, but backend
+// Notify.ErrMessage errors are plain strings. Match only a small set of stable
+// OS error phrases so those failures remain diagnosable without logging the
+// upstream message, URL, state path, or credentials.
 func startupFailureCategory(err error) string {
+	if err == nil {
+		return "unknown"
+	}
 	switch {
 	case errors.Is(err, syscall.EAFNOSUPPORT):
 		return "address-family"
@@ -240,6 +247,21 @@ func startupFailureCategory(err error) string {
 	case errors.Is(err, syscall.EPERM):
 		return "network-permission"
 	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "address family not supported"),
+		strings.Contains(message, "address family is not supported"):
+		return "address-family"
+	case strings.Contains(message, "read-only file system"),
+		strings.Contains(message, "permission denied"):
+		return "filesystem-permission"
+	case strings.Contains(message, "operation not permitted"):
+		return "network-permission"
+	case strings.Contains(message, "deadline exceeded"),
+		strings.Contains(message, "timed out"),
+		strings.Contains(message, "timeout"):
 		return "timeout"
 	default:
 		return "unknown"
