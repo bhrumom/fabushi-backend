@@ -125,6 +125,11 @@ func validateRequest(req workerRequest, expectedCell string, fixedPort int, now 
 	if err := json.Unmarshal([]byte(strings.TrimSuffix(req.Frame, "\n")), &value); err != nil || len(value) == 0 {
 		return errors.New("target frame must be a JSON object")
 	}
+	frameDeviceID, deviceIDOK := value["deviceId"].(string)
+	frameGeneration, generationOK := value["networkGeneration"].(float64)
+	if !deviceIDOK || frameDeviceID != req.DeviceID || !generationOK || frameGeneration != float64(req.Generation) {
+		return errors.New("target frame identity does not match the private route")
+	}
 	return nil
 }
 

@@ -25,7 +25,7 @@ func validRequest() workerRequest {
 		ExpiresAt:  4_000_000_000,
 		TargetPort: defaultTargetPort,
 		TimeoutMS:  5000,
-		Frame:      `{"type":"describeTool","toolName":"Computer"}` + "\n",
+		Frame:      "{\"type\":\"describeTool\",\"toolName\":\"Computer\",\"deviceId\":\"device-fdn-1\",\"networkGeneration\":17}\n",
 	}
 }
 

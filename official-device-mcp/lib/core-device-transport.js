@@ -94,27 +94,32 @@ export function createCoreDeviceTransport(options = {}) {
 
   async function privateRequest(context, payload, timeoutSeconds, route = null) {
     const currentRoute = route ?? await resolveNetworkRoute(context);
-    const request = {
+    const makeRequest = (networkRoute) => ({
       accountId: context.accountId,
       deviceId: context.deviceId,
-      cellId: currentRoute.cellId,
-      nodeId: currentRoute.nodeId,
-      networkGeneration: Number(currentRoute.generation),
-      networkExpiresAt: Number(currentRoute.expiresAt),
-      networkRoute: currentRoute,
+      cellId: networkRoute.cellId,
+      nodeId: networkRoute.nodeId,
+      networkGeneration: Number(networkRoute.generation),
+      networkExpiresAt: Number(networkRoute.expiresAt),
+      networkRoute,
       payload,
       timeoutSeconds,
       signal: context.signal,
-    };
+    });
     let response;
     try {
-      response = await privateTransport.request(request);
+      response = await privateTransport.request(makeRequest(currentRoute));
     } catch (error) {
-      // Only a correlated worker response proving no request bytes were dispatched
-      // can switch transports. Socket/write/result failures remain uncertain and
-      // must never be replayed through a second path.
-      if (!fallbackTransport || error?.notDispatched !== true || context.signal?.aborted) throw error;
-      response = await fallbackTransport.request(request);
+      // Fallback is safe only when the primary worker proves that no request bytes
+      // were dispatched. Re-resolve Core immediately before the alternate path so
+      // expiry, revocation, generation rotation, or binding changes fail closed.
+      if (!fallbackTransport
+          || error?.notDispatched !== true
+          || error?.dispatchState !== "not_dispatched"
+          || context.signal?.aborted) throw error;
+      const fallbackRoute = await resolveNetworkRoute(context);
+      if (context.signal?.aborted) throw error;
+      response = await fallbackTransport.request(makeRequest(fallbackRoute));
     }
     if (!response || typeof response !== "object" || Array.isArray(response)) {
       throw new Error("Private target transport returned an invalid response.");
