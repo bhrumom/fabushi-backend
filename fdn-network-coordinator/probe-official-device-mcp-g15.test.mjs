@@ -69,6 +69,38 @@ test('missing egress counter owner/count is BLOCKED, never PASS', t => {
   assert.equal(report.egress.pass, false);
 });
 
+test('zero count without both counter snapshots is BLOCKED', t => {
+  const report = evaluate(t, {
+    FDN_MCP_EGRESS_START: '',
+    FDN_MCP_EGRESS_END: '',
+    FDN_MCP_EGRESS_REJECTED: '0',
+  }, 'BLOCKED_EGRESS_REJECT_COUNTER', 78);
+  assert.equal(report.unexpectedWorkerOwnedPacketsRejected, 0);
+  assert.equal(report.egress.counterOwner, null);
+  assert.equal(report.egress.pass, false);
+});
+
+test('counter delta inconsistent with snapshots fails closed', t => {
+  const report = evaluate(t, {
+    FDN_MCP_EGRESS_START: '10',
+    FDN_MCP_EGRESS_END: '11',
+    FDN_MCP_EGRESS_REJECTED: '0',
+  }, 'FAIL', 1);
+  assert.equal(report.egress.counterOwner !== null, true);
+  assert.equal(report.egress.pass, false);
+});
+
+test('observed privacy failure is not hidden by a missing egress sample', t => {
+  const report = evaluate(t, {
+    FDN_MCP_PRIVACY_SCAN: 'fail',
+    FDN_MCP_EGRESS_START: '',
+    FDN_MCP_EGRESS_END: '',
+    FDN_MCP_EGRESS_REJECTED: '',
+  }, 'FAIL', 1);
+  assert.equal(report.privacy.journalSecretScan, 'fail');
+  assert.equal(report.egress.counterOwner, null);
+});
+
 test('nonzero unexpectedWorkerOwnedPacketsRejected fails', t => {
   const report = evaluate(t, {
     FDN_MCP_EGRESS_START: '10',

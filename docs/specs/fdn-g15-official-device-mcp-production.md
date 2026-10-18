@@ -10,7 +10,9 @@ The service has `MemoryMax=150M` and `TasksMax=256`. The shipping service instal
 
 The verdict logic embedded in `fdn-network-coordinator/probe-official-device-mcp-g15.sh` is exercised by `node --test fdn-network-coordinator/probe-official-device-mcp-g15.test.mjs`. The test extracts and executes the actual Python report builder from the probe with synthetic environment inputs; it does not duplicate the verdict algorithm or access production hosts. Acceptance cases are:
 
-- missing egress counter owner/count produces `status=BLOCKED_EGRESS_REJECT_COUNTER`, `exitCode=78`, and never PASS;
+- a missing egress owner or either counter snapshot/count produces `status=BLOCKED_EGRESS_REJECT_COUNTER`, `exitCode=78`, and never PASS when the other gates pass;
+- a reported reject delta that disagrees with the start/end snapshots fails closed;
+- observed privacy or resource-budget failures remain `FAIL` even when egress evidence is missing;
 - `unexpectedWorkerOwnedPacketsRejected > 0` produces `FAIL` and a nonzero exit;
 - privacy scan `fail` produces `FAIL` and a nonzero exit;
 - each resource budget violation (RSS, CPU, state, audit, journal, disk reserve) produces `FAIL` and a nonzero exit;
