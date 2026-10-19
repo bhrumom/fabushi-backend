@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -137,6 +138,22 @@ def upload_asset(token, release_id, name, payload):
         raise ValueError('uploaded asset size does not match the signed package')
 
 
+SAFE_SERVICE_CODE = re.compile(r'^[A-Z][A-Z0-9_]{0,48}$')
+# Our own diagnostics only. Anything else (bodies, headers, tokens) stays out.
+SAFE_REASON = re.compile(r'^[a-z0-9][a-zA-Z0-9 _:\-]{0,120}$')
+
+
+def service_code(raw):
+    """Extract the registry's own error token; never echo its message."""
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return 'non-contract'
+    error = payload.get('error')
+    code = error.get('code') if isinstance(error, dict) else error
+    return code if isinstance(code, str) and SAFE_SERVICE_CODE.match(code) else 'non-contract'
+
+
 def register(origin, token, version, digest, size, url):
     body = canonical({
         'artifactId': 'universal-ui',
@@ -156,7 +173,7 @@ def register(origin, token, version, digest, size, url):
                  'x-fabushi-marketplace-review-token': token},
         accept='application/json')
     if status != 201:
-        raise ValueError(f'artifact registration failed with {status}')
+        raise ValueError(f'artifact registration failed with {status} {service_code(raw)}')
     return json.loads(raw)['artifact']
 
 
@@ -219,8 +236,12 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        # Never echo response bodies, headers or credentials.
+        # Never echo response bodies, headers or credentials. The reason is our
+        # own literal plus the registry's error token, both charset-checked.
         status = str(error.code) if isinstance(error, urllib.error.HTTPError) else 'none'
+        reason = str(error)
+        reason = reason if SAFE_REASON.match(reason) else 'unclassified'
         print('GitHub hosting failed; class=' + type(error).__name__
-              + '; http=' + status + '; no package published.', file=sys.stderr)
+              + '; http=' + status + '; reason=' + reason
+              + '; no package published.', file=sys.stderr)
         sys.exit(1)

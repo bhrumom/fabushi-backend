@@ -29,6 +29,8 @@ class State:
         self.registrations = []
         self.uploaded = {}
         self.release_creations = 0
+        # When set, the registry refuses registration with this contract code.
+        self.reject_registration = None
 
 
 def make_handler(state):
@@ -81,6 +83,10 @@ def make_handler(state):
             if '/v1/extensions/review/artifacts/' in parsed.path:
                 if not self.headers.get('x-fabushi-marketplace-review-token'):
                     return self._send(403, {'error': {'code': 'REVIEW_AUTH_REQUIRED'}})
+                if state.reject_registration:
+                    return self._send(409, {'success': False, 'error': {
+                        'code': state.reject_registration,
+                        'message': 'secret detail that must never be echoed'}})
                 registered = json.loads(body)
                 state.registrations.append(registered)
                 return self._send(201, {'artifact': registered})
@@ -224,8 +230,18 @@ def main():
         # 10. No token of either kind is a hard failure, not a silent skip.
         result, _, _ = run(state, base, extra_env={'DANDELION_RELEASE_TOKEN': ''})
         assert result.returncode == 1
+
+        # 11. A registry refusal names its own contract code but never its message.
+        state.reject_registration = 'ARTIFACT_DIGEST_CONFLICT'
+        try:
+            result, _, _ = run(state, base)
+        finally:
+            state.reject_registration = None
+        assert result.returncode == 1
+        assert 'reason=artifact registration failed with 409 ARTIFACT_DIGEST_CONFLICT' in result.stderr, result.stderr
+        assert 'secret detail' not in result.stderr, 'response body leaked'
         print('publish pipeline ok: create, upload, register, idempotent, immutable, '
-              'phase-split, host-fallback, fail-closed')
+              'phase-split, host-fallback, safe-diagnostics, fail-closed')
     finally:
         server.shutdown()
         server.server_close()
