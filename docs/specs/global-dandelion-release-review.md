@@ -2,6 +2,30 @@
 
 Owner: existing ExtensionReleaseStore review API. Date: 2026-10-14.
 
+## Current public release (read-only rebaseline 2026-10-19)
+
+The historical `0.1.0` review record below is retained as provenance and is
+not the current release target. The canonical public install proof currently
+serves Global Dandelion `0.2.1` with these independently re-fetched bindings:
+
+- version: `0.2.1`, channel `preview`, platforms `android`, `desktop`, `ios`;
+- package: `479376` bytes,
+  SHA-256 `afc45ad273e4965fc272a89e775291444c683513ecbc3fa31769858431e8a6b6`;
+- source asset:
+  `https://github.com/bhrumom/global-dandelion-rs/releases/download/v0.2.1/global-dandelion-0.2.1.fabapp`;
+- identity: `bhrumom/global-dandelion:web-miniapp`, app ID
+  `org.fabushi.global-dandelion`, publisher `bhrumom`;
+- runtime: `web`, `installMode=fabapp`, license `MIT OR Apache-2.0`,
+  `offlineCore=true`, network mode `deny`, empty allowed origins;
+- release signature key:
+  `fabushi-marketplace-managed-20261013-1`, trust epoch `1`;
+- requested capabilities: empty. Native capability panels remain host-granted
+  and are not implied by package publication.
+
+This section is evidence of public state, not a new approval write. A future
+review workflow must pin `0.2.1` and the digest above, or explicitly document a
+new immutable version; it must never reuse the historical `0.1.0` payload.
+
 The real publisher submitted Global Dandelion0.1.0 through the signed Desktop
 f3466860220f142813786b511b1ede55576fa7ac; native UI reports pending_review.
 Review is a separate manually dispatched, canonical-main production job, not a
