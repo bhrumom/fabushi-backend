@@ -125,7 +125,7 @@ test('OIDC accepts an explicitly trusted Android consumer on main only', async (
     ref: 'refs/heads/main', sub: 'repo:fabu-android/fabushi-android:environment:ci-isolated',
   };
   const androidPolicy = { ...policy, trustedRepositories: [{ repository: androidClaims.repository, repositoryId: androidClaims.repository_id, ownerId: androidClaims.repository_owner_id, workflowRefs: [androidClaims.workflow_ref], refs: [androidClaims.ref] }] };
-  assert.deepEqual(await verifyActionsIdentity(jwt(androidClaims), androidPolicy, oidcOptions), identity);
+  assert.deepEqual(await verifyActionsIdentity(jwt(androidClaims), androidPolicy, oidcOptions), { ...identity, repository: androidClaims.repository });
   await assert.rejects(verifyActionsIdentity(jwt({ ...androidClaims, ref: 'refs/heads/feature' }), androidPolicy, oidcOptions), /oidc_denied/);
 });
 for (const overrides of [{ repository_id: 'other' }, { repository_owner_id: 'other' }, { repository: 'fork/repo' }, { aud: 'production' }, { iss: 'https://attacker.invalid' }, { workflow_ref: 'untrusted' }, { ref: 'refs/pull/1/merge' }, { event_name: 'pull_request_target' }, { event_name: 'pull_request' }, { exp: 1100 }, { nbf: 1200 }, { iat: 1200 }, { iat: 1 }, { run_attempt: '0' }, { sha: 'bad' }, { sub: 'repo:other:environment:ci-isolated' }]) {
