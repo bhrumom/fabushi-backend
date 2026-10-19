@@ -121,6 +121,10 @@ export function canonicalReleaseSignaturePayload({
       platform: String(artifact.platform),
       architecture: String(artifact.architecture),
       format: String(artifact.format),
+      // The download location is part of the signed payload, so a mirror cannot be
+      // swapped after review. Omitted entirely when unset, which keeps the canonical
+      // bytes (and therefore the signature) of registry-hosted releases unchanged.
+      ...(artifact.url ? { url: String(artifact.url) } : {}),
     }))
     .sort((left, right) => left.artifactId.localeCompare(right.artifactId));
   if (normalizedArtifacts.length === 0 || normalizedArtifacts.some(

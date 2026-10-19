@@ -353,7 +353,35 @@ export function createMiniAppMarketplaceRouter({
         platform: req.get('x-fabushi-artifact-platform'),
         architecture: req.get('x-fabushi-artifact-architecture') || 'any',
         format: req.get('x-fabushi-artifact-format'),
+        url: req.get('x-fabushi-artifact-url') || '',
         bytes: req.body,
+      });
+      res.status(201).json({ artifact });
+    }),
+  );
+
+  // Metadata-only registration for artifacts whose bytes are hosted on an approved
+  // public mirror (GitHub Releases). The registry keeps the digest binding and the
+  // signature; it never stores or proxies the payload.
+  router.post(
+    '/v1/extensions/publisher/artifacts/external',
+    express.json({ limit: '64kb' }),
+    artifactRoute(async (req, res) => {
+      const identity = await identityFor(req, { accountRequired: true });
+      const body = req.body ?? {};
+      const artifact = extensionArtifactStore.registerExternal({
+        actorAccountId: identity.accountId,
+        kind: body.kind,
+        namespace: body.namespace,
+        name: body.name,
+        version: body.version,
+        artifactId: body.artifactId,
+        platform: body.platform,
+        architecture: body.architecture || 'any',
+        format: body.format,
+        digest: body.digest,
+        sizeBytes: body.sizeBytes,
+        url: body.url,
       });
       res.status(201).json({ artifact });
     }),
@@ -383,6 +411,38 @@ export function createMiniAppMarketplaceRouter({
         notes: req.body?.notes,
       });
       res.json({ artifact });
+    }),
+  );
+
+  // Reviewers register artifacts whose bytes were produced and hosted by the delivery
+  // pipeline (public release infrastructure) instead of uploaded through the publisher
+  // route. The registry still owns the digest binding and the release signature.
+  router.post(
+    '/v1/extensions/review/artifacts/:kind/:namespace/:name/:version/external',
+    express.json({ limit: '64kb' }),
+    artifactRoute(async (req, res) => {
+      if (!reviewAuthorized(req)) {
+        throw new ExtensionArtifactStoreError(
+          'REVIEW_AUTH_REQUIRED',
+          'marketplace reviewer authorization is required',
+        );
+      }
+      const body = req.body ?? {};
+      const artifact = extensionArtifactStore.registerExternalForReview({
+        reviewer: body.reviewer ?? 'marketplace-reviewer',
+        kind: req.params.kind,
+        namespace: req.params.namespace,
+        name: req.params.name,
+        version: req.params.version,
+        artifactId: body.artifactId,
+        platform: body.platform,
+        architecture: body.architecture || 'any',
+        format: body.format,
+        digest: body.digest,
+        sizeBytes: body.sizeBytes,
+        url: body.url,
+      });
+      res.status(201).json({ artifact });
     }),
   );
 

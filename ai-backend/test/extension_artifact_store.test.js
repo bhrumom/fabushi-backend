@@ -497,3 +497,239 @@ test('revoked signing key immediately quarantines approved artifact download', (
     scope.close();
   }
 });
+
+const MIRROR_URL = 'https://github.com/bhrumom/global-dandelion-rs/releases/download/v0.2.0/global-dandelion.fabapp';
+
+function signedPayload(scope, artifacts) {
+  const release = scope.releaseStore.getRelease(key());
+  const signingStore = new ExtensionSigningStore({
+    db: scope.accountStore.db,
+    signer: signer('marketplace-key-1', 1),
+    now: () => 1_000,
+  });
+  return JSON.parse(signingStore.signRelease({
+    descriptor: release.descriptor,
+    descriptorDigest: release.descriptorDigest,
+    artifacts,
+  }).payload);
+}
+
+test('registry hosted artifacts keep the canonical payload free of a url field', () => {
+  const scope = fixture();
+  try {
+    scope.artifactStore.upload({
+      actorAccountId: 'user:owner',
+      ...key(),
+      artifactId: 'package',
+      platform: 'all',
+      format: 'fabapp',
+      bytes: Buffer.from('registry bytes'),
+    });
+    const [artifact] = scope.artifactStore.listForRelease(key());
+    assert.equal(artifact.url, '');
+    const payload = signedPayload(scope, scope.artifactStore.listForRelease(key()));
+    assert.equal(Object.hasOwn(payload.artifacts[0], 'url'), false);
+    assert.deepEqual(Object.keys(payload.artifacts[0]), [
+      'artifactId', 'digest', 'sizeBytes', 'platform', 'architecture', 'format',
+    ]);
+  } finally {
+    scope.close();
+  }
+});
+
+test('mirror hosted artifacts register metadata only and sign the download url', () => {
+  const scope = fixture();
+  try {
+    const bytes = Buffer.from('github hosted package bytes');
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    const artifact = scope.artifactStore.registerExternal({
+      actorAccountId: 'user:owner',
+      ...key(),
+      artifactId: 'package',
+      platform: 'all',
+      format: 'fabapp',
+      digest,
+      sizeBytes: bytes.length,
+      url: MIRROR_URL,
+    });
+    assert.equal(artifact.digest, digest);
+    assert.equal(artifact.sizeBytes, bytes.length);
+    assert.equal(artifact.url, MIRROR_URL);
+    assert.equal(artifact.scan.state, 'pending');
+
+    // The registry never stores the bytes for an externally hosted artifact.
+    assert.equal(
+      fs.existsSync(path.join(scope.root, 'extensions', 'artifacts', 'sha256', digest.slice(0, 2), digest)),
+      false,
+    );
+
+    const payload = signedPayload(scope, scope.artifactStore.listForRelease(key()));
+    assert.equal(payload.artifacts[0].url, MIRROR_URL);
+    assert.equal(payload.artifacts[0].digest, digest);
+  } finally {
+    scope.close();
+  }
+});
+
+test('mirror urls are restricted to approved https release hosts', () => {
+  const scope = fixture();
+  try {
+    const digest = crypto.createHash('sha256').update(Buffer.from('x')).digest('hex');
+    const rejected = [
+      'http://github.com/a/b/releases/download/v1/x.fabapp',
+      'https://raw.githubusercontent.com/a/b/main/x.fabapp',
+      'https://github.com.evil.example/a/b',
+      'https://user:pass@github.com/a/b',
+      'https://github.com:8443/a/b',
+      'https://github.com/a/b#fragment',
+      '',
+      'not a url',
+    ];
+    for (const url of rejected) {
+      assert.throws(
+        () => scope.artifactStore.registerExternal({
+          actorAccountId: 'user:owner',
+          ...key(),
+          artifactId: 'package',
+          platform: 'all',
+          format: 'fabapp',
+          digest,
+          sizeBytes: 1,
+          url,
+        }),
+        (error) => error instanceof ExtensionArtifactStoreError
+          && error.code === 'INVALID_ARTIFACT_URL',
+        url,
+      );
+    }
+  } finally {
+    scope.close();
+  }
+});
+
+test('external registration binds digest immutably and requires an approved mirror', () => {
+  const scope = fixture();
+  try {
+    const bytes = Buffer.from('stable bytes');
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    scope.artifactStore.registerExternal({
+      actorAccountId: 'user:owner',
+      ...key(),
+      artifactId: 'package',
+      platform: 'all',
+      format: 'fabapp',
+      digest,
+      sizeBytes: bytes.length,
+      url: MIRROR_URL,
+    });
+    assert.throws(
+      () => scope.artifactStore.registerExternal({
+        actorAccountId: 'user:owner',
+        ...key(),
+        artifactId: 'package',
+        platform: 'all',
+        format: 'fabapp',
+        digest: crypto.createHash('sha256').update(Buffer.from('other')).digest('hex'),
+        sizeBytes: bytes.length,
+        url: MIRROR_URL,
+      }),
+      (error) => error instanceof ExtensionArtifactStoreError
+        && error.code === 'ARTIFACT_BINDING_CONFLICT',
+    );
+
+    // Re-pointing the mirror is allowed while the release is still mutable.
+    const moved = scope.artifactStore.attachUrl({
+      actorAccountId: 'user:owner',
+      ...key(),
+      artifactId: 'package',
+      url: 'https://github.com/bhrumom/global-dandelion-rs/releases/download/v0.2.1/global-dandelion.fabapp',
+    });
+    assert.equal(
+      moved.url,
+      'https://github.com/bhrumom/global-dandelion-rs/releases/download/v0.2.1/global-dandelion.fabapp',
+    );
+
+    // Once reviewed, the signed location is frozen with the artifact.
+    scope.artifactStore.recordScan({
+      reviewer: 'security-reviewer',
+      ...key(),
+      artifactId: 'package',
+      state: 'passed',
+      scanner: 'fabushi-static-scan',
+      scannerVersion: '1.0.0',
+    });
+    scope.releaseStore.submit({ actorAccountId: 'user:owner', ...key() });
+    scope.releaseStore.review({ ...key(), approved: true, reviewer: 'security-reviewer' });
+    assert.throws(
+      () => scope.artifactStore.attachUrl({
+        actorAccountId: 'user:owner',
+        ...key(),
+        artifactId: 'package',
+        url: MIRROR_URL,
+      }),
+      (error) => error instanceof ExtensionArtifactStoreError
+        && error.code === 'ARTIFACT_RELEASE_FROZEN',
+    );
+  } finally {
+    scope.close();
+  }
+});
+
+test('reviewers can bind externally hosted bytes without impersonating the publisher', () => {
+  const scope = fixture();
+  try {
+    const bytes = Buffer.from('delivery pipeline bytes');
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+
+    assert.throws(
+      () => scope.artifactStore.registerExternal({
+        actorAccountId: 'user:reviewer',
+        ...key(),
+        artifactId: 'package',
+        platform: 'all',
+        format: 'fabapp',
+        digest,
+        sizeBytes: bytes.length,
+        url: MIRROR_URL,
+      }),
+      /owned by another account/,
+    );
+
+    assert.throws(
+      () => scope.artifactStore.registerExternalForReview({
+        reviewer: '',
+        ...key(),
+        artifactId: 'package',
+        platform: 'all',
+        format: 'fabapp',
+        digest,
+        sizeBytes: bytes.length,
+        url: MIRROR_URL,
+      }),
+      (error) => error instanceof ExtensionArtifactStoreError
+        && error.code === 'REVIEW_AUTH_REQUIRED',
+    );
+
+    const artifact = scope.artifactStore.registerExternalForReview({
+      reviewer: 'security-reviewer',
+      ...key(),
+      artifactId: 'package',
+      platform: 'all',
+      format: 'fabapp',
+      digest,
+      sizeBytes: bytes.length,
+      url: MIRROR_URL,
+    });
+    assert.equal(artifact.digest, digest);
+    assert.equal(artifact.url, MIRROR_URL);
+
+    const last = scope.accountStore.db
+      .prepare(`SELECT action, actor FROM extension_artifact_audit
+        WHERE digest = ? ORDER BY sequence DESC LIMIT 1`)
+      .get(digest);
+    assert.equal(last.action, 'artifact.registered');
+    assert.equal(last.actor, 'review:security-reviewer');
+  } finally {
+    scope.close();
+  }
+});

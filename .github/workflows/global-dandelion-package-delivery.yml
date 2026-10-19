@@ -1,6 +1,27 @@
 name: Sign Reviewed Global Dandelion Package
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to sign; must match the preparation manifest exactly
+        required: true
+        default: '0.1.0'
+      preparation_release:
+        description: Same-repository draft holding preparation.zip
+        required: true
+        default: dandelion-preparation-fce746b
+      source_commit:
+        description: Exact source SHA recorded by the preparation
+        required: true
+        default: fce746baecc6bbd9f4b12d5862d886cf7f72eda5
+      preparation_artifact_id:
+        description: Actions artifact id of the reviewed preparation
+        required: true
+        default: '11794806976'
+      preparation_digest:
+        description: SHA-256 of the transferred preparation.zip
+        required: true
+        default: 6089817d720da2697e4b3c3019c626a6978c3b11c4c2282865951066a53df018
 permissions:
   contents: read
   actions: read
@@ -15,6 +36,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: production
+    env:
+      DANDELION_RELEASE_TOKEN: ${{ secrets.DANDELION_RELEASE_TOKEN }}
+      DANDELION_VERSION: ${{ inputs.version }}
+      DANDELION_SOURCE_COMMIT: ${{ inputs.source_commit }}
+      DANDELION_PREPARATION_ARTIFACT_ID: ${{ inputs.preparation_artifact_id }}
+      DANDELION_PREPARATION_DIGEST: ${{ inputs.preparation_digest }}
+      RELEASE_TAG: v${{ inputs.version }}
     steps:
       - name: Require canonical main
         run: test "$GITHUB_REF" = refs/heads/main
@@ -25,19 +53,30 @@ jobs:
       - name: Download exact successful reviewed preparation
         env:
           GH_TOKEN: ${{ github.token }}
+          PREPARATION_RELEASE: ${{ inputs.preparation_release }}
         run: |
           set -euo pipefail
           # Private source artifacts cannot be read by a different repo's job
           # token. Admin transfers the exact hashed archive to an unpublished
           # same-repository draft; no cross-repository personal token is stored.
-          gh release download dandelion-preparation-fce746b --repo bhrumom/fabushi-backend --pattern preparation.zip
+          gh release download "$PREPARATION_RELEASE" --repo bhrumom/fabushi-backend --pattern preparation.zip
       - name: Install signature verifier
         run: python3 -m pip install cryptography==46.0.3
       - name: Verify resources, sign through production, verify pinned public key
         env:
           FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
         run: python3 .github/scripts/deliver-dandelion-package.py
+      # Bytes are hosted on the public repository; the release signature and the
+      # pinned trust root stay with the Marketplace. Skipped until the release
+      # token exists, so the signing job keeps working on its own.
+      - name: Publish signed bytes to GitHub Releases and bind them in the registry
+        if: env.DANDELION_RELEASE_TOKEN != ''
+        env:
+          DANDELION_RELEASE_TOKEN: ${{ secrets.DANDELION_RELEASE_TOKEN }}
+          FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
+        run: python3 .github/scripts/publish-github-release.py
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: global-dandelion-signed-delivery-${{ github.sha }}
           path: signed-delivery

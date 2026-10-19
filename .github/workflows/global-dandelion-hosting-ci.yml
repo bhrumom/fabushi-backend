@@ -1,0 +1,28 @@
+name: Global Dandelion GitHub hosting pipeline
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/scripts/*github*release*.py'
+      - '.github/scripts/deliver-dandelion-package.py'
+      - '.github/workflows/global-dandelion-package-delivery.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/scripts/*github*release*.py'
+      - '.github/scripts/deliver-dandelion-package.py'
+      - '.github/workflows/global-dandelion-package-delivery.yml'
+permissions:
+  contents: read
+jobs:
+  pipeline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # Runs the real publish script against a local mock of the GitHub API, its
+      # upload host and the registry. No credentials, no network.
+      - name: Publish pipeline contract
+        run: python3 .github/scripts/test_publish_github_release.py

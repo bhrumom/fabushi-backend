@@ -7,6 +7,15 @@ const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024;
 const SCAN_STATES = new Set(['pending', 'passed', 'rejected']);
+const MAX_ARTIFACT_URL_LENGTH = 2048;
+// Byte hosting is delegated to public release infrastructure. Only these hosts may be
+// named by a signed artifact URL; the host still verifies sha256/size after download, so a
+// compromised repository can serve corrupt bytes but never a different artifact.
+const ARTIFACT_URL_HOSTS = new Set([
+  'github.com',
+  'objects.githubusercontent.com',
+  'release-assets.githubusercontent.com',
+]);
 
 function safeComponent(value, field) {
   const normalized = String(value ?? '').trim().toLocaleLowerCase();
@@ -46,6 +55,36 @@ function optionalComponent(value, fallback, field) {
   return normalized;
 }
 
+function artifactUrl(value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return '';
+  if (normalized.length > MAX_ARTIFACT_URL_LENGTH) {
+    throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_URL', 'artifact url is too long');
+  }
+  let parsed;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_URL', 'artifact url is not a valid absolute url');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_URL', 'artifact url must use https');
+  }
+  if (parsed.username || parsed.password) {
+    throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_URL', 'artifact url must not embed credentials');
+  }
+  if (parsed.port && parsed.port !== '443') {
+    throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_URL', 'artifact url must not use a non-default port');
+  }
+  if (!ARTIFACT_URL_HOSTS.has(parsed.hostname.toLowerCase())) {
+    throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_URL', 'artifact url host is not an approved mirror');
+  }
+  if (parsed.hash) {
+    throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_URL', 'artifact url must not carry a fragment');
+  }
+  return parsed.toString();
+}
+
 function publicArtifact(row) {
   if (!row) return null;
   return {
@@ -55,6 +94,7 @@ function publicArtifact(row) {
     platform: row.platform,
     architecture: row.architecture,
     format: row.format,
+    url: row.artifactUrl || '',
     scan: {
       state: row.scanState,
       scanner: row.scanner || '',
@@ -111,6 +151,7 @@ export class ExtensionArtifactStore {
         platform TEXT NOT NULL,
         architecture TEXT NOT NULL,
         format TEXT NOT NULL,
+        artifact_url TEXT NOT NULL DEFAULT '',
         scan_state TEXT NOT NULL DEFAULT 'pending',
         scanner TEXT,
         scanner_version TEXT,
@@ -138,13 +179,23 @@ export class ExtensionArtifactStore {
       CREATE INDEX IF NOT EXISTS idx_extension_artifact_audit_digest_sequence
         ON extension_artifact_audit (digest, sequence ASC);
     `);
+    const columns = this.db
+      .prepare('PRAGMA table_info(extension_release_artifacts)')
+      .all()
+      .map((column) => column.name);
+    if (!columns.includes('artifact_url')) {
+      this.db.exec(
+        "ALTER TABLE extension_release_artifacts ADD COLUMN artifact_url TEXT NOT NULL DEFAULT ''",
+      );
+    }
   }
 
   #prepare() {
     const select = `
       SELECT kind, namespace, name, version,
         artifact_id AS artifactId, digest, size_bytes AS sizeBytes,
-        platform, architecture, format, scan_state AS scanState,
+        platform, architecture, format, artifact_url AS artifactUrl,
+        scan_state AS scanState,
         scanner, scanner_version AS scannerVersion,
         scan_notes AS scanNotes, scanned_at_ms AS scannedAtMs,
         created_at_ms AS createdAtMs
@@ -158,11 +209,17 @@ export class ExtensionArtifactStore {
       insertBinding: this.db.prepare(`
         INSERT INTO extension_release_artifacts (
           kind, namespace, name, version, artifact_id, digest, size_bytes,
-          platform, architecture, format, scan_state, created_at_ms
+          platform, architecture, format, artifact_url, scan_state, created_at_ms
         ) VALUES (
           @kind, @namespace, @name, @version, @artifactId, @digest, @sizeBytes,
-          @platform, @architecture, @format, 'pending', @createdAtMs
+          @platform, @architecture, @format, @artifactUrl, 'pending', @createdAtMs
         )
+      `),
+      setArtifactUrl: this.db.prepare(`
+        UPDATE extension_release_artifacts
+        SET artifact_url = @artifactUrl
+        WHERE kind = @kind AND namespace = @namespace AND name = @name
+          AND version = @version AND artifact_id = @artifactId
       `),
       listRelease: this.db.prepare(`${select}
         WHERE kind = ? AND namespace = ? AND name = ? AND version = ?
@@ -249,6 +306,7 @@ export class ExtensionArtifactStore {
     architecture = 'any',
     format,
     bytes,
+    url = '',
   }) {
     const key = releaseKey({ kind, namespace, name, version });
     this.publisherStore.assertOwned(key.namespace, actorAccountId);
@@ -260,6 +318,7 @@ export class ExtensionArtifactStore {
       throw new ExtensionArtifactStoreError('ARTIFACT_RELEASE_FROZEN', 'artifacts cannot be added after review');
     }
     const id = artifactId(rawArtifactId);
+    const mirrorUrl = artifactUrl(url);
     const body = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes ?? []);
     if (body.length <= 0 || body.length > this.maxArtifactBytes) {
       throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_SIZE', 'artifact size is outside allowed bounds');
@@ -269,6 +328,9 @@ export class ExtensionArtifactStore {
     if (existing) {
       if (existing.digest !== digest) {
         throw new ExtensionArtifactStoreError('ARTIFACT_BINDING_CONFLICT', 'artifact id is immutable for this release');
+      }
+      if (mirrorUrl && mirrorUrl !== existing.artifactUrl) {
+        return this.attachUrl({ actorAccountId, ...key, artifactId: id, url: mirrorUrl });
       }
       return publicArtifact(existing);
     }
@@ -283,12 +345,127 @@ export class ExtensionArtifactStore {
       platform: optionalComponent(platform, 'all', 'platform'),
       architecture: optionalComponent(architecture, 'any', 'architecture'),
       format: optionalComponent(format, 'binary', 'format'),
+      artifactUrl: mirrorUrl,
       createdAtMs: now,
     });
     this.#audit(digest, 'artifact.uploaded', actorAccountId, {
       ...key,
       artifactId: id,
       sizeBytes: body.length,
+      ...(mirrorUrl ? { url: mirrorUrl } : {}),
+    });
+    return publicArtifact(this.s.getBinding.get(key.kind, key.namespace, key.name, key.version, id));
+  }
+
+  // Records artifact metadata whose bytes live on an approved public mirror. The registry
+  // never stores the bytes; it only binds (digest, size) to a signed download location.
+  registerExternal({
+    actorAccountId,
+    kind,
+    namespace,
+    name,
+    version,
+    artifactId: rawArtifactId,
+    platform,
+    architecture = 'any',
+    format,
+    digest: rawDigest,
+    sizeBytes: rawSizeBytes,
+    url,
+  }) {
+    const key = releaseKey({ kind, namespace, name, version });
+    this.publisherStore.assertOwned(key.namespace, actorAccountId);
+    return this.#bindExternal(key, {
+      actor: actorAccountId, artifactId: rawArtifactId, platform, architecture, format,
+      digest: rawDigest, sizeBytes: rawSizeBytes, url,
+    });
+  }
+
+  // Reviewers may bind a mirror location on behalf of the publisher when the bytes
+  // were produced by the delivery pipeline rather than uploaded by the publisher.
+  registerExternalForReview({ reviewer, kind, namespace, name, version, ...rest }) {
+    const label = String(reviewer ?? '').trim().slice(0, 160);
+    if (!label) {
+      throw new ExtensionArtifactStoreError('REVIEW_AUTH_REQUIRED', 'a reviewer identity is required');
+    }
+    const key = releaseKey({ kind, namespace, name, version });
+    return this.#bindExternal(key, { ...rest, actor: `review:${label}` });
+  }
+
+  #bindExternal(key, {
+    actor, artifactId: rawArtifactId, platform, architecture = 'any', format,
+    digest: rawDigest, sizeBytes: rawSizeBytes, url,
+  }) {
+    const release = this.releaseStore.getRelease(key);
+    if (!release) {
+      throw new ExtensionArtifactStoreError('RELEASE_NOT_FOUND', 'release must exist before artifact registration');
+    }
+    if (!['draft', 'pending_review'].includes(release.state)) {
+      throw new ExtensionArtifactStoreError('ARTIFACT_RELEASE_FROZEN', 'artifacts cannot be added after review');
+    }
+    const id = artifactId(rawArtifactId);
+    const digest = String(rawDigest ?? '').trim().toLocaleLowerCase();
+    if (!DIGEST_PATTERN.test(digest)) {
+      throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_DIGEST', 'artifact digest is invalid');
+    }
+    const sizeBytes = Number(rawSizeBytes);
+    if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0 || sizeBytes > this.maxArtifactBytes) {
+      throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_SIZE', 'artifact size is outside allowed bounds');
+    }
+    const mirrorUrl = artifactUrl(url);
+    if (!mirrorUrl) {
+      throw new ExtensionArtifactStoreError('INVALID_ARTIFACT_URL', 'external artifacts require a download url');
+    }
+    const existing = this.s.getBinding.get(key.kind, key.namespace, key.name, key.version, id);
+    if (existing) {
+      if (existing.digest !== digest || Number(existing.sizeBytes) !== sizeBytes) {
+        throw new ExtensionArtifactStoreError('ARTIFACT_BINDING_CONFLICT', 'artifact id is immutable for this release');
+      }
+      if (mirrorUrl !== existing.artifactUrl) {
+        return this.#bindUrl(key, id, mirrorUrl, actor);
+      }
+      return publicArtifact(existing);
+    }
+    this.s.insertBinding.run({
+      ...key,
+      artifactId: id,
+      digest,
+      sizeBytes,
+      platform: optionalComponent(platform, 'all', 'platform'),
+      architecture: optionalComponent(architecture, 'any', 'architecture'),
+      format: optionalComponent(format, 'binary', 'format'),
+      artifactUrl: mirrorUrl,
+      createdAtMs: this.now(),
+    });
+    this.#audit(digest, 'artifact.registered', actor, {
+      ...key,
+      artifactId: id,
+      sizeBytes,
+      url: mirrorUrl,
+    });
+    return publicArtifact(this.s.getBinding.get(key.kind, key.namespace, key.name, key.version, id));
+  }
+
+  attachUrl({ actorAccountId, kind, namespace, name, version, artifactId: rawArtifactId, url }) {
+    const key = releaseKey({ kind, namespace, name, version });
+    this.publisherStore.assertOwned(key.namespace, actorAccountId);
+    return this.#bindUrl(key, artifactId(rawArtifactId), artifactUrl(url), actorAccountId);
+  }
+
+  #bindUrl(key, id, mirrorUrl, actor) {
+    const existing = this.s.getBinding.get(key.kind, key.namespace, key.name, key.version, id);
+    if (!existing) {
+      throw new ExtensionArtifactStoreError('ARTIFACT_NOT_FOUND', 'artifact is not registered for this release');
+    }
+    const release = this.releaseStore.getRelease(key);
+    if (!release || !['draft', 'pending_review'].includes(release.state)) {
+      throw new ExtensionArtifactStoreError('ARTIFACT_RELEASE_FROZEN', 'artifacts cannot change after review');
+    }
+    this.s.setArtifactUrl.run({ ...key, artifactId: id, artifactUrl: mirrorUrl });
+    this.#audit(existing.digest, 'artifact.url_bound', actor, {
+      ...key,
+      artifactId: id,
+      url: mirrorUrl,
     });
     return publicArtifact(this.s.getBinding.get(key.kind, key.namespace, key.name, key.version, id));
   }

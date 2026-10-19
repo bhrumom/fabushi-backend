@@ -1,0 +1,208 @@
+"""Publish signed Global Dandelion bytes to a public GitHub Release and bind the
+download location in the Marketplace registry.
+
+The registry keeps the trust root and the release signature; GitHub only stores
+bytes. The signed payload gains a `url` only after the asset is confirmed present
+with the exact byte count, so the host can verify sha256/size after download and
+still refuse a substituted artifact.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# Overridable so the pipeline can be exercised against a local mock without
+# touching the real release repository.
+PUBLIC_REPOSITORY = os.environ.get('PUBLIC_REPOSITORY', 'bhrumom/global-dandelion-rs')
+APP_ID = 'org.fabushi.global-dandelion'
+IDENTITY = {'kind': 'web-miniapp', 'namespace': 'bhrumom', 'name': 'global-dandelion'}
+MAX_BYTES = 32 * 1024 * 1024
+API = os.environ.get('GITHUB_API', 'https://api.github.com').rstrip('/')
+UPLOADS = os.environ.get('GITHUB_UPLOADS', 'https://uploads.github.com').rstrip('/')
+
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(',', ':'), allow_nan=False).encode('utf-8')
+
+
+def request(url, method='GET', body=None, headers=None, accept='application/vnd.github+json'):
+    merged = {'Accept': accept, 'User-Agent': 'Fabushi-Marketplace-Delivery/1'}
+    if headers:
+        merged.update(headers)
+    req = urllib.request.Request(url, data=body, method=method, headers=merged)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            return response.status, response.read(2 * 1024 * 1024)
+    except urllib.error.HTTPError as error:
+        return error.code, error.read(2 * 1024 * 1024)
+
+
+def signed_package():
+    directory = Path(os.environ.get('SIGNED_DIR', 'signed-delivery'))
+    candidates = sorted(directory.glob('global-dandelion-*.fabapp'))
+    if len(candidates) != 1:
+        raise ValueError('expected exactly one signed fabapp')
+    target = candidates[0]
+    version = target.name[len('global-dandelion-'):-len('.fabapp')]
+    raw = target.read_bytes()
+    if not raw or len(raw) > MAX_BYTES:
+        raise ValueError('signed package size is outside bounds')
+    provenance = json.loads((directory / 'provenance.json').read_text(encoding='utf-8'))
+    digest = hashlib.sha256(raw).hexdigest()
+    if provenance.get('packageSha256') != digest:
+        raise ValueError('provenance digest does not match the signed package')
+    return target, version, digest, len(raw), provenance
+
+
+def ensure_release(token, tag, version):
+    """Create the release if it is absent; an existing release is reused as-is."""
+    status, body = request(
+        f'{API}/repos/{PUBLIC_REPOSITORY}/releases/tags/{urllib.parse.quote(tag)}',
+        headers={'Authorization': f'Bearer {token}'})
+    if status == 200:
+        release = json.loads(body)
+        if release.get('draft') or release.get('prerelease'):
+            raise ValueError('release must be published, not draft/prerelease')
+        return release['id']
+    if status != 404:
+        raise ValueError(f'release lookup failed with {status}')
+    status, body = request(
+        f'{API}/repos/{PUBLIC_REPOSITORY}/releases', method='POST',
+        body=canonical({
+            'tag_name': tag,
+            'name': f'Global Dandelion {version}',
+            'body': ('Signed Marketplace package. Bytes are hosted here; the release '
+                     'signature and trust root stay with the Fabushi Marketplace.'),
+            'draft': False,
+            'prerelease': False,
+        }),
+        headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+    if status != 201:
+        raise ValueError(f'release creation failed with {status}')
+    return json.loads(body)['id']
+
+
+def uploaded_asset_size(token, release_id, name):
+    status, body = request(
+        f'{API}/repos/{PUBLIC_REPOSITORY}/releases/{release_id}/assets?per_page=100',
+        headers={'Authorization': f'Bearer {token}'})
+    if status != 200:
+        raise ValueError(f'asset listing failed with {status}')
+    for asset in json.loads(body):
+        if asset.get('name') == name and asset.get('state') == 'uploaded':
+            return int(asset['size'])
+    return None
+
+
+def upload_asset(token, release_id, name, payload):
+    existing = uploaded_asset_size(token, release_id, name)
+    if existing is not None:
+        # Releases are immutable evidence: never replace a published asset.
+        if existing != len(payload):
+            raise ValueError('published asset has a different size than the signed package')
+        return
+    status, _ = request(
+        f'{UPLOADS}/repos/{PUBLIC_REPOSITORY}/releases/{release_id}/assets'
+        f'?name={urllib.parse.quote(name)}',
+        method='POST', body=payload,
+        headers={'Authorization': f'Bearer {token}',
+                 'Content-Type': 'application/octet-stream'})
+    if status != 201:
+        raise ValueError(f'asset upload failed with {status}')
+    if uploaded_asset_size(token, release_id, name) != len(payload):
+        raise ValueError('uploaded asset size does not match the signed package')
+
+
+def register(origin, token, version, digest, size, url):
+    body = canonical({
+        'artifactId': 'universal-ui',
+        'platform': 'all',
+        'architecture': 'any',
+        'format': 'fabapp',
+        'digest': digest,
+        'sizeBytes': size,
+        'url': url,
+        'reviewer': 'marketplace-release-pipeline',
+    })
+    status, raw = request(
+        f'{origin}/v1/extensions/review/artifacts/'
+        f'{IDENTITY["kind"]}/{IDENTITY["namespace"]}/{IDENTITY["name"]}/{version}/external',
+        method='POST', body=body,
+        headers={'Content-Type': 'application/json',
+                 'x-fabushi-marketplace-review-token': token},
+        accept='application/json')
+    if status != 201:
+        raise ValueError(f'artifact registration failed with {status}')
+    return json.loads(raw)['artifact']
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--skip-upload', action='store_true',
+                        help='only bind an already published asset')
+    parser.add_argument('--skip-register', action='store_true',
+                        help='only publish bytes; bind later once the release record exists')
+    args = parser.parse_args()
+    if args.skip_upload and args.skip_register:
+        raise ValueError('nothing to do')
+    token = os.environ.get('DANDELION_RELEASE_TOKEN', '')
+    review = os.environ.get('FABUSHI_MARKETPLACE_REVIEW_TOKEN', '')
+    origin = os.environ.get('REGISTRY_ORIGIN', 'https://api.ombhrum.com').rstrip('/')
+    if not token and not args.skip_upload:
+        raise ValueError('public release token missing')
+    if not review and not args.skip_register:
+        raise ValueError('review authorization missing')
+    target, version, digest, size, provenance = signed_package()
+    tag = os.environ.get('RELEASE_TAG') or f'v{version}'
+    # The download host is always github.com even when the API is mocked: the
+    # registry only ever stores the real public location.
+    url = f'https://github.com/{PUBLIC_REPOSITORY}/releases/download/{tag}/{target.name}'
+    if args.skip_upload:
+        print('phase=asset-upload skipped', flush=True)
+    else:
+        print(f'phase=release-ensure version={version} tag={tag}', flush=True)
+        release_id = ensure_release(token, tag, version)
+        print('phase=asset-upload', flush=True)
+        upload_asset(token, release_id, target.name, target.read_bytes())
+    artifact = None
+    if args.skip_register:
+        print('phase=registry-binding skipped', flush=True)
+    else:
+        print('phase=registry-binding', flush=True)
+        artifact = register(origin, review, version, digest, size, url)
+    evidence = {
+        'appId': APP_ID,
+        'identity': IDENTITY,
+        'version': version,
+        'releaseTag': tag,
+        'repository': PUBLIC_REPOSITORY,
+        'artifactId': (artifact or {}).get('artifactId', 'universal-ui'),
+        'digest': digest,
+        'sizeBytes': size,
+        'url': url,
+        'sourceCommit': provenance.get('sourceCommit'),
+        'signerKeyId': provenance.get('signerKeyId'),
+        'trustEpoch': provenance.get('trustEpoch'),
+        'deliveryRun': os.environ.get('GITHUB_RUN_ID'),
+        'status': ('github-hosted-signed-not-published' if artifact
+                   else 'github-hosted-signed-not-registered'),
+    }
+    (target.parent / 'publish.json').write_bytes(canonical(evidence))
+    print(json.dumps(evidence))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as error:
+        # Never echo response bodies, headers or credentials.
+        status = str(error.code) if isinstance(error, urllib.error.HTTPError) else 'none'
+        print('GitHub hosting failed; class=' + type(error).__name__
+              + '; http=' + status + '; no package published.', file=sys.stderr)
+        sys.exit(1)

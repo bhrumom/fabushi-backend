@@ -13,9 +13,14 @@ import zipfile
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-SOURCE = 'fce746baecc6bbd9f4b12d5862d886cf7f72eda5'
-ARTIFACT = 11794806976
-ARCHIVE_DIGEST = '6089817d720da2697e4b3c3019c626a6978c3b11c4c2282865951066a53df018'
+# Per-release evidence pins. Defaults keep the 0.1.0 delivery reproducible; every
+# later release supplies its own reviewed values instead of editing this file.
+SOURCE = os.environ.get('DANDELION_SOURCE_COMMIT', 'fce746baecc6bbd9f4b12d5862d886cf7f72eda5')
+ARTIFACT = int(os.environ.get('DANDELION_PREPARATION_ARTIFACT_ID', '11794806976'))
+ARCHIVE_DIGEST = os.environ.get(
+    'DANDELION_PREPARATION_DIGEST',
+    '6089817d720da2697e4b3c3019c626a6978c3b11c4c2282865951066a53df018')
+VERSION = os.environ.get('DANDELION_VERSION', '0.1.0')
 KEY_ID = 'fabushi-marketplace-managed-20261013-1'
 PUBLIC_KEY = 'VbvgbVxNAeftFYB0l1-NzE2-Gx3d4NQ7hkKiQ0HMpu0'
 DOMAIN = b'fabushi.fabapp.manifest.v1\0'
@@ -66,7 +71,7 @@ def preparation(data):
     files = members(data)
     manifest = parse(files.pop('manifest.json'))
     if ('signature' in manifest or manifest['appId'] != 'org.fabushi.global-dandelion'
-            or manifest['publisherId'] != 'bhrumom' or manifest['version'] != '0.1.0'
+            or manifest['publisherId'] != 'bhrumom' or manifest['version'] != VERSION
             or manifest['requestedCapabilities'] != [] or not manifest['offlineCore']
             or manifest['networkPolicy'] != {'mode': 'deny', 'allowedOrigins': []}
             or set(files) != set(manifest['files'])):
@@ -125,7 +130,7 @@ def main():
     signed = verify_response(unsigned, parse(body))
     output = Path('signed-delivery')
     output.mkdir(exist_ok=False)
-    target = output / 'global-dandelion-0.1.0.fabapp'
+    target = output / f'global-dandelion-{VERSION}.fabapp'
     with zipfile.ZipFile(target, 'x', compression=zipfile.ZIP_STORED) as bundle:
         for name, payload in [('manifest.json', canonical(signed))] + sorted(files.items()):
             info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
@@ -137,7 +142,7 @@ def main():
                   'backendCommit': os.environ['GITHUB_SHA'], 'deliveryRun': os.environ['GITHUB_RUN_ID'],
                   'packageSha256': hashlib.sha256(target.read_bytes()).hexdigest(),
                   'signerKeyId': KEY_ID, 'trustEpoch': 1, 'status': 'integrity-signed-not-published',
-                  'license': 'LicenseRef-Proprietary', 'nativeFeaturesAvailable': False}
+                  'license': 'MIT OR Apache-2.0', 'nativeFeaturesAvailable': False}
     (output / 'provenance.json').write_bytes(canonical(provenance))
     print(json.dumps(provenance))
 

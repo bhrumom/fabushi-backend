@@ -27,6 +27,7 @@ export function readExtensionInstallProof({ releaseStore, artifactStore, signing
     artifactId: String(artifact.artifactId), digest: String(artifact.digest),
     sizeBytes: Number(artifact.sizeBytes), platform: String(artifact.platform),
     architecture: String(artifact.architecture), format: String(artifact.format),
+    ...(artifact.url ? { url: String(artifact.url) } : {}),
   })).sort((a, b) => a.artifactId.localeCompare(b.artifactId));
   if (JSON.stringify(bound) !== JSON.stringify(signed.artifacts)
     || !/^[0-9a-f]{64}$/.test(descriptor.release.bundleDigest ?? '')
