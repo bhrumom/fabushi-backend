@@ -206,8 +206,26 @@ def main():
         # 8. Both phases skipped is a configuration error, not a silent no-op.
         result, _, _ = run(state, base, args=['--skip-upload', '--skip-register'])
         assert result.returncode == 1
+
+        # 9. With no cross-repository token the job's own public repository hosts
+        #    the bytes, so delivery never depends on a stored personal token.
+        result, evidence, digest = run(state, base, extra_env={
+            'DANDELION_RELEASE_TOKEN': '',
+            'DANDELION_HOST_TOKEN': 'job-token',
+            'DANDELION_HOST_REPOSITORY': 'bhrumom/fabushi-backend',
+        })
+        assert result.returncode == 0, result.stderr
+        assert evidence['repository'] == 'bhrumom/fabushi-backend'
+        assert evidence['url'].startswith(
+            'https://github.com/bhrumom/fabushi-backend/releases/download/')
+        assert evidence['digest'] == digest
+        assert state.registrations[-1]['url'] == evidence['url']
+
+        # 10. No token of either kind is a hard failure, not a silent skip.
+        result, _, _ = run(state, base, extra_env={'DANDELION_RELEASE_TOKEN': ''})
+        assert result.returncode == 1
         print('publish pipeline ok: create, upload, register, idempotent, immutable, '
-              'phase-split, fail-closed')
+              'phase-split, host-fallback, fail-closed')
     finally:
         server.shutdown()
         server.server_close()

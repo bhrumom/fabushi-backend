@@ -66,13 +66,15 @@ jobs:
         env:
           FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
         run: python3 .github/scripts/deliver-dandelion-package.py
-      # Bytes are hosted on the public repository; the release signature and the
-      # pinned trust root stay with the Marketplace. Skipped until the release
-      # token exists, so the signing job keeps working on its own.
+      # Bytes are hosted on GitHub Releases; the release signature and the pinned
+      # trust root stay with the Marketplace. A cross-repository token writes to
+      # the mini-app repository; without one the job's own token publishes into
+      # this public repository, so no stored personal token is required.
       - name: Publish signed bytes to GitHub Releases and bind them in the registry
-        if: env.DANDELION_RELEASE_TOKEN != ''
         env:
           DANDELION_RELEASE_TOKEN: ${{ secrets.DANDELION_RELEASE_TOKEN }}
+          DANDELION_HOST_TOKEN: ${{ github.token }}
+          DANDELION_HOST_REPOSITORY: ${{ github.repository }}
           FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
         run: python3 .github/scripts/publish-github-release.py
       - uses: actions/upload-artifact@v4

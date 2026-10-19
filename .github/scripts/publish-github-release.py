@@ -16,14 +16,32 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-# Overridable so the pipeline can be exercised against a local mock without
-# touching the real release repository.
-PUBLIC_REPOSITORY = os.environ.get('PUBLIC_REPOSITORY', 'bhrumom/global-dandelion-rs')
+# Where the bytes live. Two accepted arrangements, in preference order:
+#   1. the public mini-app repository, written with a cross-repository token;
+#   2. the repository this job already runs in, written with its own token.
+# Both are public GitHub Releases; neither can alter the release signature, so
+# the trust root stays with the Marketplace either way.
+PREFERRED_REPOSITORY = os.environ.get('PUBLIC_REPOSITORY', 'bhrumom/global-dandelion-rs')
 APP_ID = 'org.fabushi.global-dandelion'
 IDENTITY = {'kind': 'web-miniapp', 'namespace': 'bhrumom', 'name': 'global-dandelion'}
 MAX_BYTES = 32 * 1024 * 1024
 API = os.environ.get('GITHUB_API', 'https://api.github.com').rstrip('/')
 UPLOADS = os.environ.get('GITHUB_UPLOADS', 'https://uploads.github.com').rstrip('/')
+
+
+def resolve_host():
+    """Pick the release repository and the token that is allowed to write it."""
+    cross_repository = os.environ.get('DANDELION_RELEASE_TOKEN', '')
+    if cross_repository:
+        return PREFERRED_REPOSITORY, cross_repository
+    own = os.environ.get('DANDELION_HOST_TOKEN', '')
+    own_repository = os.environ.get('DANDELION_HOST_REPOSITORY', '')
+    if own and own_repository:
+        return own_repository, own
+    return PREFERRED_REPOSITORY, ''
+
+
+PUBLIC_REPOSITORY, RELEASE_TOKEN = resolve_host()
 
 
 def canonical(value):
@@ -151,7 +169,7 @@ def main():
     args = parser.parse_args()
     if args.skip_upload and args.skip_register:
         raise ValueError('nothing to do')
-    token = os.environ.get('DANDELION_RELEASE_TOKEN', '')
+    token = RELEASE_TOKEN
     review = os.environ.get('FABUSHI_MARKETPLACE_REVIEW_TOKEN', '')
     origin = os.environ.get('REGISTRY_ORIGIN', 'https://api.ombhrum.com').rstrip('/')
     if not token and not args.skip_upload:
