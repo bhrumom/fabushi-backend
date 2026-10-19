@@ -35,6 +35,8 @@ class State:
         self.scans = []
         self.approvals = []
         self.release_state = None
+        # When set, the import route is absent, as on a not-yet-deployed node.
+        self.missing_import = False
 
 
 def make_handler(state):
@@ -93,6 +95,9 @@ def make_handler(state):
                         'message': 'secret detail that must never be echoed'}})
                 sent = json.loads(body)
                 if parsed.path.endswith('/import'):
+                    if state.missing_import:
+                        # Express answers an unregistered route with HTML.
+                        return self._send(404, b'<html>Cannot POST</html>')
                     if state.release_imports and state.release_imports[-1]['descriptor'] != sent['descriptor']:
                         return self._send(409, {'success': False, 'error': {
                             'code': 'RELEASE_CONFLICT', 'message': 'different descriptor'}})
@@ -305,6 +310,15 @@ def main():
         result, _, _ = run(state, base, args=['--approve', '--skip-register'])
         assert result.returncode == 1
         assert 'reason=approval requires registry binding' in result.stderr, result.stderr
+
+        # 14. An undeployed import route is named as such, not as a bad request.
+        state.missing_import = True
+        try:
+            result, _, _ = run(state, base)
+        finally:
+            state.missing_import = False
+        assert result.returncode == 1
+        assert 'reason=release import failed with 404 ROUTE_NOT_DEPLOYED' in result.stderr, result.stderr
         print('publish pipeline ok: create, upload, import, register, scan, approve, '
               'idempotent, immutable, phase-split, host-fallback, safe-diagnostics, fail-closed')
     finally:

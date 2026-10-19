@@ -162,7 +162,9 @@ def service_code(raw):
     try:
         payload = json.loads(raw)
     except Exception:
-        return 'non-contract'
+        # Express answers an unregistered route with HTML, so a non-JSON body
+        # means the code is not deployed rather than that the request was wrong.
+        return 'ROUTE_NOT_DEPLOYED'
     error = payload.get('error')
     code = error.get('code') if isinstance(error, dict) else error
     return code if isinstance(code, str) and SAFE_SERVICE_CODE.match(code) else 'non-contract'
