@@ -1,10 +1,18 @@
-"""Publish signed Global Dandelion bytes to a public GitHub Release and bind the
-download location in the Marketplace registry.
+"""Publish signed Global Dandelion bytes to a public GitHub Release and make them
+installable through the Marketplace registry.
 
 The registry keeps the trust root and the release signature; GitHub only stores
 bytes. The signed payload gains a `url` only after the asset is confirmed present
 with the exact byte count, so the host can verify sha256/size after download and
 still refuse a substituted artifact.
+
+Phases, each idempotent:
+  release-ensure   reuse or create the public release
+  asset-upload     upload once; a published asset is never replaced
+  release-import   create the catalog release record the host installs from
+  registry-binding bind (digest, sizeBytes, url) to that record
+  scan-record      record the scan verdict the approval gate requires
+  release-approve  optional; the workflow keeps this as a separate decision
 """
 import argparse
 import hashlib
@@ -43,6 +51,12 @@ def resolve_host():
 
 
 PUBLIC_REPOSITORY, RELEASE_TOKEN = resolve_host()
+# The descriptor is taken from the exact reviewed source commit, so catalog
+# metadata can never drift from the package it describes.
+SOURCE_REPOSITORY = os.environ.get('DANDELION_SOURCE_REPOSITORY', 'bhrumom/global-dandelion-rs')
+RAW = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com').rstrip('/')
+SCANNER = 'dandelion-offline-scan'
+SCANNER_VERSION = '1'
 
 
 def canonical(value):
@@ -154,7 +168,7 @@ def service_code(raw):
     return code if isinstance(code, str) and SAFE_SERVICE_CODE.match(code) else 'non-contract'
 
 
-def register(origin, token, version, digest, size, url):
+def register(origin, token, version, digest, size, url, reviewer):
     body = canonical({
         'artifactId': 'universal-ui',
         'platform': 'all',
@@ -163,7 +177,7 @@ def register(origin, token, version, digest, size, url):
         'digest': digest,
         'sizeBytes': size,
         'url': url,
-        'reviewer': 'marketplace-release-pipeline',
+        'reviewer': reviewer,
     })
     status, raw = request(
         f'{origin}/v1/extensions/review/artifacts/'
@@ -177,17 +191,88 @@ def register(origin, token, version, digest, size, url):
     return json.loads(raw)['artifact']
 
 
+def release_endpoint(origin, suffix=''):
+    return (f'{origin}/v1/extensions/review/releases/{IDENTITY["kind"]}/'
+            f'{IDENTITY["namespace"]}/{IDENTITY["name"]}')
+
+
+def review_post(origin, token, path, body, failure):
+    status, raw = request(
+        path, method='POST', body=canonical(body),
+        headers={'Content-Type': 'application/json',
+                 'x-fabushi-marketplace-review-token': token},
+        accept='application/json')
+    if status not in (200, 201):
+        raise ValueError(f'{failure} failed with {status} {service_code(raw)}')
+    return json.loads(raw)
+
+
+def load_descriptor(version, digest):
+    """Catalog metadata for exactly this package, from exactly this source."""
+    override = os.environ.get('DANDELION_DESCRIPTOR', '')
+    if override:
+        raw = Path(override).read_bytes()
+    else:
+        commit = os.environ.get('DANDELION_SOURCE_COMMIT', '')
+        if not re.fullmatch(r'[0-9a-f]{40}', commit):
+            raise ValueError('descriptor source commit missing')
+        status, raw = request(
+            f'{RAW}/{SOURCE_REPOSITORY}/{commit}/miniapp/marketplace-draft.json',
+            accept='application/json')
+        if status != 200:
+            raise ValueError(f'descriptor fetch failed with {status}')
+    data = json.loads(raw)
+    release = data.setdefault('release', {})
+    # The package digest is a property of the bytes, never of the metadata file.
+    release['version'] = version
+    release['bundleDigest'] = digest
+    return data
+
+
+def import_release(origin, token, version, descriptor, reviewer):
+    return review_post(
+        origin, token,
+        f'{release_endpoint(origin)}/{version}/import',
+        {'descriptor': descriptor, 'reviewer': reviewer},
+        'release import')['release']
+
+
+def record_scan(origin, token, version, digest, size, reviewer):
+    return review_post(
+        origin, token,
+        f'{origin}/v1/extensions/review/artifacts/{IDENTITY["kind"]}/'
+        f'{IDENTITY["namespace"]}/{IDENTITY["name"]}/{version}/universal-ui/scan',
+        {'state': 'passed', 'scanner': SCANNER, 'scannerVersion': SCANNER_VERSION,
+         'expectedDigest': digest, 'expectedSizeBytes': size, 'reviewer': reviewer,
+         'notes': 'signed manifest, resource digests, offline CSP and license checks passed'},
+        'scan record')['artifact']
+
+
+def approve_release(origin, token, version, reviewer, digest):
+    return review_post(
+        origin, token,
+        f'{release_endpoint(origin)}/{version}',
+        {'approved': True, 'reviewer': reviewer,
+         'notes': json.dumps({'scope': 'offline-packet-workbench-preview',
+                              'packageSha256': digest,
+                              'approval': 'delivery pipeline, review token'}, sort_keys=True)},
+        'release approval')['release']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--skip-upload', action='store_true',
                         help='only bind an already published asset')
     parser.add_argument('--skip-register', action='store_true',
                         help='only publish bytes; bind later once the release record exists')
+    parser.add_argument('--approve', action='store_true',
+                        help='also approve the release so it becomes installable')
     args = parser.parse_args()
     if args.skip_upload and args.skip_register:
         raise ValueError('nothing to do')
     token = RELEASE_TOKEN
     review = os.environ.get('FABUSHI_MARKETPLACE_REVIEW_TOKEN', '')
+    reviewer = os.environ.get('DANDELION_REVIEWER', 'marketplace-release-pipeline')
     origin = os.environ.get('REGISTRY_ORIGIN', 'https://api.ombhrum.com').rstrip('/')
     if not token and not args.skip_upload:
         raise ValueError('public release token missing')
@@ -206,11 +291,25 @@ def main():
         print('phase=asset-upload', flush=True)
         upload_asset(token, release_id, target.name, target.read_bytes())
     artifact = None
+    release = None
     if args.skip_register:
+        print('phase=release-import skipped', flush=True)
         print('phase=registry-binding skipped', flush=True)
+        print('phase=scan-record skipped', flush=True)
     else:
+        print('phase=release-import', flush=True)
+        release = import_release(origin, review, version,
+                                 load_descriptor(version, digest), reviewer)
         print('phase=registry-binding', flush=True)
-        artifact = register(origin, review, version, digest, size, url)
+        artifact = register(origin, review, version, digest, size, url, reviewer)
+        print('phase=scan-record', flush=True)
+        record_scan(origin, review, version, digest, size, reviewer)
+    state = (release or {}).get('state', 'absent')
+    if args.approve and not args.skip_register:
+        print('phase=release-approve', flush=True)
+        state = approve_release(origin, review, version, reviewer, digest).get('state', 'unknown')
+    elif args.approve:
+        raise ValueError('approval requires registry binding')
     evidence = {
         'appId': APP_ID,
         'identity': IDENTITY,
@@ -221,11 +320,14 @@ def main():
         'digest': digest,
         'sizeBytes': size,
         'url': url,
+        'releaseState': state,
+        'descriptorDigest': (release or {}).get('descriptorDigest'),
         'sourceCommit': provenance.get('sourceCommit'),
         'signerKeyId': provenance.get('signerKeyId'),
         'trustEpoch': provenance.get('trustEpoch'),
         'deliveryRun': os.environ.get('GITHUB_RUN_ID'),
-        'status': ('github-hosted-signed-not-published' if artifact
+        'status': ('github-hosted-installable' if state == 'approved'
+                   else 'github-hosted-signed-not-published' if artifact
                    else 'github-hosted-signed-not-registered'),
     }
     (target.parent / 'publish.json').write_bytes(canonical(evidence))

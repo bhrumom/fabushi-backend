@@ -576,6 +576,40 @@ export function createMiniAppMarketplaceRouter({
     res.json({ release });
   }));
 
+  // The delivery pipeline signs and hosts bytes before a publisher account is in
+  // the loop, so the reviewer that approves the release also creates its record.
+  // The URL is authoritative: a descriptor claiming another identity is refused
+  // rather than silently retargeted.
+  router.post(
+    '/v1/extensions/review/releases/:kind/:namespace/:name/:version/import',
+    express.json({ limit: '64kb' }),
+    releaseRoute(async (req, res) => {
+      if (!reviewAuthorized(req)) {
+        throw new ExtensionReleaseStoreError(
+          'REVIEW_AUTH_REQUIRED',
+          'marketplace reviewer authorization is required',
+        );
+      }
+      const descriptor = req.body?.descriptor;
+      const identity = descriptor?.identity ?? {};
+      const same = ['namespace', 'name', 'kind'].every(
+        (field) => String(identity[field] ?? '').trim().toLocaleLowerCase()
+          === String(req.params[field] ?? '').trim().toLocaleLowerCase(),
+      );
+      if (!same || String(descriptor?.release?.version ?? '').trim() !== req.params.version) {
+        throw new ExtensionReleaseStoreError(
+          'INVALID_RELEASE_IDENTITY',
+          'descriptor identity must match the imported release',
+        );
+      }
+      const release = extensionReleaseStore.importReviewed({
+        reviewer: req.body?.reviewer,
+        descriptor,
+      });
+      res.status(201).json({ release });
+    }),
+  );
+
   router.post('/v1/extensions/review/releases/:kind/:namespace/:name/:version', releaseRoute(async (req, res) => {
     if (!reviewAuthorized(req)) {
       throw new ExtensionReleaseStoreError('REVIEW_AUTH_REQUIRED', 'marketplace reviewer authorization is required');

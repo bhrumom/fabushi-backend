@@ -22,6 +22,11 @@ on:
         description: SHA-256 of the transferred preparation.zip
         required: true
         default: 6089817d720da2697e4b3c3019c626a6978c3b11c4c2282865951066a53df018
+      approve:
+        description: Also approve the release so hosts can install it
+        type: choice
+        options: ['false', 'true']
+        default: 'false'
 permissions:
   contents: read
   actions: read
@@ -70,13 +75,20 @@ jobs:
       # trust root stay with the Marketplace. A cross-repository token writes to
       # the mini-app repository; without one the job's own token publishes into
       # this public repository, so no stored personal token is required.
-      - name: Publish signed bytes to GitHub Releases and bind them in the registry
+      # The catalog record is created here because the delivery pipeline owns the
+      # package digest; approval stays a separate, explicit decision.
+      - name: Publish signed bytes to GitHub Releases and make them installable
         env:
           DANDELION_RELEASE_TOKEN: ${{ secrets.DANDELION_RELEASE_TOKEN }}
           DANDELION_HOST_TOKEN: ${{ github.token }}
           DANDELION_HOST_REPOSITORY: ${{ github.repository }}
+          DANDELION_APPROVE: ${{ inputs.approve }}
           FABUSHI_MARKETPLACE_REVIEW_TOKEN: ${{ secrets.FABUSHI_MARKETPLACE_REVIEW_TOKEN }}
-        run: python3 .github/scripts/publish-github-release.py
+        run: |
+          set -euo pipefail
+          flags=""
+          if [ "$DANDELION_APPROVE" = "true" ]; then flags="--approve"; fi
+          python3 .github/scripts/publish-github-release.py $flags
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -384,3 +384,181 @@ test('reviewer fabapp signer is authorized, native-compatible and never returns 
     else process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH = previous.epoch;
   }
 });
+
+// Bytes that the delivery pipeline signs and hosts itself still have to become a
+// real catalog release, otherwise no host can install them. This exercises the
+// whole chain the delivery workflow drives: reviewer import -> external artifact
+// binding -> scan verdict -> approval -> public install proof carrying the url.
+test('reviewer imports a delivery release, binds external bytes and publishes the url', async () => {
+  const previous = {
+    review: process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN,
+    key: process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY,
+    keyId: process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID,
+    epoch: process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH,
+  };
+  process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN = 'delivery-review-token-0123456789';
+  process.env.FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY = crypto.generateKeyPairSync('ed25519')
+    .privateKey.export({ type: 'pkcs8', format: 'pem' });
+  process.env.FABUSHI_MARKETPLACE_SIGNING_KEY_ID = 'delivery-test-key';
+  process.env.FABUSHI_MARKETPLACE_TRUST_EPOCH = '4';
+
+  const bundleDigest = 'e'.repeat(64);
+  const url = 'https://github.com/bhrumom/fabushi-backend/releases/download/v0.2.0/global-dandelion-0.2.0.fabapp';
+  const descriptor = {
+    identity: { namespace: 'bhrumom', name: 'global-dandelion', kind: 'web-miniapp' },
+    displayName: 'Global Dandelion 离线工作台',
+    description: '离线 GDAN v2 文件分包、校验与报告导出。',
+    publisher: { id: 'bhrumom' },
+    release: {
+      version: '0.2.0',
+      channel: 'stable',
+      platforms: ['desktop', 'ios', 'android'],
+      requestedCapabilities: [],
+      minHostApi: 1,
+      bundleDigest,
+    },
+    categories: ['utilities'],
+    tags: ['offline'],
+  };
+  const reviewHeaders = {
+    'content-type': 'application/json',
+    'x-fabushi-marketplace-review-token': process.env.FABUSHI_MARKETPLACE_REVIEW_TOKEN,
+  };
+  const importUrl = '/v1/extensions/review/releases/web-miniapp/bhrumom/global-dandelion/0.2.0/import';
+
+  try {
+    await withServer(async (baseUrl) => {
+      const unauthorized = await fetch(baseUrl + importUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ descriptor, reviewer: 'release-pipeline' }),
+      });
+      assert.equal(unauthorized.status, 403);
+
+      const mismatched = await fetch(baseUrl + importUrl, {
+        method: 'POST',
+        headers: reviewHeaders,
+        body: JSON.stringify({
+          reviewer: 'release-pipeline',
+          descriptor: { ...descriptor, identity: { ...descriptor.identity, name: 'someone-else' } },
+        }),
+      });
+      assert.equal(mismatched.status, 400);
+
+      const imported = await fetch(baseUrl + importUrl, {
+        method: 'POST',
+        headers: reviewHeaders,
+        body: JSON.stringify({ descriptor, reviewer: 'release-pipeline' }),
+      });
+      const importedPayload = await imported.json();
+      assert.equal(imported.status, 201, JSON.stringify(importedPayload));
+      assert.equal(importedPayload.release.state, 'pending_review');
+      assert.match(importedPayload.release.descriptorDigest, /^[0-9a-f]{64}$/);
+      assert.equal(importedPayload.release.descriptor.release.bundleDigest, bundleDigest);
+
+      // Re-running the pipeline must not need a new version.
+      const again = await fetch(baseUrl + importUrl, {
+        method: 'POST',
+        headers: reviewHeaders,
+        body: JSON.stringify({ descriptor, reviewer: 'release-pipeline' }),
+      });
+      const againPayload = await again.json();
+      assert.equal(again.status, 201, JSON.stringify(againPayload));
+      assert.equal(againPayload.release.descriptorDigest, importedPayload.release.descriptorDigest);
+
+      // A different descriptor for the same version is a conflict, never an overwrite.
+      const conflict = await fetch(baseUrl + importUrl, {
+        method: 'POST',
+        headers: reviewHeaders,
+        body: JSON.stringify({
+          reviewer: 'release-pipeline',
+          descriptor: { ...descriptor, displayName: 'Different Name' },
+        }),
+      });
+      assert.equal(conflict.status, 409);
+
+      const sizeBytes = 479376;
+      const bound = await fetch(
+        baseUrl + '/v1/extensions/review/artifacts/web-miniapp/bhrumom/global-dandelion/0.2.0/external',
+        {
+          method: 'POST',
+          headers: reviewHeaders,
+          body: JSON.stringify({
+            artifactId: 'universal-ui',
+            platform: 'all',
+            architecture: 'any',
+            format: 'fabapp',
+            digest: bundleDigest,
+            sizeBytes,
+            url,
+            reviewer: 'release-pipeline',
+          }),
+        },
+      );
+      const boundPayload = await bound.json();
+      assert.equal(bound.status, 201, JSON.stringify(boundPayload));
+      assert.equal(boundPayload.artifact.url, url);
+      assert.equal(boundPayload.artifact.digest, bundleDigest);
+
+      // Approval is refused until the scan verdict is final.
+      const premature = await fetch(
+        baseUrl + '/v1/extensions/review/releases/web-miniapp/bhrumom/global-dandelion/0.2.0',
+        { method: 'POST', headers: reviewHeaders, body: JSON.stringify({ approved: true, reviewer: 'release-pipeline' }) },
+      );
+      assert.equal(premature.status, 400);
+
+      const scan = await fetch(
+        baseUrl + '/v1/extensions/review/artifacts/web-miniapp/bhrumom/global-dandelion/0.2.0/universal-ui/scan',
+        {
+          method: 'POST',
+          headers: reviewHeaders,
+          body: JSON.stringify({
+            state: 'passed',
+            scanner: 'dandelion-offline-scan',
+            scannerVersion: '1',
+            expectedDigest: bundleDigest,
+            expectedSizeBytes: sizeBytes,
+            reviewer: 'release-pipeline',
+          }),
+        },
+      );
+      assert.equal(scan.status, 200, JSON.stringify(await scan.json()));
+
+      const approved = await fetch(
+        baseUrl + '/v1/extensions/review/releases/web-miniapp/bhrumom/global-dandelion/0.2.0',
+        { method: 'POST', headers: reviewHeaders, body: JSON.stringify({ approved: true, reviewer: 'release-pipeline' }) },
+      );
+      const approvedPayload = await approved.json();
+      assert.equal(approved.status, 200, JSON.stringify(approvedPayload));
+      assert.equal(approvedPayload.release.state, 'approved');
+
+      const proof = await json(await fetch(
+        baseUrl + '/v1/extensions/install/web-miniapp/bhrumom/global-dandelion/0.2.0',
+      ));
+      assert.equal(proof.protocol, 'fabushi.extension-install-proof.v1');
+      assert.equal(proof.descriptor.release.bundleDigest, bundleDigest);
+      const signed = JSON.parse(proof.releaseSignature.payload);
+      assert.deepEqual(signed.artifacts, [{
+        artifactId: 'universal-ui',
+        digest: bundleDigest,
+        sizeBytes,
+        platform: 'all',
+        architecture: 'any',
+        format: 'fabapp',
+        url,
+      }]);
+      assert.equal(proof.trust.keyId, 'delivery-test-key');
+      assert.equal(proof.trust.trustEpoch, 4);
+    });
+  } finally {
+    for (const [name, key] of [
+      ['FABUSHI_MARKETPLACE_REVIEW_TOKEN', 'review'],
+      ['FABUSHI_MARKETPLACE_SIGNING_PRIVATE_KEY', 'key'],
+      ['FABUSHI_MARKETPLACE_SIGNING_KEY_ID', 'keyId'],
+      ['FABUSHI_MARKETPLACE_TRUST_EPOCH', 'epoch'],
+    ]) {
+      if (previous[key] === undefined) delete process.env[name];
+      else process.env[name] = previous[key];
+    }
+  }
+});

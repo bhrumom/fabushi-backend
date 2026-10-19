@@ -31,6 +31,10 @@ class State:
         self.release_creations = 0
         # When set, the registry refuses registration with this contract code.
         self.reject_registration = None
+        self.release_imports = []
+        self.scans = []
+        self.approvals = []
+        self.release_state = None
 
 
 def make_handler(state):
@@ -80,16 +84,35 @@ def make_handler(state):
                 state.assets[(release_id, name)] = len(body)
                 state.uploaded[name] = body
                 return self._send(201, {'name': name, 'size': len(body), 'state': 'uploaded'})
-            if '/v1/extensions/review/artifacts/' in parsed.path:
+            if '/v1/extensions/review/' in parsed.path:
                 if not self.headers.get('x-fabushi-marketplace-review-token'):
                     return self._send(403, {'error': {'code': 'REVIEW_AUTH_REQUIRED'}})
-                if state.reject_registration:
+                if state.reject_registration and '/artifacts/' in parsed.path:
                     return self._send(409, {'success': False, 'error': {
                         'code': state.reject_registration,
                         'message': 'secret detail that must never be echoed'}})
-                registered = json.loads(body)
-                state.registrations.append(registered)
-                return self._send(201, {'artifact': registered})
+                sent = json.loads(body)
+                if parsed.path.endswith('/import'):
+                    if state.release_imports and state.release_imports[-1]['descriptor'] != sent['descriptor']:
+                        return self._send(409, {'success': False, 'error': {
+                            'code': 'RELEASE_CONFLICT', 'message': 'different descriptor'}})
+                    state.release_imports.append(sent)
+                    state.release_state = 'pending_review'
+                    return self._send(201, {'release': {
+                        'state': state.release_state,
+                        'descriptorDigest': 'f' * 64}})
+                if parsed.path.endswith('/scan'):
+                    state.scans.append(sent)
+                    return self._send(200, {'artifact': {'artifactId': 'universal-ui', 'scan': {'state': 'passed'}}})
+                if '/artifacts/' in parsed.path:
+                    state.registrations.append(sent)
+                    return self._send(201, {'artifact': sent})
+                if '/releases/' in parsed.path:
+                    state.approvals.append(sent)
+                    state.release_state = 'approved' if sent.get('approved') else 'rejected'
+                    return self._send(200, {'release': {
+                        'state': state.release_state,
+                        'descriptorDigest': 'f' * 64}})
             return self._send(404, {'message': 'Not Found'})
 
     return Handler
@@ -110,10 +133,20 @@ def run(state, base, extra_env=None, mutate=None, args=None):
         }), encoding='utf-8')
         if mutate:
             mutate(signed, package)
+        descriptor = Path(tmp) / 'descriptor.json'
+        descriptor.write_text(json.dumps({
+            'identity': {'namespace': 'bhrumom', 'name': 'global-dandelion', 'kind': 'web-miniapp'},
+            'displayName': 'Global Dandelion',
+            'release': {'version': '0.2.0', 'channel': 'stable',
+                        'platforms': ['desktop', 'ios', 'android'],
+                        'requestedCapabilities': [], 'minHostApi': 1},
+            'categories': ['utilities'], 'tags': ['offline'],
+        }), encoding='utf-8')
         env = dict(os.environ)
         env.update({
             'SIGNED_DIR': str(signed),
             'DANDELION_RELEASE_TOKEN': 'release-token',
+            'DANDELION_DESCRIPTOR': str(descriptor),
             'FABUSHI_MARKETPLACE_REVIEW_TOKEN': 'review-token',
             'GITHUB_API': base,
             'GITHUB_UPLOADS': base,
@@ -138,11 +171,19 @@ def main():
     thread.start()
     base = f'http://127.0.0.1:{server.server_address[1]}'
     try:
-        # 1. First run: creates the release, uploads, registers.
+        # 1. First run: creates the release, uploads, imports the catalog record,
+        #    binds the url and records the scan verdict.
         result, evidence, digest = run(state, base)
         assert result.returncode == 0, result.stderr
         assert state.release_creations == 1, state.release_creations
         assert state.uploaded[NAME] == PAYLOAD, 'uploaded bytes differ'
+        assert len(state.release_imports) == 1
+        imported = state.release_imports[0]['descriptor']
+        assert imported['identity'] == {'namespace': 'bhrumom', 'name': 'global-dandelion',
+                                        'kind': 'web-miniapp'}
+        assert imported['release']['version'] == '0.2.0'
+        assert imported['release']['bundleDigest'] == digest, 'descriptor digest must be the package'
+        assert imported['release']['platforms'] == ['desktop', 'ios', 'android']
         assert len(state.registrations) == 1
         registration = state.registrations[0]
         assert registration['digest'] == digest
@@ -150,8 +191,14 @@ def main():
         assert registration['format'] == 'fabapp'
         assert registration['artifactId'] == 'universal-ui'
         assert registration['url'] == f'https://github.com/acme/global-dandelion/releases/download/{TAG}/{NAME}'
+        assert len(state.scans) == 1
+        assert state.scans[0]['expectedDigest'] == digest
+        assert state.scans[0]['expectedSizeBytes'] == len(PAYLOAD)
+        assert state.scans[0]['state'] == 'passed'
+        assert state.approvals == [], 'approval must stay a separate decision'
         assert evidence['digest'] == digest
         assert evidence['url'] == registration['url']
+        assert evidence['releaseState'] == 'pending_review'
         assert evidence['status'] == 'github-hosted-signed-not-published'
 
         # 2. Second run is idempotent: no new release, no second upload.
@@ -159,6 +206,7 @@ def main():
         assert result.returncode == 0, result.stderr
         assert state.release_creations == 1, 'release was recreated'
         assert len(state.registrations) == 2, 'registration should still be attempted'
+        assert len(state.release_imports) == 2, 'import should be re-attempted, not skipped'
 
         # 3. A published asset with a different size is never replaced.
         def shrink(signed, package):
@@ -192,10 +240,13 @@ def main():
 
         # 6. Bytes may be published before the registry has a release record.
         before = len(state.registrations)
+        before_imports = len(state.release_imports)
         result, evidence, digest = run(state, base, args=['--skip-register'])
         assert result.returncode == 0, result.stderr
         assert len(state.registrations) == before, 'must not register'
+        assert len(state.release_imports) == before_imports, 'must not import'
         assert evidence['status'] == 'github-hosted-signed-not-registered'
+        assert evidence['releaseState'] == 'absent'
         assert evidence['digest'] == digest
         assert evidence['url'].startswith('https://github.com/acme/global-dandelion/releases/download/')
 
@@ -240,8 +291,22 @@ def main():
         assert result.returncode == 1
         assert 'reason=artifact registration failed with 409 ARTIFACT_DIGEST_CONFLICT' in result.stderr, result.stderr
         assert 'secret detail' not in result.stderr, 'response body leaked'
-        print('publish pipeline ok: create, upload, register, idempotent, immutable, '
-              'phase-split, host-fallback, safe-diagnostics, fail-closed')
+
+        # 12. Approval is opt-in and makes the release installable.
+        state.release_state = 'pending_review'
+        result, evidence, digest = run(state, base, args=['--approve'])
+        assert result.returncode == 0, result.stderr
+        assert len(state.approvals) == 1
+        assert state.approvals[0]['approved'] is True
+        assert evidence['releaseState'] == 'approved'
+        assert evidence['status'] == 'github-hosted-installable'
+
+        # 13. Approval cannot be requested without the registry binding.
+        result, _, _ = run(state, base, args=['--approve', '--skip-register'])
+        assert result.returncode == 1
+        assert 'reason=approval requires registry binding' in result.stderr, result.stderr
+        print('publish pipeline ok: create, upload, import, register, scan, approve, '
+              'idempotent, immutable, phase-split, host-fallback, safe-diagnostics, fail-closed')
     finally:
         server.shutdown()
         server.server_close()

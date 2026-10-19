@@ -287,9 +287,10 @@ export class ExtensionReleaseStore {
     });
   }
 
-  createDraft({ actorAccountId, descriptor: input }) {
+  // One normalisation path for publisher drafts and reviewer imports, so an
+  // imported release is indistinguishable from a submitted one.
+  #sanitizeDescriptor(input) {
     const namespace = component(input?.identity?.namespace, 'identity.namespace');
-    this.publisherStore.assertOwned(namespace, actorAccountId);
     const sanitized = normalizeExtensionEntry({
       ...input,
       identity: {
@@ -310,12 +311,21 @@ export class ExtensionReleaseStore {
         revoked: false,
       },
     });
-    const key = releaseKey({
-      kind: sanitized.identity.kind,
-      namespace: sanitized.identity.namespace,
-      name: sanitized.identity.name,
-      version: sanitized.release.version,
-    });
+    return {
+      namespace,
+      sanitized,
+      key: releaseKey({
+        kind: sanitized.identity.kind,
+        namespace: sanitized.identity.namespace,
+        name: sanitized.identity.name,
+        version: sanitized.release.version,
+      }),
+    };
+  }
+
+  createDraft({ actorAccountId, descriptor: input }) {
+    const { namespace, sanitized, key } = this.#sanitizeDescriptor(input);
+    this.publisherStore.assertOwned(namespace, actorAccountId);
     if (this.#row(key)) {
       throw new ExtensionReleaseStoreError('RELEASE_CONFLICT', 'release version already exists and is immutable');
     }
@@ -347,6 +357,62 @@ export class ExtensionReleaseStore {
     const transaction = this.db.transaction(() => {
       this.s.submit.run({ ...key, submittedAtMs: now, updatedAtMs: now });
       this.#audit(key, 'release.submitted', actorAccountId, { descriptorDigest: row.descriptorDigest }, now);
+    });
+    transaction();
+    return publicRelease(this.#require(key));
+  }
+
+  /**
+   * Reviewer-side import of an already reviewed descriptor.
+   *
+   * The delivery pipeline signs and hosts bytes before any publisher account is
+   * involved, so the release record has to be created by the reviewer that will
+   * approve it. The review token is already the authority that decides what gets
+   * published, so this grants nothing beyond that; it only removes the separate
+   * publisher login. Re-running is safe: the same descriptor is idempotent and a
+   * different one is a conflict, never a silent overwrite.
+   */
+  importReviewed({ reviewer, descriptor: input }) {
+    const actor = `review:${String(reviewer ?? 'marketplace-reviewer').trim().slice(0, 160) || 'marketplace-reviewer'}`;
+    const { sanitized, key } = this.#sanitizeDescriptor(input);
+    const descriptorDigest = digestDescriptor(sanitized);
+    const existing = this.#row(key);
+    const now = this.now();
+    if (existing) {
+      if (existing.descriptorDigest !== descriptorDigest) {
+        throw new ExtensionReleaseStoreError(
+          'RELEASE_CONFLICT',
+          'release version already exists with a different descriptor',
+        );
+      }
+      if (existing.state === 'pending_review' || existing.state === 'approved') {
+        return publicRelease(existing);
+      }
+      if (existing.state !== 'draft') {
+        throw new ExtensionReleaseStoreError(
+          'INVALID_RELEASE_STATE',
+          'release cannot be re-imported in its current state',
+        );
+      }
+      const transaction = this.db.transaction(() => {
+        this.s.submit.run({ ...key, submittedAtMs: now, updatedAtMs: now });
+        this.#audit(key, 'release.submitted', actor, { descriptorDigest }, now);
+      });
+      transaction();
+      return publicRelease(this.#require(key));
+    }
+    const transaction = this.db.transaction(() => {
+      this.s.insert.run({
+        ...key,
+        descriptorJson: json(sanitized),
+        descriptorDigest,
+        publisherAccountId: actor,
+        createdAtMs: now,
+        updatedAtMs: now,
+      });
+      this.#audit(key, 'release.created', actor, { descriptorDigest, imported: true }, now);
+      this.s.submit.run({ ...key, submittedAtMs: now, updatedAtMs: now });
+      this.#audit(key, 'release.submitted', actor, { descriptorDigest }, now);
     });
     transaction();
     return publicRelease(this.#require(key));
