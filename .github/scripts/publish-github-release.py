@@ -57,6 +57,8 @@ SOURCE_REPOSITORY = os.environ.get('DANDELION_SOURCE_REPOSITORY', 'bhrumom/globa
 RAW = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com').rstrip('/')
 SCANNER = 'dandelion-offline-scan'
 SCANNER_VERSION = '1'
+NATIVE_RUNTIME = os.environ.get('DANDELION_NATIVE_RUNTIME', 'false') == 'true'
+ARTIFACT_ID = 'macos-arm64-native' if NATIVE_RUNTIME else 'universal-ui'
 
 
 def canonical(value):
@@ -172,9 +174,9 @@ def service_code(raw):
 
 def register(origin, token, version, digest, size, url, reviewer):
     body = canonical({
-        'artifactId': 'universal-ui',
-        'platform': 'all',
-        'architecture': 'any',
+        'artifactId': ARTIFACT_ID,
+        'platform': 'desktop' if NATIVE_RUNTIME else 'all',
+        'architecture': 'arm64' if NATIVE_RUNTIME else 'any',
         'format': 'fabapp',
         'digest': digest,
         'sizeBytes': size,
@@ -228,6 +230,11 @@ def load_descriptor(version, digest):
     # The package digest is a property of the bytes, never of the metadata file.
     release['version'] = version
     release['bundleDigest'] = digest
+    if NATIVE_RUNTIME and (version != '0.4.0' or release.get('requestedCapabilities') != ['native.runtime']
+                           or release.get('platforms') != ['desktop'] or release.get('minHostApi') != 2):
+        raise ValueError('native catalog descriptor does not match reviewed capability/target')
+    if not NATIVE_RUNTIME and release.get('requestedCapabilities', []) != []:
+        raise ValueError('offline delivery cannot approve native capabilities')
     return data
 
 
@@ -244,10 +251,10 @@ def record_scan(origin, token, version, digest, size, reviewer):
         return review_post(
             origin, token,
             f'{origin}/v1/extensions/review/artifacts/{IDENTITY["kind"]}/'
-            f'{IDENTITY["namespace"]}/{IDENTITY["name"]}/{version}/universal-ui/scan',
-            {'state': 'passed', 'scanner': SCANNER, 'scannerVersion': SCANNER_VERSION,
+            f'{IDENTITY["namespace"]}/{IDENTITY["name"]}/{version}/{ARTIFACT_ID}/scan',
+            {'state': 'passed', 'scanner': 'dandelion-macos-native-package-scan' if NATIVE_RUNTIME else SCANNER, 'scannerVersion': SCANNER_VERSION,
              'expectedDigest': digest, 'expectedSizeBytes': size, 'reviewer': reviewer,
-             'notes': 'signed manifest, resource digests, offline CSP and license checks passed'},
+             'notes': 'signed manifest, exact resource digests, declared macOS native code and requested capability checked; installed execution remains a separate gate' if NATIVE_RUNTIME else 'signed manifest, resource digests, offline CSP and license checks passed'},
             'scan record')['artifact']
     except ValueError as error:
         # A retry of the same immutable version can find the scan record from
@@ -263,7 +270,7 @@ def approve_release(origin, token, version, reviewer, digest):
         origin, token,
         f'{release_endpoint(origin)}/{version}',
         {'approved': True, 'reviewer': reviewer,
-         'notes': json.dumps({'scope': 'offline-packet-workbench-preview',
+         'notes': json.dumps({'scope': 'macos-install-owned-native-code' if NATIVE_RUNTIME else 'offline-packet-workbench-preview',
                               'packageSha256': digest,
                               'approval': 'delivery pipeline, review token'}, sort_keys=True)},
         'release approval')['release']
@@ -326,7 +333,7 @@ def main():
         'version': version,
         'releaseTag': tag,
         'repository': PUBLIC_REPOSITORY,
-        'artifactId': (artifact or {}).get('artifactId', 'universal-ui'),
+        'artifactId': (artifact or {}).get('artifactId', ARTIFACT_ID),
         'digest': digest,
         'sizeBytes': size,
         'url': url,

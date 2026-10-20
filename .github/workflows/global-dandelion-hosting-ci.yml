@@ -25,4 +25,8 @@ jobs:
       # Runs the real publish script against a local mock of the GitHub API, its
       # upload host and the registry. No credentials, no network.
       - name: Publish pipeline contract
-        run: python3 .github/scripts/test_publish_github_release.py
+        run: |
+          python3 -m pip install cryptography==46.0.3
+          python3 .github/scripts/test_publish_github_release.py
+          python3 .github/scripts/test-dandelion-package.py
+          python3 .github/scripts/test-native-dandelion-package.py
