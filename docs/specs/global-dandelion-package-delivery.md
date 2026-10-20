@@ -31,6 +31,10 @@ produces an integrity-signed package, NOT a Registry approval or public listing.
 - GD-06: deterministic immutable .fabapp and public provenance include preparation
   source, artifact digest, backend delivery source, signer identity and package
   digest. Upload signed bytes only after all checks. No automatic release approval.
+- A retry of the same exact delivery may observe the registry's immutable
+  `SCAN_ALREADY_FINAL` response; the delivery script accepts only that explicit
+  terminal code and continues to the separately requested approval step. It
+  never accepts a missing, failed, or differently scoped scan.
 
 Tests run exclusively in GitHub Actions: corrupt/extra/duplicate/traversal/symlink
 resources, source mismatch, changed signer/manifest and valid fixture signature.
