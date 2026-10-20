@@ -31,3 +31,7 @@ exact-head Actions and protected signing/review evidence. Full macOS features
 need installed proof in Desktop and actual native implementation in the Mini
 App repository. Parent: global-dandelion-package-delivery.md and
 fabapp-manifest-signing-v1.md.
+
+The reviewed runtime may also declare `package-update`: the generic Host broker
+can check/install only this same app through its existing approved catalog and
+uninstall/update lifecycle. It does not authorize self-patching native bytes.
