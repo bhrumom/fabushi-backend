@@ -27,6 +27,10 @@ on:
         type: choice
         options: ['false', 'true']
         default: 'false'
+      native_runtime:
+        description: Explicitly review the macOS install-owned native runtime (0.4.0 only)
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -44,6 +48,7 @@ jobs:
     env:
       DANDELION_RELEASE_TOKEN: ${{ secrets.DANDELION_RELEASE_TOKEN }}
       DANDELION_VERSION: ${{ inputs.version }}
+      DANDELION_NATIVE_RUNTIME: ${{ inputs.native_runtime && 'true' || 'false' }}
       DANDELION_SOURCE_COMMIT: ${{ inputs.source_commit }}
       DANDELION_PREPARATION_ARTIFACT_ID: ${{ inputs.preparation_artifact_id }}
       DANDELION_PREPARATION_DIGEST: ${{ inputs.preparation_digest }}

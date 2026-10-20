@@ -21,6 +21,7 @@ ARCHIVE_DIGEST = os.environ.get(
     'DANDELION_PREPARATION_DIGEST',
     '6089817d720da2697e4b3c3019c626a6978c3b11c4c2282865951066a53df018')
 VERSION = os.environ.get('DANDELION_VERSION', '0.1.0')
+NATIVE_RUNTIME = os.environ.get('DANDELION_NATIVE_RUNTIME', 'false') == 'true'
 KEY_ID = 'fabushi-marketplace-managed-20261013-1'
 PUBLIC_KEY = 'VbvgbVxNAeftFYB0l1-NzE2-Gx3d4NQ7hkKiQ0HMpu0'
 DOMAIN = b'fabushi.fabapp.manifest.v1\0'
@@ -72,7 +73,7 @@ def preparation(data):
     manifest = parse(files.pop('manifest.json'))
     if ('signature' in manifest or manifest['appId'] != 'org.fabushi.global-dandelion'
             or manifest['publisherId'] != 'bhrumom' or manifest['version'] != VERSION
-            or manifest['requestedCapabilities'] != [] or not manifest['offlineCore']
+            or manifest['requestedCapabilities'] != (['native.runtime'] if NATIVE_RUNTIME else []) or not manifest['offlineCore']
             or manifest['networkPolicy'] != {'mode': 'deny', 'allowedOrigins': []}
             or set(files) != set(manifest['files'])):
         raise ValueError('unexpected package identity/policy/resources')
@@ -82,6 +83,30 @@ def preparation(data):
             raise ValueError('resource integrity mismatch')
     if files['BUILD-INFO.txt'].decode().splitlines()[0] != 'source=' + SOURCE:
         raise ValueError('source mismatch')
+    if NATIVE_RUNTIME:
+        if VERSION != '0.4.0' or manifest.get('minHostApi') != 2:
+            raise ValueError('unreviewed native version/Host API')
+        native = parse(files['native-runtime.json'])
+        if (set(native) != {'schema', 'platform', 'architecture', 'entrypoint', 'executables', 'hostCapabilities'}
+                or native['schema'] != 'fabushi.native-runtime.v1' or native['platform'] != 'darwin'
+                or native['architecture'] != 'arm64' or native['entrypoint'] != 'native/worker.cjs'
+                or native['executables'] != ['native/dandelion.bin']
+                or native['hostCapabilities'] != ['file-picker', 'confirmation']):
+            raise ValueError('unreviewed native runtime declaration')
+        binary = files['native/dandelion.bin']
+        if binary[:8] != bytes.fromhex('cffaedfe0c000001') or len(binary) < 32:
+            raise ValueError('not an arm64 Mach-O executable')
+        expected_mime = {'native-runtime.json': 'application/json', 'native/worker.cjs': 'text/javascript',
+                         'native/dandelion.bin': 'application/octet-stream', 'native/default.toml': 'text/plain'}
+        if any(manifest['files'].get(name, {}).get('mime') != mime for name, mime in expected_mime.items()):
+            raise ValueError('native resource MIME mismatch')
+        if any((name.startswith('native/') and name not in expected_mime)
+               or (record.get('mime') == 'application/octet-stream' and name != 'native/dandelion.bin')
+               for name, record in manifest['files'].items()):
+            raise ValueError('undeclared native executable/resource')
+    elif any(name.startswith('native/') or name == 'native-runtime.json'
+             or record.get('mime') == 'application/octet-stream' for name, record in manifest['files'].items()):
+        raise ValueError('native code is not authorized for an offline release')
     return manifest, files
 
 
@@ -142,7 +167,8 @@ def main():
                   'backendCommit': os.environ['GITHUB_SHA'], 'deliveryRun': os.environ['GITHUB_RUN_ID'],
                   'packageSha256': hashlib.sha256(target.read_bytes()).hexdigest(),
                   'signerKeyId': KEY_ID, 'trustEpoch': 1, 'status': 'integrity-signed-not-published',
-                  'license': 'MIT OR Apache-2.0', 'nativeFeaturesAvailable': False}
+                  'license': 'MIT OR Apache-2.0', 'nativeFeaturesAvailable': False,
+                  'nativeRuntimeRequested': NATIVE_RUNTIME}
     (output / 'provenance.json').write_bytes(canonical(provenance))
     print(json.dumps(provenance))
 
