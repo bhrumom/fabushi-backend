@@ -91,7 +91,7 @@ def preparation(data):
                 or native['schema'] != 'fabushi.native-runtime.v1' or native['platform'] != 'darwin'
                 or native['architecture'] != 'arm64' or native['entrypoint'] != 'native/worker.cjs'
                 or native['executables'] != ['native/dandelion.bin']
-                or native['hostCapabilities'] != ['file-picker', 'confirmation']):
+                or native['hostCapabilities'] != ['file-picker', 'confirmation', 'package-update']):
             raise ValueError('unreviewed native runtime declaration')
         binary = files['native/dandelion.bin']
         if binary[:8] != bytes.fromhex('cffaedfe0c000001') or len(binary) < 32:

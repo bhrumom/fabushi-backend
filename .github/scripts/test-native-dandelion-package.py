@@ -17,7 +17,7 @@ class NativeDeliveryTests(unittest.TestCase):
     def fixture(self, mutate=lambda native, files: None):
         native = {'schema': 'fabushi.native-runtime.v1', 'platform': 'darwin', 'architecture': 'arm64',
                   'entrypoint': 'native/worker.cjs', 'executables': ['native/dandelion.bin'],
-                  'hostCapabilities': ['file-picker', 'confirmation']}
+                  'hostCapabilities': ['file-picker', 'confirmation', 'package-update']}
         files = {'index.html': b'offline', 'BUILD-INFO.txt': ('source=' + delivery.SOURCE + '\n').encode(),
                  'native/worker.cjs': b'// fixture; not executed', 'native/default.toml': b'[state]\nenabled=false\n',
                  'native/dandelion.bin': bytes.fromhex('cffaedfe0c000001') + b'\0' * 24}
