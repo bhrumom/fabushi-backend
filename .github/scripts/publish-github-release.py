@@ -240,14 +240,22 @@ def import_release(origin, token, version, descriptor, reviewer):
 
 
 def record_scan(origin, token, version, digest, size, reviewer):
-    return review_post(
-        origin, token,
-        f'{origin}/v1/extensions/review/artifacts/{IDENTITY["kind"]}/'
-        f'{IDENTITY["namespace"]}/{IDENTITY["name"]}/{version}/universal-ui/scan',
-        {'state': 'passed', 'scanner': SCANNER, 'scannerVersion': SCANNER_VERSION,
-         'expectedDigest': digest, 'expectedSizeBytes': size, 'reviewer': reviewer,
-         'notes': 'signed manifest, resource digests, offline CSP and license checks passed'},
-        'scan record')['artifact']
+    try:
+        return review_post(
+            origin, token,
+            f'{origin}/v1/extensions/review/artifacts/{IDENTITY["kind"]}/'
+            f'{IDENTITY["namespace"]}/{IDENTITY["name"]}/{version}/universal-ui/scan',
+            {'state': 'passed', 'scanner': SCANNER, 'scannerVersion': SCANNER_VERSION,
+             'expectedDigest': digest, 'expectedSizeBytes': size, 'reviewer': reviewer,
+             'notes': 'signed manifest, resource digests, offline CSP and license checks passed'},
+            'scan record')['artifact']
+    except ValueError as error:
+        # A retry of the same immutable version can find the scan record from
+        # the first delivery attempt. Accept only the explicit terminal code;
+        # missing, failed, or differently scoped scans still fail closed.
+        if str(error) == 'scan record failed with 409 SCAN_ALREADY_FINAL':
+            return {'state': 'already-final'}
+        raise
 
 
 def approve_release(origin, token, version, reviewer, digest):
