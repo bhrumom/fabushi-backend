@@ -6,7 +6,7 @@ This extends GD-03 only for an explicitly selected macOS native release. Legacy
 offline deliveries keep their empty-capability gate unchanged.
 
 MND-01: protected canonical-main workflow accepts an explicit native-runtime
-mode, reviewed versions 0.4.0 and 0.4.1 only. Version 0.4.1 is the
+mode, reviewed versions 0.4.0, 0.4.1 and 0.4.2 only. Version 0.4.1 is the
 user-requested globe composer update; 0.4.0 remains immutable/reproducible. Validate signed-resource descriptor
 `fabushi.native-runtime.v1`, darwin/arm64, native worker/executable paths, bounded
 arm64 Mach-O bytes and exact file hashes/source. Reject hidden binaries or
@@ -41,3 +41,8 @@ uninstall/update lifecycle. It does not authorize self-patching native bytes.
 Retain exact preparation source/artifact/digest validation and production-only
 signer. Reject unreviewed future versions; no wildcard version policy. Actual
 installed Mac UI/version proof remains separate from successful signing.
+
+2026-10-22: immutable 0.4.2 removes legacy UI and adds continuous Rust watch
+and independent speed settings. Same package ownership, descriptor, native grants,
+signer and exact preparation binding. Retain prior versions and future-version
+rejection; validate in Actions before canonical-main production delivery.

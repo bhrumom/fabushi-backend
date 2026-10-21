@@ -84,7 +84,7 @@ def preparation(data):
     if files['BUILD-INFO.txt'].decode().splitlines()[0] != 'source=' + SOURCE:
         raise ValueError('source mismatch')
     if NATIVE_RUNTIME:
-        if VERSION not in ('0.4.0', '0.4.1') or manifest.get('minHostApi') != 2:
+        if VERSION not in ('0.4.0', '0.4.1', '0.4.2') or manifest.get('minHostApi') != 2:
             raise ValueError('unreviewed native version/Host API')
         native = parse(files['native-runtime.json'])
         if (set(native) != {'schema', 'platform', 'architecture', 'entrypoint', 'executables', 'hostCapabilities'}
