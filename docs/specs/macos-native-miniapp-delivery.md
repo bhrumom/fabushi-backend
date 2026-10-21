@@ -46,3 +46,8 @@ installed Mac UI/version proof remains separate from successful signing.
 and independent speed settings. Same package ownership, descriptor, native grants,
 signer and exact preparation binding. Retain prior versions and future-version
 rejection; validate in Actions before canonical-main production delivery.
+
+2026-10-22: review immutable 0.4.3 software globe correction after installed
+0.4.2 WebGL failure. Package-owned Rust geometry is projected without GPU;
+Host code/grants/signing identity stay unchanged. Accept 0.4.3 explicitly,
+preserve previous immutable versions and reject future unreviewed versions.
