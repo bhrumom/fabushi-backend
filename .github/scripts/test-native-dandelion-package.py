@@ -45,9 +45,9 @@ class NativeDeliveryTests(unittest.TestCase):
             self.assertIn('native/dandelion.bin', files)
 
     def test_globe_update_and_future_version_fence(self):
-        for version in ['0.4.1', '0.4.2', '0.4.3', '1.0.0']:
+        for version in ['0.4.1', '0.4.2', '0.4.3', '0.4.4', '1.0.0']:
             with self.subTest(version=version), patch.object(delivery, 'NATIVE_RUNTIME', True), patch.object(delivery, 'VERSION', version):
-                if version in ('0.4.1', '0.4.2'):
+                if version in ('0.4.1', '0.4.2', '0.4.3'):
                     manifest, _ = delivery.preparation(self.fixture(version=version))
                     self.assertEqual(manifest['version'], version)
                 else:
