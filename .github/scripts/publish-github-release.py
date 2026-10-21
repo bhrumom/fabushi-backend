@@ -230,7 +230,7 @@ def load_descriptor(version, digest):
     # The package digest is a property of the bytes, never of the metadata file.
     release['version'] = version
     release['bundleDigest'] = digest
-    if NATIVE_RUNTIME and (version != '0.4.0' or release.get('requestedCapabilities') != ['native.runtime']
+    if NATIVE_RUNTIME and (version not in ('0.4.0', '0.4.1') or release.get('requestedCapabilities') != ['native.runtime']
                            or release.get('platforms') != ['desktop'] or release.get('minHostApi') != 2):
         raise ValueError('native catalog descriptor does not match reviewed capability/target')
     if not NATIVE_RUNTIME and release.get('requestedCapabilities', []) != []:

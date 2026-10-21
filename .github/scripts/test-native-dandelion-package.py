@@ -14,7 +14,7 @@ spec.loader.exec_module(delivery)
 
 
 class NativeDeliveryTests(unittest.TestCase):
-    def fixture(self, mutate=lambda native, files: None):
+    def fixture(self, mutate=lambda native, files: None, version="0.4.0"):
         native = {'schema': 'fabushi.native-runtime.v1', 'platform': 'darwin', 'architecture': 'arm64',
                   'entrypoint': 'native/worker.cjs', 'executables': ['native/dandelion.bin'],
                   'hostCapabilities': ['file-picker', 'confirmation', 'package-update']}
@@ -26,7 +26,7 @@ class NativeDeliveryTests(unittest.TestCase):
         mime = {'index.html': 'text/html', 'BUILD-INFO.txt': 'text/plain', 'native/worker.cjs': 'text/javascript',
                 'native/default.toml': 'text/plain', 'native/dandelion.bin': 'application/octet-stream',
                 'native-runtime.json': 'application/json'}
-        manifest = {'appId': 'org.fabushi.global-dandelion', 'publisherId': 'bhrumom', 'version': '0.4.0',
+        manifest = {'appId': 'org.fabushi.global-dandelion', 'publisherId': 'bhrumom', 'version': version,
                     'minHostApi': 2, 'requestedCapabilities': ['native.runtime'], 'offlineCore': True,
                     'networkPolicy': {'mode': 'deny', 'allowedOrigins': []},
                     'files': {name: {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'mime': mime.get(name, 'application/octet-stream')}
@@ -43,6 +43,16 @@ class NativeDeliveryTests(unittest.TestCase):
             manifest, files = delivery.preparation(self.fixture())
             self.assertEqual(manifest['requestedCapabilities'], ['native.runtime'])
             self.assertIn('native/dandelion.bin', files)
+
+    def test_globe_update_and_future_version_fence(self):
+        for version in ['0.4.1', '0.4.2', '1.0.0']:
+            with self.subTest(version=version), patch.object(delivery, 'NATIVE_RUNTIME', True), patch.object(delivery, 'VERSION', version):
+                if version == '0.4.1':
+                    manifest, _ = delivery.preparation(self.fixture(version=version))
+                    self.assertEqual(manifest['version'], version)
+                else:
+                    with self.assertRaises(ValueError):
+                        delivery.preparation(self.fixture(version=version))
 
     def test_offline_mode_cannot_sign_native_code(self):
         with patch.object(delivery, 'NATIVE_RUNTIME', False), patch.object(delivery, 'VERSION', '0.4.0'):
