@@ -157,6 +157,9 @@ export function authorizeEnrollmentForAccount(user, payload, { controlUrl } = {}
       !Number.isSafeInteger(Number(target.generation)) || Number(target.generation) < 1) {
     throw enrollmentError("fdn_enrollment_broker_invalid_response", 502);
   }
+  if (readText(enrollment.cellId, 128) !== readText(target.cellId, 128)) {
+    throw enrollmentError("fdn_enrollment_cell_mismatch", 502);
+  }
   if (Number(enrollment.generation) !== Number(target.generation)) {
     throw enrollmentError("fdn_enrollment_generation_mismatch", 502);
   }
