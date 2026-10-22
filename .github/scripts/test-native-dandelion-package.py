@@ -21,11 +21,14 @@ class NativeDeliveryTests(unittest.TestCase):
         files = {'index.html': b'offline', 'BUILD-INFO.txt': ('source=' + delivery.SOURCE + '\n').encode(),
                  'native/worker.cjs': b'// fixture; not executed', 'native/default.toml': b'[state]\nenabled=false\n',
                  'native/dandelion.bin': bytes.fromhex('cffaedfe0c000001') + b'\0' * 24}
+        if version == '0.4.4':
+            files.update({'native/THIRD-PARTY-NOTICES.txt': b'reviewed dependency notices', 'native/CargoLock.txt': b'reviewed Cargo.lock'})
         mutate(native, files)
         files['native-runtime.json'] = delivery.canonical(native)
         mime = {'index.html': 'text/html', 'BUILD-INFO.txt': 'text/plain', 'native/worker.cjs': 'text/javascript',
                 'native/default.toml': 'text/plain', 'native/dandelion.bin': 'application/octet-stream',
-                'native-runtime.json': 'application/json'}
+                'native-runtime.json': 'application/json',
+                'native/THIRD-PARTY-NOTICES.txt': 'text/plain', 'native/CargoLock.txt': 'text/plain'}
         manifest = {'appId': 'org.fabushi.global-dandelion', 'publisherId': 'bhrumom', 'version': version,
                     'minHostApi': 2, 'requestedCapabilities': ['native.runtime'], 'offlineCore': True,
                     'networkPolicy': {'mode': 'deny', 'allowedOrigins': []},
@@ -53,6 +56,15 @@ class NativeDeliveryTests(unittest.TestCase):
                 else:
                     with self.assertRaises(ValueError):
                         delivery.preparation(self.fixture(version=version))
+
+    def test_notice_files_are_exact_nonempty_resources(self):
+        for mutation in [lambda n, f: f.pop('native/THIRD-PARTY-NOTICES.txt'),
+                         lambda n, f: f.update({'native/CargoLock.txt': b''}),
+                         lambda n, f: f.update({'native/extra.txt': b'not reviewed'}),
+                         lambda n, f: f.update({'native/hidden.bin': b'executable'})]:
+            with self.subTest(mutation=mutation), patch.object(delivery, 'NATIVE_RUNTIME', True), patch.object(delivery, 'VERSION', '0.4.4'):
+                with self.assertRaises(ValueError):
+                    delivery.preparation(self.fixture(mutation, version='0.4.4'))
 
     def test_offline_mode_cannot_sign_native_code(self):
         with patch.object(delivery, 'NATIVE_RUNTIME', False), patch.object(delivery, 'VERSION', '0.4.0'):

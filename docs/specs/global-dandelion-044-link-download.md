@@ -28,3 +28,15 @@ existing immutable version/Registry controls; do not overwrite 0.4.3.
 
 Acceptance LD-REL01 source/CI: pending; LD-REL02 backend policy CI: pending;
 LD-REL03 protected signing/catalog: pending; LD-REL04 local installed/runtime: pending.
+
+### Exact native notice resources
+
+Protected run 39719259805 stopped at preparation-integrity before any signing
+request: the source package includes native/THIRD-PARTY-NOTICES.txt and
+native/CargoLock.txt, which the existing native resource whitelist rejected.
+For exactly 0.4.4, require these two nonempty text/plain resources and their
+manifest size/hash validation. Do not permit arbitrary native resources or
+executables, alter older-version policy or bypass integrity/signature gates.
+Actions fixtures must accept both texts and reject missing, empty, wrong-MIME
+or extra native payloads. Re-dispatch only after exact backend CI and merge;
+the source artifact/digest remain unchanged.
