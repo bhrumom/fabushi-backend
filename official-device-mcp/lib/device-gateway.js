@@ -686,6 +686,13 @@ export async function requestRegisteredDevicePrivateTransport(
         type: "fdnPrivate",
         requestId,
         payload,
+        networkRoute: {
+          deviceId: normalizedDeviceId,
+          cellId: String(networkRoute?.cellId || ""),
+          nodeId: String(networkRoute?.nodeId || ""),
+          generation: networkGeneration,
+          expiresAt: networkExpiresAt,
+        },
       }), (error) => {
         if (!error || settled) return;
         finishUnknown("Authenticated reverse-WebSocket private request transport failed after dispatch; outcome is unknown.");
