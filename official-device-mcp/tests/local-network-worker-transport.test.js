@@ -56,7 +56,79 @@ test("local network worker transport sends only the bounded Core route to loopba
   assert.equal(result.type, "toolDescription");
 });
 
-test("local network worker transport rejects non-loopback endpoints", () => {
+test("local network worker transport classifies only correlated 503 pre-dispatch responses as safe fallback", async () => {
+  const transport = createLocalNetworkWorkerPrivateTransport({
+    endpoint: "http://127.0.0.1:8791/v1/fdn/private-request",
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      return response({
+        requestId: body.requestId,
+        deviceId: body.deviceId,
+        nodeId: body.nodeId,
+        generation: body.generation,
+        ok: false,
+        dispatchState: "not_dispatched",
+        error: "private transport failed",
+      }, 503);
+    },
+  });
+  await assert.rejects(
+    () => transport.request({
+      accountId: "user:fdn",
+      deviceId: "device-fdn-1",
+      networkRoute: {
+        deviceId: "device-fdn-1",
+        cellId: "cell-fdn-account-a",
+        nodeId: "100.64.0.10",
+        generation: 17,
+        expiresAt: 4_000_000_000,
+        connectionId: "connection-1",
+        delegationId: "delegation-1",
+        active: true,
+      },
+      payload: { type: "operation", deviceId: "device-fdn-1", networkGeneration: 17 },
+    }),
+    (error) => error.notDispatched === true && error.dispatchState === "not_dispatched",
+  );
+});
+
+test("local network worker never treats an ambiguous 502 as safe fallback", async () => {
+  const transport = createLocalNetworkWorkerPrivateTransport({
+    endpoint: "http://127.0.0.1:8791/v1/fdn/private-request",
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      return response({
+        requestId: body.requestId,
+        deviceId: body.deviceId,
+        nodeId: body.nodeId,
+        generation: body.generation,
+        ok: false,
+        dispatchState: "outcome_unknown",
+        error: "private transport failed",
+      }, 502);
+    },
+  });
+  await assert.rejects(
+    () => transport.request({
+      accountId: "user:fdn",
+      deviceId: "device-fdn-1",
+      networkRoute: {
+        deviceId: "device-fdn-1",
+        cellId: "cell-fdn-account-a",
+        nodeId: "100.64.0.10",
+        generation: 17,
+        expiresAt: 4_000_000_000,
+        connectionId: "connection-1",
+        delegationId: "delegation-1",
+        active: true,
+      },
+      payload: { type: "operation", deviceId: "device-fdn-1", networkGeneration: 17 },
+    }),
+    (error) => error.notDispatched !== true && error.dispatchState === "outcome_unknown",
+  );
+});
+
+test("local network worker rejects non-loopback endpoints", () => {
   assert.throws(
     () => createLocalNetworkWorkerPrivateTransport({
       endpoint: "https://attacker.example/v1/fdn/private-request",

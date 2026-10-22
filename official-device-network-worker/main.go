@@ -52,13 +52,14 @@ type workerRequest struct {
 }
 
 type workerResponse struct {
-	RequestID  string          `json:"requestId"`
-	DeviceID   string          `json:"deviceId"`
-	NodeID     string          `json:"nodeId"`
-	Generation int64           `json:"generation"`
-	OK         bool            `json:"ok"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	Error      string          `json:"error,omitempty"`
+	RequestID     string          `json:"requestId"`
+	DeviceID      string          `json:"deviceId"`
+	NodeID        string          `json:"nodeId"`
+	Generation    int64           `json:"generation"`
+	OK            bool            `json:"ok"`
+	DispatchState string          `json:"dispatchState"`
+	Result        json.RawMessage `json:"result,omitempty"`
+	Error         string          `json:"error,omitempty"`
 }
 
 type workerStatusResponse struct {
@@ -124,6 +125,11 @@ func validateRequest(req workerRequest, expectedCell string, fixedPort int, now 
 	if err := json.Unmarshal([]byte(strings.TrimSuffix(req.Frame, "\n")), &value); err != nil || len(value) == 0 {
 		return errors.New("target frame must be a JSON object")
 	}
+	frameDeviceID, deviceIDOK := value["deviceId"].(string)
+	frameGeneration, generationOK := value["networkGeneration"].(float64)
+	if !deviceIDOK || frameDeviceID != req.DeviceID || !generationOK || frameGeneration != float64(req.Generation) {
+		return errors.New("target frame identity does not match the private route")
+	}
 	return nil
 }
 
@@ -152,22 +158,26 @@ func readTargetResult(conn net.Conn, timeout time.Duration) (json.RawMessage, er
 	return json.RawMessage(append([]byte(nil), frame...)), nil
 }
 
-func dispatchPrivateRequest(ctx context.Context, dial dialFunc, req workerRequest, fixedPort int) (json.RawMessage, error) {
+func dispatchPrivateRequest(ctx context.Context, dial dialFunc, req workerRequest, fixedPort int) (json.RawMessage, string, error) {
 	address := net.JoinHostPort(req.NodeID, strconv.Itoa(fixedPort))
 	conn, err := dial(ctx, "tcp", address)
 	if err != nil {
-		return nil, errors.New("private peer dial failed")
+		return nil, "not_dispatched", errors.New("private peer dial failed")
 	}
 	defer conn.Close()
 
 	timeout := time.Duration(req.TimeoutMS) * time.Millisecond
 	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-		return nil, err
+		return nil, "not_dispatched", errors.New("private peer write deadline failed")
 	}
 	if _, err := io.WriteString(conn, req.Frame); err != nil {
-		return nil, errors.New("private peer write failed")
+		return nil, "outcome_unknown", errors.New("private peer write failed")
 	}
-	return readTargetResult(conn, timeout)
+	result, err := readTargetResult(conn, timeout)
+	if err != nil {
+		return nil, "outcome_unknown", errors.New("private peer result unavailable")
+	}
+	return result, "completed", nil
 }
 
 func handler(expectedCell, selfNodeID string, fixedPort int, dial dialFunc, now func() time.Time) http.Handler {
@@ -203,17 +213,22 @@ func handler(expectedCell, selfNodeID string, fixedPort int, dial dialFunc, now 
 		timeout := time.Duration(req.TimeoutMS) * time.Millisecond
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
-		result, err := dispatchPrivateRequest(ctx, dial, req, fixedPort)
+		result, dispatchState, err := dispatchPrivateRequest(ctx, dial, req, fixedPort)
 		response := workerResponse{
-			RequestID:  req.RequestID,
-			DeviceID:   req.DeviceID,
-			NodeID:     req.NodeID,
-			Generation: req.Generation,
+			RequestID:     req.RequestID,
+			DeviceID:      req.DeviceID,
+			NodeID:        req.NodeID,
+			Generation:    req.Generation,
+			DispatchState: dispatchState,
 		}
 		if err != nil {
 			response.OK = false
 			response.Error = "private transport failed"
-			w.WriteHeader(http.StatusBadGateway)
+			if dispatchState == "not_dispatched" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			} else {
+				w.WriteHeader(http.StatusBadGateway)
+			}
 		} else {
 			response.OK = true
 			response.Result = result

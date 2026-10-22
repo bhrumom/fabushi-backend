@@ -642,7 +642,8 @@ test("authenticated reverse-WebSocket FDN fallback is account-scoped and require
     accountId: "account:fdn-a",
     deviceId: "fdn-target-1",
     networkGeneration: 9,
-    payload: { type: "grantController", networkGeneration: 9 },
+    networkExpiresAt: 1_900_000_000,
+    payload: { type: "grantController", deviceId: "fdn-target-1", networkGeneration: 9 },
     timeoutSeconds: 5,
   });
   assert.equal(result.type, "controllerGranted");
@@ -652,9 +653,22 @@ test("authenticated reverse-WebSocket FDN fallback is account-scoped and require
 
   await assert.rejects(
     () => transport.request({
+      accountId: "account:fdn-a",
+      deviceId: "fdn-target-1",
+      networkGeneration: 10,
+      networkExpiresAt: 1_900_000_000,
+      payload: { type: "grantController", deviceId: "fdn-target-1", networkGeneration: 9 },
+      timeoutSeconds: 5,
+    }),
+    /device\/session\/network-route binding/u,
+  );
+  assert.equal(privateDispatches, 1);
+
+  await assert.rejects(
+    () => transport.request({
       accountId: "account:fdn-b",
       deviceId: "fdn-target-1",
-      payload: { type: "grantController", networkGeneration: 9 },
+      payload: { type: "grantController", deviceId: "fdn-target-1", networkGeneration: 9 },
       timeoutSeconds: 5,
     }),
     /Unknown device/u,
@@ -663,9 +677,197 @@ test("authenticated reverse-WebSocket FDN fallback is account-scoped and require
     () => transport.request({
       accountId: "account:fdn-a",
       deviceId: "ordinary-target-1",
-      payload: { type: "grantController", networkGeneration: 9 },
+      payload: { type: "grantController", deviceId: "fdn-target-1", networkGeneration: 9 },
       timeoutSeconds: 5,
     }),
     /has not opted into the authenticated FDN reverse-WebSocket fallback/u,
   );
+});
+
+test("authenticated reverse-WebSocket private transport sends cancellation and rejects the uncertain request", async (t) => {
+  resetDeviceGatewayStateForTests();
+  const server = createServer((_req, res) => res.writeHead(404).end());
+  const gateway = attachDeviceGateway(server, {
+    resolveAccount: async (token) => token === "token-fdn-a" ? { userId: "account:fdn-a" } : null,
+    defaultLeaseSeconds: 60,
+  });
+  const port = await listen(server);
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/agent`, {
+    headers: { Authorization: "Bearer token-fdn-a" },
+  });
+  t.after(async () => {
+    socket.terminate();
+    await closeServer(server, gateway);
+    resetDeviceGatewayStateForTests();
+  });
+  await opened(socket);
+  socket.send(JSON.stringify({
+    type: "register",
+    deviceId: "fdn-cancel-target",
+    name: "FDN cancel target",
+    platform: "linux",
+    capabilities: ["fabushi-fdn-private-transport"],
+    tools: [],
+    leaseSeconds: 60,
+  }));
+  await nextJson(socket);
+  const received = [];
+  socket.on("message", raw => received.push(JSON.parse(raw.toString("utf8"))));
+  const controller = new AbortController();
+  const transport = createAuthenticatedReverseWebSocketPrivateTransport();
+  const pending = transport.request({
+    accountId: "account:fdn-a",
+    deviceId: "fdn-cancel-target",
+    networkGeneration: 9,
+    networkExpiresAt: 1_900_000_000,
+    payload: { type: "grantController", deviceId: "fdn-cancel-target", networkGeneration: 9 },
+    timeoutSeconds: 5,
+    signal: controller.signal,
+  });
+  while (!received.some(message => message.type === "fdnPrivate")) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  controller.abort();
+  await assert.rejects(pending, error => error?.outcomeUnknown === true && /cancelled after dispatch/u.test(error.message));
+  for (let attempt = 0; attempt < 100 && !received.some(message => message.type === "fdnPrivateCancel"); attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  const dispatched = received.find(message => message.type === "fdnPrivate");
+  assert.ok(dispatched);
+  assert.ok(received.some(message => message.type === "fdnPrivateCancel" && message.requestId === dispatched.requestId));
+});
+
+test("authenticated reverse-WebSocket private transport rejects a mismatched session result", async (t) => {
+  resetDeviceGatewayStateForTests();
+  const server = createServer((_req, res) => res.writeHead(404).end());
+  const gateway = attachDeviceGateway(server, {
+    resolveAccount: async (token) => token === "token-fdn-a" ? { userId: "account:fdn-a" } : null,
+    defaultLeaseSeconds: 60,
+  });
+  const port = await listen(server);
+  const socket = new WebSocket("ws://127.0.0.1:" + port + "/agent", {
+    headers: { Authorization: "Bearer token-fdn-a" },
+  });
+  t.after(async () => {
+    socket.terminate();
+    await closeServer(server, gateway);
+    resetDeviceGatewayStateForTests();
+  });
+  await opened(socket);
+  socket.send(JSON.stringify({
+    type: "register",
+    deviceId: "fdn-session-target",
+    name: "FDN session target",
+    platform: "linux",
+    capabilities: ["fabushi-fdn-private-transport"],
+    tools: [],
+    leaseSeconds: 60,
+  }));
+  await nextJson(socket);
+  const transport = createAuthenticatedReverseWebSocketPrivateTransport();
+  const pending = transport.request({
+    accountId: "account:fdn-a",
+    deviceId: "fdn-session-target",
+    networkGeneration: 9,
+    networkExpiresAt: 1_900_000_000,
+    payload: {
+      type: "operation",
+      deviceId: "fdn-session-target",
+      networkGeneration: 9,
+      sessionId: "session-expected",
+      requestId: "operation-request-1234",
+    },
+    timeoutSeconds: 5,
+  });
+  const request = await nextJson(socket);
+  assert.equal(request.type, "fdnPrivate");
+  socket.send(JSON.stringify({
+    type: "fdnPrivateResult",
+    requestId: request.requestId,
+    ok: true,
+    result: {
+      type: "operationResult",
+      deviceId: "fdn-session-target",
+      networkGeneration: 9,
+      sessionId: "session-other",
+      requestId: "operation-request-1234",
+    },
+  }));
+  await assert.rejects(
+    pending,
+    error => error?.outcomeUnknown === true && /device\/session\/generation correlation/u.test(error.message),
+  );
+});
+
+test("authenticated reverse-WebSocket pending request is cancelled and fenced on device reconnect", async (t) => {
+  resetDeviceGatewayStateForTests();
+  const server = createServer((_req, res) => res.writeHead(404).end());
+  const gateway = attachDeviceGateway(server, {
+    resolveAccount: async (token) => token === "token-fdn-a" ? { userId: "account:fdn-a" } : null,
+    defaultLeaseSeconds: 60,
+  });
+  const port = await listen(server);
+  const first = new WebSocket("ws://127.0.0.1:" + port + "/agent", {
+    headers: { Authorization: "Bearer token-fdn-a" },
+  });
+  let replacement = null;
+  t.after(async () => {
+    first.terminate();
+    replacement?.terminate();
+    await closeServer(server, gateway);
+    resetDeviceGatewayStateForTests();
+  });
+  await opened(first);
+  first.send(JSON.stringify({
+    type: "register",
+    deviceId: "fdn-reconnect-target",
+    name: "First target",
+    platform: "linux",
+    capabilities: ["fabushi-fdn-private-transport"],
+    tools: [],
+    leaseSeconds: 60,
+  }));
+  await nextJson(first);
+  const received = [];
+  first.on("message", raw => received.push(JSON.parse(raw.toString("utf8"))));
+  const transport = createAuthenticatedReverseWebSocketPrivateTransport();
+  const pending = transport.request({
+    accountId: "account:fdn-a",
+    deviceId: "fdn-reconnect-target",
+    networkGeneration: 9,
+    networkExpiresAt: 1_900_000_000,
+    payload: { type: "grantController", deviceId: "fdn-reconnect-target", networkGeneration: 9 },
+    timeoutSeconds: 5,
+  });
+  const pendingRejection = assert.rejects(
+    pending,
+    error => error?.outcomeUnknown === true && /reconnected/u.test(error.message),
+  );
+  while (!received.some(message => message.type === "fdnPrivate")) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  const originalRequest = received.find(message => message.type === "fdnPrivate");
+  replacement = new WebSocket("ws://127.0.0.1:" + port + "/agent", {
+    headers: { Authorization: "Bearer token-fdn-a" },
+  });
+  const replacementMessages = [];
+  replacement.on("message", raw => replacementMessages.push(JSON.parse(raw.toString("utf8"))));
+  await opened(replacement);
+  replacement.send(JSON.stringify({
+    type: "register",
+    deviceId: "fdn-reconnect-target",
+    name: "Replacement target",
+    platform: "linux",
+    capabilities: ["fabushi-fdn-private-transport"],
+    tools: [],
+    leaseSeconds: 60,
+  }));
+  await nextJson(replacement);
+  await pendingRejection;
+  for (let attempt = 0; attempt < 100 && !received.some(message => message.type === "fdnPrivateCancel"); attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.ok(received.some(message => message.type === "fdnPrivateCancel" && message.requestId === originalRequest.requestId));
+  assert.equal(replacementMessages.filter(message => message.type === "fdnPrivate").length, 0);
+  assert.equal(listRegisteredDevices("account:fdn-a")[0].name, "Replacement target");
 });

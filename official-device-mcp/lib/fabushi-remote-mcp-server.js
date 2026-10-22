@@ -338,16 +338,23 @@ export function createFabushiRemoteMcpServer(options = {}) {
         fetchImpl: options.networkWorkerFetch,
       })
     : null;
-  const coreDevicePrivateTransport = options.coreDevicePrivateTransport
-    ?? preferredNetworkWorkerTransport
+  const authenticatedReverseWebSocketTransport = options.authenticatedReverseWebSocketPrivateTransport
     ?? (allowAuthenticatedReverseWebSocketFallback
       ? createAuthenticatedReverseWebSocketPrivateTransport()
+      : null);
+  const coreDevicePrivateTransport = options.coreDevicePrivateTransport
+    ?? preferredNetworkWorkerTransport
+    ?? authenticatedReverseWebSocketTransport;
+  const coreDeviceFallbackTransport = options.coreDeviceFallbackTransport
+    ?? (!options.coreDevicePrivateTransport && preferredNetworkWorkerTransport
+      ? authenticatedReverseWebSocketTransport
       : null);
   const configuredCoreDeviceTransport = options.coreDeviceTransport
     ?? (coreDevicePrivateTransport
       ? createCoreDeviceTransport({
           accountClient,
           privateTransport: coreDevicePrivateTransport,
+          fallbackTransport: coreDeviceFallbackTransport,
           now: () => Math.floor(now() / 1000),
         })
       : null);

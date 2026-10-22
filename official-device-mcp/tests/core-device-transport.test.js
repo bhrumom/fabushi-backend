@@ -451,3 +451,139 @@ test("Core device transport fails closed if network generation rotates during on
   assert.equal(routeReads, 2);
   assert.deepEqual(privatePayloads, ["grantController"]);
 });
+
+test("Core device transport uses reverse WebSocket only when the private worker proves no dispatch", async () => {
+  const primaryPayloads = [];
+  const fallbackPayloads = [];
+  const schemaVersion = "b".repeat(64);
+  const route = networkRoute(9);
+  const transport = createCoreDeviceTransport({
+    accountClient: {
+      async getRemoteComputerNetworkRoute() { return route; },
+      async createRemoteComputerSession() { throw new Error("unused"); },
+      async reconcileRemoteComputerSession() { throw new Error("unused"); },
+      async createRemoteComputerOperation() { throw new Error("unused"); },
+      async queryRemoteComputerOperation() { throw new Error("unused"); },
+      async markRemoteComputerOperationOutcomeUnknown() { throw new Error("unused"); },
+    },
+    privateTransport: {
+      async request(input) {
+        primaryPayloads.push(input.payload.type);
+        const error = new Error("peer dial failed before dispatch");
+        error.notDispatched = true;
+        error.dispatchState = "not_dispatched";
+        throw error;
+      },
+    },
+    fallbackTransport: {
+      async request(input) {
+        fallbackPayloads.push(input.payload.type);
+        return {
+          type: "toolDescription",
+          deviceId: input.deviceId,
+          connectionId: input.payload.connectionId,
+          delegationId: input.payload.delegationId,
+          requestId: input.payload.requestId,
+          toolName: input.payload.toolName,
+          networkGeneration: input.networkGeneration,
+          available: true,
+          schemaVersion,
+          tool: { name: input.payload.toolName, inputSchema: { type: "object" } },
+        };
+      },
+    },
+    now: () => 1_800_000_000,
+  });
+  const result = await transport.describeDeviceTool({
+    accountId: "user:fdn",
+    deviceId: "device-fdn-1",
+    toolName: "Computer",
+    connectionId: route.connectionId,
+    delegationId: route.delegationId,
+    computer: { online: true, networkBound: true, networkGeneration: 9 },
+    coreServiceAccessToken: "service-token",
+  });
+  assert.equal(result.available, true);
+  assert.deepEqual(primaryPayloads, ["describeTool"]);
+  assert.deepEqual(fallbackPayloads, ["describeTool"]);
+});
+
+test("Core device transport never falls back after a possible dispatch", async () => {
+  let fallbackDispatches = 0;
+  const route = networkRoute(9);
+  const transport = createCoreDeviceTransport({
+    accountClient: {
+      async getRemoteComputerNetworkRoute() { return route; },
+      async createRemoteComputerSession() { throw new Error("unused"); },
+      async reconcileRemoteComputerSession() { throw new Error("unused"); },
+      async createRemoteComputerOperation() { throw new Error("unused"); },
+      async queryRemoteComputerOperation() { throw new Error("unused"); },
+      async markRemoteComputerOperationOutcomeUnknown() { throw new Error("unused"); },
+    },
+    privateTransport: {
+      async request() {
+        const error = new Error("response lost after possible write");
+        error.outcomeUnknown = true;
+        throw error;
+      },
+    },
+    fallbackTransport: {
+      async request() { fallbackDispatches += 1; return {}; },
+    },
+    now: () => 1_800_000_000,
+  });
+  await assert.rejects(
+    () => transport.describeDeviceTool({
+      accountId: "user:fdn",
+      deviceId: "device-fdn-1",
+      toolName: "Computer",
+      connectionId: route.connectionId,
+      delegationId: route.delegationId,
+      computer: { online: true, networkBound: true, networkGeneration: 9 },
+      coreServiceAccessToken: "service-token",
+    }),
+    /response lost after possible write/u,
+  );
+  assert.equal(fallbackDispatches, 0);
+});
+
+test("Core device transport re-resolves Core route before fallback and refuses a rotated generation", async () => {
+  let routeReads = 0;
+  let fallbackDispatches = 0;
+  const route = networkRoute(9);
+  const rotatedRoute = networkRoute(10);
+  const transport = createCoreDeviceTransport({
+    accountClient: {
+      async getRemoteComputerNetworkRoute() {
+        routeReads += 1;
+        return routeReads === 1 ? route : rotatedRoute;
+      },
+      async createRemoteComputerSession() { throw new Error("unused"); },
+      async reconcileRemoteComputerSession() { throw new Error("unused"); },
+      async createRemoteComputerOperation() { throw new Error("unused"); },
+      async queryRemoteComputerOperation() { throw new Error("unused"); },
+      async markRemoteComputerOperationOutcomeUnknown() { throw new Error("unused"); },
+    },
+    privateTransport: {
+      async request() {
+        const error = new Error("peer dial failed before dispatch");
+        error.notDispatched = true;
+        error.dispatchState = "not_dispatched";
+        throw error;
+      },
+    },
+    fallbackTransport: {
+      async request() { fallbackDispatches += 1; return {}; },
+    },
+    now: () => 1_800_000_000,
+  });
+  await assert.rejects(
+    () => transport.describeDeviceTool({
+      ...baseInput(),
+      toolName: "Computer",
+    }),
+    /network generation changed during the request/u,
+  );
+  assert.equal(routeReads, 2);
+  assert.equal(fallbackDispatches, 0);
+});

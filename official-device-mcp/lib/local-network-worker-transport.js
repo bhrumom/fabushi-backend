@@ -32,12 +32,11 @@ function boundedRoute(input) {
   return { cellId, nodeId, generation, expiresAt };
 }
 
-async function boundedJsonResponse(response) {
+async function boundedJsonResponse(response, expected) {
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength > MAX_RESPONSE_BYTES) {
     throw new Error("FDN network worker response exceeded the bounded result size.");
   }
-  if (!response.ok) throw new Error(`FDN network worker rejected the request with HTTP ${response.status}.`);
   let parsed;
   try {
     parsed = JSON.parse(new TextDecoder().decode(bytes));
@@ -46,6 +45,24 @@ async function boundedJsonResponse(response) {
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("FDN network worker returned an invalid envelope.");
+  }
+  if (String(parsed.requestId || "") !== expected.requestId
+      || String(parsed.deviceId || "") !== expected.deviceId
+      || String(parsed.nodeId || "") !== expected.nodeId
+      || Number(parsed.generation) !== expected.generation) {
+    throw new Error("FDN network worker response failed route/request correlation.");
+  }
+  if (!response.ok) {
+    const dispatchState = String(parsed.dispatchState || "outcome_unknown");
+    const error = new Error(`FDN network worker rejected the request with HTTP ${response.status}.`);
+    error.dispatchState = dispatchState;
+    error.notDispatched = response.status === 503
+      && parsed.ok === false
+      && dispatchState === "not_dispatched";
+    throw error;
+  }
+  if (parsed.dispatchState != null && parsed.dispatchState !== "completed") {
+    throw new Error("FDN network worker returned an uncertain dispatch state.");
   }
   return parsed;
 }
@@ -91,18 +108,23 @@ export function createLocalNetworkWorkerPrivateTransport(options = {}) {
         timeoutMs: Math.floor(timeoutSeconds * 1000),
         frame,
       });
+      const timeoutSignal = AbortSignal.timeout(Math.floor(timeoutSeconds * 1000) + 2_000);
+      const requestSignal = input.signal && typeof input.signal.aborted === "boolean"
+        ? AbortSignal.any([timeoutSignal, input.signal])
+        : timeoutSignal;
       const response = await fetchImpl(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
         body,
-        signal: AbortSignal.timeout(Math.floor(timeoutSeconds * 1000) + 2_000),
+        signal: requestSignal,
       });
-      const envelope = await boundedJsonResponse(response);
-      if (String(envelope.requestId || "") !== requestId
-          || String(envelope.deviceId || "") !== deviceId
-          || String(envelope.nodeId || "") !== route.nodeId
-          || Number(envelope.generation) !== route.generation
-          || envelope.ok !== true
+      const envelope = await boundedJsonResponse(response, {
+        requestId,
+        deviceId,
+        nodeId: route.nodeId,
+        generation: route.generation,
+      });
+      if (envelope.ok !== true
           || !envelope.result || typeof envelope.result !== "object" || Array.isArray(envelope.result)) {
         throw new Error("FDN network worker response failed route/request correlation.");
       }
