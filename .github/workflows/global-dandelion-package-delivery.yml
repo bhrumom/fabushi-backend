@@ -28,7 +28,7 @@ on:
         options: ['false', 'true']
         default: 'false'
       native_runtime:
-        description: Explicitly review the macOS install-owned native runtime (reviewed 0.4.0/0.4.1/0.4.2/0.4.3/0.4.4 only)
+        description: Explicitly review the macOS install-owned native runtime (reviewed 0.4.0/0.4.1/0.4.2/0.4.3/0.4.4/0.4.5 only)
         type: boolean
         default: false
 permissions:

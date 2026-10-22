@@ -84,7 +84,7 @@ def preparation(data):
     if files['BUILD-INFO.txt'].decode().splitlines()[0] != 'source=' + SOURCE:
         raise ValueError('source mismatch')
     if NATIVE_RUNTIME:
-        if VERSION not in ('0.4.0', '0.4.1', '0.4.2', '0.4.3', '0.4.4') or manifest.get('minHostApi') != 2:
+        if VERSION not in ('0.4.0', '0.4.1', '0.4.2', '0.4.3', '0.4.4', '0.4.5') or manifest.get('minHostApi') != 2:
             raise ValueError('unreviewed native version/Host API')
         native = parse(files['native-runtime.json'])
         if (set(native) != {'schema', 'platform', 'architecture', 'entrypoint', 'executables', 'hostCapabilities'}
@@ -98,7 +98,7 @@ def preparation(data):
             raise ValueError('not an arm64 Mach-O executable')
         expected_mime = {'native-runtime.json': 'application/json', 'native/worker.cjs': 'text/javascript',
                          'native/dandelion.bin': 'application/octet-stream', 'native/default.toml': 'text/plain'}
-        if VERSION == '0.4.4':
+        if VERSION in ('0.4.4', '0.4.5'):
             for name in ('native/THIRD-PARTY-NOTICES.txt', 'native/CargoLock.txt'):
                 expected_mime[name] = 'text/plain'
                 if not files.get(name):
