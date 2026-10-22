@@ -14,18 +14,23 @@ spec.loader.exec_module(delivery)
 
 
 class NativeDeliveryTests(unittest.TestCase):
-    def fixture(self, mutate=lambda native, files: None, version="0.4.0"):
+    def fixture(self, mutate=lambda native, files: None, version="0.4.0", mime_override=None):
         native = {'schema': 'fabushi.native-runtime.v1', 'platform': 'darwin', 'architecture': 'arm64',
                   'entrypoint': 'native/worker.cjs', 'executables': ['native/dandelion.bin'],
                   'hostCapabilities': ['file-picker', 'confirmation', 'package-update']}
         files = {'index.html': b'offline', 'BUILD-INFO.txt': ('source=' + delivery.SOURCE + '\n').encode(),
                  'native/worker.cjs': b'// fixture; not executed', 'native/default.toml': b'[state]\nenabled=false\n',
                  'native/dandelion.bin': bytes.fromhex('cffaedfe0c000001') + b'\0' * 24}
+        if version == '0.4.4':
+            files.update({'native/THIRD-PARTY-NOTICES.txt': b'reviewed dependency notices', 'native/CargoLock.txt': b'reviewed Cargo.lock'})
         mutate(native, files)
         files['native-runtime.json'] = delivery.canonical(native)
         mime = {'index.html': 'text/html', 'BUILD-INFO.txt': 'text/plain', 'native/worker.cjs': 'text/javascript',
                 'native/default.toml': 'text/plain', 'native/dandelion.bin': 'application/octet-stream',
-                'native-runtime.json': 'application/json'}
+                'native-runtime.json': 'application/json',
+                'native/THIRD-PARTY-NOTICES.txt': 'text/plain', 'native/CargoLock.txt': 'text/plain'}
+        if mime_override:
+            mime.update(mime_override)
         manifest = {'appId': 'org.fabushi.global-dandelion', 'publisherId': 'bhrumom', 'version': version,
                     'minHostApi': 2, 'requestedCapabilities': ['native.runtime'], 'offlineCore': True,
                     'networkPolicy': {'mode': 'deny', 'allowedOrigins': []},
@@ -53,6 +58,20 @@ class NativeDeliveryTests(unittest.TestCase):
                 else:
                     with self.assertRaises(ValueError):
                         delivery.preparation(self.fixture(version=version))
+
+    def test_notice_files_are_exact_nonempty_resources(self):
+        for mutation in [lambda n, f: f.pop('native/THIRD-PARTY-NOTICES.txt'),
+                         lambda n, f: f.update({'native/CargoLock.txt': b''}),
+                         lambda n, f: f.update({'native/extra.txt': b'not reviewed'}),
+                         lambda n, f: f.update({'native/hidden.bin': b'executable'})]:
+            with self.subTest(mutation=mutation), patch.object(delivery, 'NATIVE_RUNTIME', True), patch.object(delivery, 'VERSION', '0.4.4'):
+                with self.assertRaises(ValueError):
+                    delivery.preparation(self.fixture(mutation, version='0.4.4'))
+
+    def test_notice_mime_cannot_hide_binary_payload(self):
+        with patch.object(delivery, 'NATIVE_RUNTIME', True), patch.object(delivery, 'VERSION', '0.4.4'):
+            with self.assertRaises(ValueError):
+                delivery.preparation(self.fixture(version='0.4.4', mime_override={'native/CargoLock.txt': 'application/octet-stream'}))
 
     def test_offline_mode_cannot_sign_native_code(self):
         with patch.object(delivery, 'NATIVE_RUNTIME', False), patch.object(delivery, 'VERSION', '0.4.0'):

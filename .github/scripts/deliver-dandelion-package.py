@@ -98,6 +98,11 @@ def preparation(data):
             raise ValueError('not an arm64 Mach-O executable')
         expected_mime = {'native-runtime.json': 'application/json', 'native/worker.cjs': 'text/javascript',
                          'native/dandelion.bin': 'application/octet-stream', 'native/default.toml': 'text/plain'}
+        if VERSION == '0.4.4':
+            for name in ('native/THIRD-PARTY-NOTICES.txt', 'native/CargoLock.txt'):
+                expected_mime[name] = 'text/plain'
+                if not files.get(name):
+                    raise ValueError('native dependency notice/lockfile required')
         if any(manifest['files'].get(name, {}).get('mime') != mime for name, mime in expected_mime.items()):
             raise ValueError('native resource MIME mismatch')
         if any((name.startswith('native/') and name not in expected_mime)
