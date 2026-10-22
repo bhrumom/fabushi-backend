@@ -34,7 +34,7 @@ test("client forwards only exact grant input and broker credential",async()=>{
     token:TOKEN,
     fetchImpl:async(url,options)=>{
       seen={url,options};
-      return {ok:true,status:200,async json(){return {ok:true,enrollment:{grantId:GRANT_ID,generation:2},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:2}};}};
+      return {ok:true,status:200,async json(){return {ok:true,enrollment:{grantId:GRANT_ID,cellId:"cell-abcdefghijklmnop",generation:2},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:2}};}};
     }
   });
   await client.start({grantId:GRANT_ID,grantSecret:SECRET});
@@ -45,7 +45,7 @@ test("client forwards only exact grant input and broker credential",async()=>{
 });
 
 test("account authorization compares Core target to canonical raw Fabushi account id",()=>{
-  const payload={ok:true,enrollment:{grantId:GRANT_ID,generation:4,authKey:"secret-key"},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
+  const payload={ok:true,enrollment:{grantId:GRANT_ID,cellId:"cell-abcdefghijklmnop",generation:4,authKey:"secret-key"},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
   assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:197915874789377",fabushiAccountId:"197915874789377",isAuthenticated:false},payload,{controlUrl:"https://fdn-control.example"}),e=>e.code==="fdn_enrollment_auth_required");
   assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:197915874789377",isAuthenticated:true},payload,{controlUrl:"https://fdn-control.example"}),e=>e.code==="fdn_enrollment_auth_required");
   assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:other",fabushiAccountId:"other",isAuthenticated:true},payload,{controlUrl:"https://fdn-control.example"}),e=>e.code==="fdn_enrollment_account_mismatch");
@@ -56,7 +56,7 @@ test("account authorization compares Core target to canonical raw Fabushi accoun
 });
 
 test("local user namespace, username, email, and token hash cannot substitute for canonical account id",()=>{
-  const payload={ok:true,enrollment:{grantId:GRANT_ID,generation:4},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
+  const payload={ok:true,enrollment:{grantId:GRANT_ID,cellId:"cell-abcdefghijklmnop",generation:4},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
   for (const user of [
     {userId:"user:197915874789377",isAuthenticated:true},
     {userId:"user:alice",username:"197915874789377",isAuthenticated:true},
@@ -68,8 +68,13 @@ test("local user namespace, username, email, and token hash cannot substitute fo
 });
 
 test("account authorization rejects broker generation mismatch",()=>{
-  const payload={ok:true,enrollment:{grantId:GRANT_ID,generation:5},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
+  const payload={ok:true,enrollment:{grantId:GRANT_ID,cellId:"cell-abcdefghijklmnop",generation:5},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
   assert.throws(()=>authorizeEnrollmentForAccount({userId:"user:197915874789377",fabushiAccountId:"197915874789377",isAuthenticated:true},payload,{controlUrl:"https://fdn-control.example"}),e=>e.code==="fdn_enrollment_generation_mismatch");
+});
+
+test("account authorization rejects broker cell mismatch",()=>{
+  const payload={ok:true,enrollment:{grantId:GRANT_ID,cellId:"cell-other-123456789",generation:4},target:{userId:"197915874789377",deviceId:"device-1",cellId:"cell-abcdefghijklmnop",generation:4}};
+  assert.throws(()=>authorizeEnrollmentForAccount({fabushiAccountId:"197915874789377",isAuthenticated:true},payload,{controlUrl:"https://fdn-control.example"}),e=>e.code==="fdn_enrollment_cell_mismatch");
 });
 
 test("broker failures keep raw upstream detail out of public error object",async()=>{
