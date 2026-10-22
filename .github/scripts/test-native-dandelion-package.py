@@ -21,7 +21,7 @@ class NativeDeliveryTests(unittest.TestCase):
         files = {'index.html': b'offline', 'BUILD-INFO.txt': ('source=' + delivery.SOURCE + '\n').encode(),
                  'native/worker.cjs': b'// fixture; not executed', 'native/default.toml': b'[state]\nenabled=false\n',
                  'native/dandelion.bin': bytes.fromhex('cffaedfe0c000001') + b'\0' * 24}
-        if version == '0.4.4':
+        if version in ('0.4.4', '0.4.5'):
             files.update({'native/THIRD-PARTY-NOTICES.txt': b'reviewed dependency notices', 'native/CargoLock.txt': b'reviewed Cargo.lock'})
         mutate(native, files)
         files['native-runtime.json'] = delivery.canonical(native)
@@ -50,14 +50,19 @@ class NativeDeliveryTests(unittest.TestCase):
             self.assertIn('native/dandelion.bin', files)
 
     def test_globe_update_and_future_version_fence(self):
-        for version in ['0.4.1', '0.4.2', '0.4.3', '0.4.4', '0.4.5', '1.0.0']:
+        for version in ['0.4.1', '0.4.2', '0.4.3', '0.4.4', '0.4.5', '0.4.6', '1.0.0']:
             with self.subTest(version=version), patch.object(delivery, 'NATIVE_RUNTIME', True), patch.object(delivery, 'VERSION', version):
-                if version in ('0.4.1', '0.4.2', '0.4.3', '0.4.4'):
+                if version in ('0.4.1', '0.4.2', '0.4.3', '0.4.4', '0.4.5'):
                     manifest, _ = delivery.preparation(self.fixture(version=version))
                     self.assertEqual(manifest['version'], version)
                 else:
                     with self.assertRaises(ValueError):
                         delivery.preparation(self.fixture(version=version))
+
+    def test_new_version_rejects_missing_notices(self):
+        with patch.object(delivery, 'NATIVE_RUNTIME', True), patch.object(delivery, 'VERSION', '0.4.5'):
+            with self.assertRaises(ValueError):
+                delivery.preparation(self.fixture(lambda n, f: f.pop('native/CargoLock.txt'), version='0.4.5'))
 
     def test_notice_files_are_exact_nonempty_resources(self):
         for mutation in [lambda n, f: f.pop('native/THIRD-PARTY-NOTICES.txt'),

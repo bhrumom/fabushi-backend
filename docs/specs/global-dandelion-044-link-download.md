@@ -40,3 +40,12 @@ executables, alter older-version policy or bypass integrity/signature gates.
 Actions fixtures must accept both texts and reject missing, empty, wrong-MIME
 or extra native payloads. Re-dispatch only after exact backend CI and merge;
 the source artifact/digest remain unchanged.
+
+### 0.4.5 capability wire repair
+
+Actual authorized Mac 0.4.4 runtime rejected pasted links: the package tool registry
+dropped backend feature flags. Review 0.4.5 for the typed capability forwarding fix
+and worker-wire regression assertion. Permit exactly 0.4.5 with the same mandatory
+notice files and native/network restrictions; retain 0.4.6/future rejection.
+Require exact source Actions, backend Actions, immutable signing and a fresh
+version-specific native consent before real download/loopback acceptance.
