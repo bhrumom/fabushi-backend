@@ -1,0 +1,30 @@
+name: Native service dependency lock
+on:
+  pull_request:
+    paths:
+      - 'official-device-mcp/package.json'
+      - 'official-device-mcp/package-lock.json'
+      - '.github/workflows/native-service-dependency-lock.yml'
+permissions:
+  contents: read
+jobs:
+  prepare-and-verify-lock:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Resolve explicit dependency pins in Actions only
+        working-directory: official-device-mcp
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-service-lock-${{ github.event.pull_request.head.sha }}
+          path: official-device-mcp/package-lock.json
+          if-no-files-found: error
+      - name: Require generated lock to be committed before acceptance
+        run: git diff --exit-code -- official-device-mcp/package-lock.json
