@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-export const requiredAssertions = Object.freeze(['oidcInvalidRejected', 'realRegistrationAndLogin', 'crossRunCleanupDenied', 'sameAccountMultiSession', 'crossAccountIdentitySpoofDenied', 'canonicalArgon2id', 'canonicalRS256', 'crossAccountPasswordDenied', 'refreshRotation', 'sessionRevocation', 'otherSessionRetained', 'expiredSessionDenied', 'zeroResidualCleanup', 'deletedSessionDenied', 'ttlReclamation']);
+export const requiredAssertions = Object.freeze(['oidcInvalidRejected', 'realRegistrationAndLogin', 'crossRunCleanupDenied', 'sameAccountMultiSession', 'crossAccountIdentitySpoofDenied', 'canonicalArgon2id', 'canonicalRS256', 'crossAccountPasswordDenied', 'refreshRotation', 'sessionRevocation', 'otherSessionRetained', 'expiredSessionDenied', 'zeroResidualCleanup', 'deletedSessionDenied', 'ttlReclamation', 'nativeFileIssuedSessionConvergence', 'nativeFileAccountIsolation', 'nativeFileConflictPreserved', 'nativeFileRevokedSessionDenied', 'nativeFileExpiredSessionDenied', 'nativeFileDeletedSessionDenied', 'nativeFileZeroResidualCleanup']);
 export function validateRuntimeEvidence(report, expected) {
   if (report?.kind !== 'canonical-worker-runtime-integration' || report.overall !== 'PASS' || report.cleanup === 'blocked' ||
       report.backendSha !== expected.backendSha || report.coreSha !== expected.coreSha || report.runId !== expected.runId || report.runAttempt !== expected.runAttempt ||

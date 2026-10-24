@@ -66,6 +66,15 @@ SQLite lease journal contains ownership metadata only, protected by OS access.
 Cross-device consumers remain in Desktop/iOS/Android; no production route is
 added by installing the factory library.
 
+Native file integration unit NAS-R8 reuses this runtime's ordinarily registered
+accounts and real Core user-info/session gate with the existing Node account
+store/router. It may install existing ai-backend Express/SQLite dependencies
+for the data service; authentication stays on canonical wasm, without injected
+user identity or foreign/production credentials. Preserve all existing runtime
+assertions and cleanup, add stable multi-session file/CAS/account/revocation
+assertions and exact owned data-service cleanup. This remains isolated local
+runtime evidence, separate from cloud and packaged-device acceptance.
+
 ## 8. Interfaces / data flow
 Factory create(identity, scenario) returns {leaseId, expiresAt, accounts} once.
 Accounts contain ordinary session credentials for the requesting run only.

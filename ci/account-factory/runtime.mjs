@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { LeaseJournal, AccountFactory } from './factory.mjs';
 import { CanonicalAuthAdapter } from './canonical-auth.mjs';
 import { fixtureHandler } from './service.mjs';
+import { startNativeAccountStoreRuntime } from './native-account-store-runtime.mjs';
 
 if (process.env.GITHUB_ACTIONS !== 'true' || !process.env.RUNNER_TEMP || process.env.CLOUDFLARE_API_TOKEN || process.env.CF_API_TOKEN) throw Error('actions_isolation_required');
 const dir = join(process.env.RUNNER_TEMP, 'account-worker');
@@ -58,7 +59,7 @@ const proxy = httpsServer({ key: readFileSync(join(dir, 'tls-key.pem')), cert: r
   } catch { res.writeHead(502).end('proxy_failed'); }
 });
 proxy.fixturePort = 9443; servers.push(proxy);
-let worker, journal, factory, handler, oidc, lease;
+let worker, journal, factory, handler, oidc, lease, nativeFiles;
 let startupOutput = '';
 function printRuntimeErrors() {
   let redacted = startupOutput;
@@ -154,15 +155,21 @@ try {
   const wrongPassword = await fetch(`${config.authOrigin}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: b.username, password: a.password, deviceId: a.deviceIds[0] }), redirect: 'error' }); assert.equal(wrongPassword.status, 401); assertions.crossAccountPasswordDenied = 'PASS';
   const rotatedResponse = await api('/api/auth/refresh', c.sessions[0], { refreshToken: c.sessions[0].refreshToken }); assert.equal(rotatedResponse.status, 200);
   const rotated = await rotatedResponse.json(); assert.ok(rotated.refreshToken !== c.sessions[0].refreshToken); assertions.refreshRotation = 'PASS';
+  nativeFiles = await startNativeAccountStoreRuntime({ authOrigin: config.authOrigin, root: join(dir, 'native-files') });
+  await nativeFiles.verifyIssuedAccounts(a, b, rotated, assertions);
   const logout = await api('/api/auth/logout', rotated, {}); assert.equal(logout.status, 200);
   const afterLogout = await api('/api/auth/user-info', rotated); assert.equal(afterLogout.status, 401);
   const revokedRefresh = await api('/api/auth/refresh', rotated, { refreshToken: rotated.refreshToken }); assert.equal(revokedRefresh.status, 401); assertions.sessionRevocation = 'PASS';
+  await nativeFiles.verifyDenied(rotated, 'nativeFileRevokedSessionDenied', assertions);
   assert.equal((await api('/api/auth/user-info', a.sessions[1])).status, 200); assertions.otherSessionRetained = 'PASS';
   assert.ok(typeof b.sessions[0].sessionId === 'string');
   sql(`UPDATE account_sessions SET expires_at=0 WHERE session_id=${escape(b.sessions[0].sessionId)} AND user_id=${escape(String(b.sessions[0].user.id))};`);
   assert.equal((await api('/api/auth/user-info', b.sessions[0])).status, 401); assertions.expiredSessionDenied = 'PASS';
+  await nativeFiles.verifyDenied(b.sessions[0], 'nativeFileExpiredSessionDenied', assertions);
   const cleanup = await fixtureRequest(`/v1/leases/${lease.leaseId}`, 'DELETE'); assert.equal(cleanup.status, 200); assert.equal((await cleanup.json()).remaining, 0); assertions.zeroResidualCleanup = 'PASS';
   const stale = await api('/api/auth/user-info', a.sessions[0]); assert.equal(stale.status, 401); assertions.deletedSessionDenied = 'PASS';
+  await nativeFiles.verifyDenied(a.sessions[0], 'nativeFileDeletedSessionDenied', assertions);
+  await nativeFiles.close(); assertions.nativeFileZeroResidualCleanup = 'PASS';
   const ttlResponse = await fixtureRequest('/v1/leases', 'POST', { scenarioId: 'actual-ttl' });
   const ttlLease = await ttlResponse.json(); assert.equal(ttlResponse.status, 201);
   factoryTime = ttlLease.expiresAt + 1;
@@ -172,6 +179,9 @@ try {
   evidence.wasmSha256 = createHash('sha256').update(readFileSync(resolve('core/deploy/platform-worker/build/worker/index.wasm'))).digest('hex');
   evidence.testCount = Object.keys(assertions).length; evidence.overall = 'PASS';
 } finally {
+  if (nativeFiles) {
+    try { await nativeFiles.close(); } catch { evidence.cleanup = 'blocked'; evidence.overall = 'FAIL'; }
+  }
   if (factory && journal) {
     for (const id of journal.db.prepare("SELECT id FROM leases WHERE state!='cleaned'").all()) {
       try { await factory.clean(id.id); } catch { evidence.cleanup = 'blocked'; evidence.overall = 'FAIL'; }

@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 45
     environment: ci-isolated
     env:
-      CORE_SHA: f781e6c85375ba0945aa4fd4c19ead89e396dfdb
+      CORE_SHA: baafd8dc9f27a5ffd301bac39e9db7883c8808c0
       REPOSITORY_ID: ${{ github.repository_id }}
       REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
     steps:
@@ -73,7 +73,10 @@ jobs:
           node ci/account-factory/prepare-runtime.mjs
           openssl req -x509 -newkey rsa:2048 -nodes -keyout "$RUNNER_TEMP/account-worker/tls-key.pem" -out "$RUNNER_TEMP/account-worker/tls-cert.pem" -days 1 -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1' >/dev/null 2>&1
           chmod 600 "$RUNNER_TEMP/account-worker/tls-key.pem"
-      - name: Exercise real OIDC, registration, login, refresh, revoke and zero-residual cleanup
+      - name: Install existing native Node account storage dependencies
+        working-directory: ai-backend
+        run: npm ci --prefer-offline --no-audit --no-fund
+      - name: Exercise real OIDC, issued-account file isolation, refresh, revoke and zero-residual cleanup
         shell: bash
         run: NODE_EXTRA_CA_CERTS="$RUNNER_TEMP/account-worker/tls-cert.pem" node ci/account-factory/runtime.mjs
       - name: Independently require every expected result and matching compiled wasm digest
