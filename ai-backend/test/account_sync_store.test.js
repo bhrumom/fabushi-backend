@@ -92,12 +92,14 @@ test('separate SQLite writers permit one CAS winner and preserve the losing byte
     const outcomes = await race(dbPath, ['a', 'b'].map((content) => ({ content, precondition: { baseEtag: initial.etag } })));
     assert.equal(outcomes.filter((r) => r.outcome === 'written').length, 1);
     assert.equal(outcomes.filter((r) => r.outcome === 'conflict').length, 1);
-    const winner = store.getAgentObject('user:race', 'agent-race', 'root');
+    let winner = store.getAgentObject('user:race', 'agent-race', 'root');
     const loser = store.getAgentObject('user:race', 'agent-race', outcomes.find((r) => r.outcome === 'conflict').conflictPath);
     assert.deepEqual(new Set([winner.data.toString(), loser.data.toString()]), new Set(['a', 'b']));
+    assert.equal(store.deleteAgentObject('user:race', 'agent-race', 'root', { baseEtag: winner.etag }).deleted, true);
     const absentRace = await race(dbPath, ['c', 'd'].map((content) => ({ content, precondition: { expectAbsent: true } })));
-    assert.ok(absentRace.every((r) => r.outcome === 'conflict'));
-    assert.equal(store.getAgentObject('user:race', 'agent-race', 'root').etag, winner.etag);
+    assert.equal(absentRace.filter((r) => r.outcome === 'written').length, 1);
+    assert.equal(absentRace.filter((r) => r.outcome === 'conflict').length, 1);
+    winner = store.getAgentObject('user:race', 'agent-race', 'root');
     const deleteRace = await race(dbPath, [
       { operation: 'delete', baseEtag: winner.etag },
       { content: 'updated', precondition: { baseEtag: winner.etag } },
