@@ -18,10 +18,62 @@ function firstText(values) {
   return '';
 }
 
+function immutableAccountId(values) {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(text)) return text;
+    }
+  }
+  return '';
+}
+
+function accountAuthorityOrigin(raw) {
+  const url = new URL(String(raw));
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  const firstParty = ['https://api.ombhrum.com', 'https://fabushi-ci-isolated-auth.bhrumom.workers.dev'].includes(url.origin);
+  if ((!firstParty && !loopback) || !['http:', 'https:'].includes(url.protocol)
+      || (!loopback && url.protocol !== 'https:') || url.username || url.password
+      || url.search || url.hash || url.pathname !== '/') throw new Error('Native account origin is not approved.');
+  return url.origin;
+}
+
+function accountAuthError(status = 401) {
+  const error = new Error(status === 503
+    ? 'Fabushi account authority is unavailable.'
+    : 'A valid Fabushi account session is required for synchronized account state.');
+  error.code = status === 503 ? 'ACCOUNT_AUTH_UNAVAILABLE' : 'ACCOUNT_AUTH_REQUIRED';
+  error.statusCode = status;
+  return error;
+}
+
+async function boundedAccountProfile(response) {
+  const limit = 64 * 1024;
+  if (Number(response.headers.get('content-length')) > limit || !response.body) {
+    await response.body?.cancel().catch(() => {});
+    throw accountAuthError(503);
+  }
+  const reader = response.body.getReader();
+  const parts = []; let size = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) { await reader.cancel().catch(() => {}); throw accountAuthError(503); }
+      parts.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(size); let offset = 0;
+  for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+}
+
 function remoteAccount(payload) {
   const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload ?? {};
   const user = data?.user && typeof data.user === 'object' ? data.user : {};
-  const id = firstText([
+  const id = immutableAccountId([
     data.userId,
     data.user_id,
     data.userNo,
@@ -109,31 +161,27 @@ export async function resolveMarketplaceAccountIdentity(
 
   if (token && apiBaseUrl && typeof fetchImpl === 'function') {
     try {
-      const response = await fetchImpl(`${apiBaseUrl}/api/auth/user-info`, {
+      const origin = accountAuthorityOrigin(apiBaseUrl);
+      const response = await fetchImpl(`${origin}/api/auth/user-info`, {
         headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        redirect: 'error',
         signal: AbortSignal.timeout(8_000),
       });
       if (response.ok) {
-        const profile = remoteAccount(await response.json());
-        const account = stableIdentity(profile.id || profile.username || profile.email, profile);
+        const profile = remoteAccount(await boundedAccountProfile(response));
+        const account = stableIdentity(profile.id, profile);
         if (account) return account;
       }
       if (requireAuthenticated) {
-        const error = new Error('A valid Fabushi account session is required for synchronized account state.');
-        error.code = 'ACCOUNT_AUTH_REQUIRED';
-        error.statusCode = response.status === 401 || response.status === 403 ? response.status : 401;
-        throw error;
+        throw accountAuthError(response.status === 401 || response.status === 403 ? response.status : response.ok ? 401 : 503);
       }
     } catch (error) {
-      if (requireAuthenticated) throw error;
+      if (requireAuthenticated) throw error?.code === 'ACCOUNT_AUTH_REQUIRED' ? error : accountAuthError(503);
     }
   }
 
   if (requireAuthenticated) {
-    const error = new Error('A valid Fabushi account session is required for synchronized account state.');
-    error.code = 'ACCOUNT_AUTH_REQUIRED';
-    error.statusCode = 401;
-    throw error;
+    throw accountAuthError();
   }
   return localIdentity(req);
 }

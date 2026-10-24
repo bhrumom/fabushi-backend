@@ -8,6 +8,8 @@ on:
       - 'ai-backend/src/account_sync_store.js'
       - 'ai-backend/src/miniapp_marketplace_http.js'
       - 'ai-backend/src/native_account_json.js'
+      - 'ai-backend/src/marketplace_account_identity.js'
+      - 'ai-backend/test/marketplace_account_identity.test.js'
       - 'ai-backend/src/server.js'
       - 'ai-backend/test/multidevice_account_sync_integration.test.js'
       - 'ai-backend/test/account_sync_store.test.js'
@@ -39,4 +41,4 @@ jobs:
         run: npm ci --prefer-offline --no-audit --no-fund
       - name: Preserve actual account storage and multi-device HTTP behavior
         working-directory: ai-backend
-        run: node --test test/account_sync_store.test.js test/multidevice_account_sync_integration.test.js
+        run: node --test test/marketplace_account_identity.test.js test/account_sync_store.test.js test/multidevice_account_sync_integration.test.js
