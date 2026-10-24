@@ -641,6 +641,10 @@ export class AccountSyncStore {
   }
 
   putAgentObject(accountIdInput, agentIdInput, relPathInput, dataInput, options = {}) {
+    return this.db.transaction(() => this.#putAgentObject(accountIdInput, agentIdInput, relPathInput, dataInput, options)).immediate();
+  }
+
+  #putAgentObject(accountIdInput, agentIdInput, relPathInput, dataInput, options) {
     const accountId = normalizeAccountId(accountIdInput);
     const agentId = normalizeAgentId(agentIdInput);
     const relPath = normalizeAgentPath(relPathInput);
@@ -655,10 +659,17 @@ export class AccountSyncStore {
     const baseEtag = options.baseEtag == null ? null : String(options.baseEtag);
     const expectAbsent = options.expectAbsent === true;
     const conflict = (expectAbsent && previous) || (baseEtag !== null && previous?.etag !== baseEtag);
+    const sha256 = crypto.createHash('sha256').update(data).digest('hex');
     if (conflict) {
-      const suffix = crypto.createHash('sha256').update(data).digest('hex').slice(0, 16);
-      const conflictPath = normalizeAgentPath(`.conflicts/${this.now()}-${suffix}/${relPath}`);
-      const result = this.putAgentObject(accountId, agentId, conflictPath, data, { expectAbsent: true });
+      const suffix = crypto.createHash('sha256').update(JSON.stringify({
+        path: relPath, baseEtag, expectAbsent, currentEtag: previous?.etag ?? null, sha256,
+      })).digest('hex');
+      const conflictPath = normalizeAgentPath(`.conflicts/${suffix}/${relPath}`);
+      const existing = this.getAgentObject(accountId, agentId, conflictPath);
+      if (existing && existing.sha256 !== sha256) throw new Error('Agent conflict copy integrity mismatch');
+      const result = existing
+        ? { ...existing, data: undefined, outcome: 'written' }
+        : this.#putAgentObject(accountId, agentId, conflictPath, data, { expectAbsent: true });
       return {
         outcome: 'conflict',
         path: relPath,
@@ -668,7 +679,6 @@ export class AccountSyncStore {
       };
     }
 
-    const sha256 = crypto.createHash('sha256').update(data).digest('hex');
     const blobId = sha256;
     const now = this.now();
     const transaction = this.db.transaction(() => {
@@ -735,6 +745,10 @@ export class AccountSyncStore {
   }
 
   deleteAgentObject(accountIdInput, agentIdInput, relPathInput, { baseEtag } = {}) {
+    return this.db.transaction(() => this.#deleteAgentObject(accountIdInput, agentIdInput, relPathInput, baseEtag)).immediate();
+  }
+
+  #deleteAgentObject(accountIdInput, agentIdInput, relPathInput, baseEtag) {
     const accountId = normalizeAccountId(accountIdInput);
     const agentId = normalizeAgentId(agentIdInput);
     const relPath = normalizeAgentPath(relPathInput);

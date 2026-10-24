@@ -10,6 +10,8 @@ on:
       - 'ai-backend/src/native_account_json.js'
       - 'ai-backend/src/server.js'
       - 'ai-backend/test/multidevice_account_sync_integration.test.js'
+      - 'ai-backend/test/account_sync_store.test.js'
+      - 'ai-backend/test/account_store_race_worker.js'
       - 'docs/specs/native-agent-store-gateway.md'
       - '.github/workflows/native-agent-store-gateway.yml'
   workflow_dispatch:
