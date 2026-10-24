@@ -22,12 +22,12 @@ test('native journal probes require canonical 401s without any credentials or va
     assert.equal(new URL(url).origin, 'https://api.ombhrum.com');
     assert.equal(options.redirect, 'manual');
     assert.equal(options.headers.authorization, undefined);
-    if (options.method === 'POST') assert.equal(options.body, '{}');
+    if (options.method !== 'GET') assert.equal(options.body, '{}');
     else assert.equal(options.body, undefined);
     return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401,
       headers: { 'content-type': 'application/json', 'x-fabushi-control-plane': 'mahayana-platform' } });
   });
-  assert.equal(checks.length, 5);
+  assert.equal(checks.length, 9);
   for (const status of [200, 400, 404, 500]) {
     await assert.rejects(checkNativeJournalPublic(async () => new Response('{}', { status,
       headers: { 'content-type': 'application/json', 'x-fabushi-control-plane': 'mahayana-platform' } })));

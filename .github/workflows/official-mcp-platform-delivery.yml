@@ -61,6 +61,18 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git -C core rev-parse HEAD)" = "$CORE_SHA"
+      - name: Require actual native clock evidence for clock-enabled source
+        if: ${{ !inputs.inventory_only }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs=require('node:fs');
+            const config=fs.readFileSync('core/third_party/mahayana/mahayana-rs/mahayana-platform-worker/wrangler.toml','utf8');
+            if(config.includes('FABUSHI_AUTOMATION_CLOCK')) {
+              const sha=process.env.CORE_SHA;
+              const runs=await github.rest.actions.listWorkflowRuns({owner:'bhrumom',repo:'fabushi-platform-core',workflow_id:'native-automation-journal.yml',head_sha:sha,per_page:100});
+              if(!runs.data.workflow_runs.some(r=>r.head_sha===sha&&r.head_branch==='main'&&r.conclusion==='success')) throw new Error('Exact Core main native clock runtime verification has not passed');
+            }
       - uses: actions/setup-node@v6
         with:
           node-version: 24

@@ -32,3 +32,8 @@ test('source verification and production credential isolation remain mandatory',
  assert.ok(workflow.includes('secrets.FABUSHI_FDN_CF_BOOTSTRAP_TOKEN'));assert.ok(!workflow.includes('CI_CLOUDFLARE_API_TOKEN'));
  assert.ok(workflow.includes('mcp-platform-recovery.json'));assert.ok(workflow.includes('mcp-account-recovery.json'));
 });
+test('clock-enabled deployments require actual clock evidence on the same Core main',()=>{
+ const step=workflow.split(/\n      - /).find(s=>s.startsWith('name: Require actual native clock evidence'));
+ assert.ok(step);assert.match(step,/if: \$\{\{ !inputs\.inventory_only \}\}/);
+ for(const text of ['FABUSHI_AUTOMATION_CLOCK','native-automation-journal.yml','head_sha:sha',"r.head_branch==='main'","r.conclusion==='success'",'Exact Core main native clock runtime verification has not passed']) assert.ok(step.includes(text));
+});
