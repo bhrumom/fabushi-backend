@@ -30,6 +30,7 @@ import {
   ExtensionModerationStoreError,
 } from './extension_moderation_store.js';
 import { AccountSyncStore } from './account_sync_store.js';
+import { createNativeAccountJsonParser, MAX_AGENT_OBJECT_BYTES } from './native_account_json.js';
 import { readGlobalDharmaEntitlement } from './global_dharma_entitlement.js';
 import { GlobalDharmaRuntimeStore } from './global_dharma_runtime_store.js';
 import {
@@ -61,7 +62,6 @@ import {
   handleMcpRequest,
 } from './miniapp_marketplace_mcp.js';
 
-const MAX_JSON_BYTES = '1mb';
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
 function bearerToken(req) {
@@ -116,7 +116,7 @@ export function createMiniAppMarketplaceRouter({
   });
   const globalDharmaRuntimeStore = new GlobalDharmaRuntimeStore({ accountSyncStore: syncStore });
   const router = express.Router();
-  router.use(express.json({ limit: MAX_JSON_BYTES }));
+  router.use(createNativeAccountJsonParser());
 
   async function identityFor(req, { accountRequired = false, publicRead = false } = {}) {
     return resolveMarketplaceAccountIdentity(req, {
@@ -918,11 +918,19 @@ export function createMiniAppMarketplaceRouter({
   router.put('/v1/account/agents/:agentId/store', route(async (req, res) => {
     const identity = await identityFor(req, { accountRequired: true });
     const relPath = safeQuery(req.body?.path, 4096);
-    const dataBase64 = typeof req.body?.dataBase64 === 'string' ? req.body.dataBase64 : '';
-    if (!relPath || !dataBase64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(dataBase64)) {
+    const dataBase64 = req.body?.dataBase64;
+    if (!relPath || typeof dataBase64 !== 'string'
+      || dataBase64.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(dataBase64)) {
       throw new MiniAppMarketplaceError('INVALID_AGENT_STORE_OBJECT', 'path and base64 data are required');
     }
     const data = Buffer.from(dataBase64, 'base64');
+    if (data.toString('base64') !== dataBase64) {
+      throw new MiniAppMarketplaceError('INVALID_AGENT_STORE_OBJECT', 'canonical base64 data is required');
+    }
+    if (data.byteLength > MAX_AGENT_OBJECT_BYTES) {
+      res.status(413).json({ error: 'agent_store_object_too_large', maxBytes: MAX_AGENT_OBJECT_BYTES });
+      return;
+    }
     const result = syncStore.putAgentObject(identity.accountId, req.params.agentId, relPath, data, {
       baseEtag: req.body?.baseEtag,
       expectAbsent: req.body?.expectAbsent === true,

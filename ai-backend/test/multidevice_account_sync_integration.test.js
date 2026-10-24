@@ -10,6 +10,7 @@ import express from 'express';
 import { AccountSyncStore } from '../src/account_sync_store.js';
 import { createMiniAppMarketplaceRouter } from '../src/miniapp_marketplace_http.js';
 import { registerPlatformApi } from '../src/platform_api.js';
+import { createNativeAccountJsonParser, MAX_AGENT_OBJECT_BYTES } from '../src/native_account_json.js';
 
 function asyncHandler(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -34,7 +35,7 @@ async function withTwoDeviceServer(run) {
   };
 
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
+  app.use(createNativeAccountJsonParser());
   registerPlatformApi({ app, db, resolveUser, asyncHandler });
   const marketplace = createMiniAppMarketplaceRouter({
     dataDir: root,
@@ -75,6 +76,42 @@ function headers(token, deviceId) {
     'content-type': 'application/json',
   };
 }
+
+test('native file HTTP supports empty and 8 MiB files with account and conflict fences', async () => {
+  await withTwoDeviceServer(async (baseUrl) => {
+    const endpoint = `${baseUrl}/v1/account/agents/native-files/store`;
+    const mac = headers('mac-session-token', 'mac-a');
+    const iphone = headers('iphone-session-token', 'iphone-b');
+    const other = headers('other-session-token', 'other-c');
+    const put = (body) => fetch(endpoint, { method: 'PUT', headers: mac, body: JSON.stringify(body) });
+    const read = (name, auth = iphone) => fetch(`${endpoint}?path=${encodeURIComponent(name)}`, { headers: auth });
+    const empty = await json(await put({ path: 'empty.txt', dataBase64: '', expectAbsent: true }));
+    assert.equal((await json(await read('empty.txt'))).dataBase64, '');
+    const bytes = Buffer.alloc(MAX_AGENT_OBJECT_BYTES, 173);
+    await json(await put({ path: 'max.bin', dataBase64: bytes.toString('base64'), expectAbsent: true }));
+    const loaded = await json(await read('max.bin'));
+    assert.deepEqual(Buffer.from(loaded.dataBase64, 'base64'), bytes);
+    assert.equal((await read('max.bin', other)).status, 404);
+    assert.equal((await read('empty.txt', other)).status, 404);
+
+    const conflictResponse = await put({ path: 'empty.txt', dataBase64: 'eA==', baseEtag: 'stale' });
+    assert.equal(conflictResponse.status, 409);
+    const conflict = await conflictResponse.json();
+    assert.equal((await json(await read(conflict.conflictPath))).dataBase64, 'eA==');
+    assert.equal((await json(await read('empty.txt'))).etag, empty.etag);
+    for (const invalid of [undefined, null, 1, 'Zg', 'Zh==', '====', 'a===', 'Z g==']) {
+      assert.equal((await put({ path: 'invalid.bin', dataBase64: invalid })).status, 400);
+    }
+    assert.equal((await read('invalid.bin')).status, 404);
+    assert.equal((await put({ path: 'oversize.bin', dataBase64: Buffer.alloc(MAX_AGENT_OBJECT_BYTES + 1).toString('base64') })).status, 413);
+    assert.equal((await read('oversize.bin')).status, 404);
+    assert.equal((await fetch(`${baseUrl}/v1/account/agents/native-files`, {
+      method: 'PUT', headers: mac, body: JSON.stringify({ padding: 'x'.repeat(1024 * 1024) }),
+    })).status, 413, 'unrelated JSON routes retain their existing 1 MiB limit');
+    assert.equal((await put({ path: 'too-large-json.bin', dataBase64: 'A'.repeat(12 * 1024 * 1024) })).status, 413);
+    assert.equal((await read('too-large-json.bin')).status, 404);
+  });
+});
 
 test('two devices with different sessions converge Mini App, Bot chat history, content state, CloudStorage and uninstall', async () => {
   await withTwoDeviceServer(async (baseUrl) => {

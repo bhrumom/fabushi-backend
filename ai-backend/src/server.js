@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { resolveAccountEntitlements } from './account_entitlements.js';
 import { resolveDelegatedPluginIdentity } from './delegated_plugin_identity.js';
 import { AccountSyncStore } from './account_sync_store.js';
+import { createNativeAccountJsonParser } from './native_account_json.js';
 import { readGlobalDharmaEntitlement } from './global_dharma_entitlement.js';
 import { GlobalDharmaRuntimeStore } from './global_dharma_runtime_store.js';
 import { registerPlatformApi } from './platform_api.js';
@@ -87,7 +88,7 @@ app.use(cors({
   credentials: true,
   exposedHeaders: ['mcp-session-id', 'mcp-protocol-version'],
 }));
-app.use(express.json({ limit: '1mb' }));
+app.use(createNativeAccountJsonParser());
 app.use(
   rateLimit({
     windowMs: 60_000,
