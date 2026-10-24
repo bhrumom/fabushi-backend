@@ -27,11 +27,36 @@ export async function checkNativeAccountStorePublic(fetchImpl = fetch) {
   return checks;
 }
 
+export async function checkNativeJournalPublic(fetchImpl = fetch) {
+  const checks = [];
+  const origin = 'https://api.ombhrum.com';
+  for (const [method, path] of [
+    ['GET', '/v1/automation-runs/readiness-probe'], ['GET', '/v1/ai/usage'],
+    ['POST', '/v1/automation-runs'], ['POST', '/v1/automation-runs/complete'], ['POST', '/v1/automation-events/poll'],
+  ]) {
+    const response = await fetchImpl(origin + path, {
+      method, redirect: 'manual', signal: AbortSignal.timeout(15_000),
+      headers: { accept: 'application/json', ...(method === 'POST' ? { 'content-type': 'application/json' } : {}) },
+      ...(method === 'POST' ? { body: '{}' } : {}),
+    });
+    assert.equal(response.status, 401, `Native journal credential boundary for ${method} ${path}`);
+    assert.equal(response.headers.get('location'), null);
+    assert.ok(response.headers.get('content-type')?.includes('application/json'));
+    assert.equal(response.headers.get('x-fabushi-control-plane'), 'mahayana-platform');
+    const body = await response.json();
+    assert.ok(body && typeof body === 'object' && body.error);
+    checks.push({ origin, path, method, status: response.status, owner: 'mahayana-platform' });
+  }
+  return checks;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const checks = await checkNativeAccountStorePublic();
+  const journalChecks = await checkNativeJournalPublic();
   await writeFile('native-account-store-public-readiness.json', JSON.stringify({
     checkSourceSha: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID,
-    checks, result: 'passed', scope: 'public route ownership and anonymous refusal only',
+    checks, journalChecks, result: 'passed', scope: 'public route ownership and anonymous refusal only',
+    authenticatedJournalParity: 'not-verified-in-production',
     authenticatedFileParity: 'not-verified', desktopCutover: 'not-verified',
   }, null, 2) + '\n');
 }
