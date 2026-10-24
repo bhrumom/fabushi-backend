@@ -29,6 +29,8 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
           node --check ci/account-factory/cloud/cancel-probe.mjs
+          node --check ci/account-factory/native-account-store-runtime.mjs
+          node --check ci/account-factory/runtime.mjs
           mkdir -p evidence
           node --test --test-reporter=tap ci/account-factory/*.test.mjs | tee evidence/contracts.tap
           printf '{"kind":"contract-tests","sourceSha":"%s","runId":"%s","runAttempt":"%s","exitCode":0,"liveAccountLifecycle":"NOT_VERIFIED"}\n' "$EXACT_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > evidence/source.json
