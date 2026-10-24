@@ -33,11 +33,13 @@ export async function checkNativeJournalPublic(fetchImpl = fetch) {
   for (const [method, path] of [
     ['GET', '/v1/automation-runs/readiness-probe'], ['GET', '/v1/ai/usage'],
     ['POST', '/v1/automation-runs'], ['POST', '/v1/automation-runs/complete'], ['POST', '/v1/automation-events/poll'],
+    ['GET', '/v1/automations'], ['GET', '/v1/automations/readiness-probe'],
+    ['PUT', '/v1/automations/readiness-probe'], ['DELETE', '/v1/automations/readiness-probe'],
   ]) {
     const response = await fetchImpl(origin + path, {
       method, redirect: 'manual', signal: AbortSignal.timeout(15_000),
-      headers: { accept: 'application/json', ...(method === 'POST' ? { 'content-type': 'application/json' } : {}) },
-      ...(method === 'POST' ? { body: '{}' } : {}),
+      headers: { accept: 'application/json', ...(method !== 'GET' ? { 'content-type': 'application/json' } : {}) },
+      ...(method !== 'GET' ? { body: '{}' } : {}),
     });
     assert.equal(response.status, 401, `Native journal credential boundary for ${method} ${path}`);
     assert.equal(response.headers.get('location'), null);
