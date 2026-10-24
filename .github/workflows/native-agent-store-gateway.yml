@@ -1,0 +1,37 @@
+name: Native Agent Store gateway
+on:
+  pull_request:
+    paths:
+      - 'fabushi/web/src/router.js'
+      - 'fabushi/web/src/routes/account-agent-store-gateway.js'
+      - 'fabushi/web/tests/account-agent-store-gateway.test.js'
+      - 'ai-backend/src/account_sync_store.js'
+      - 'ai-backend/src/miniapp_marketplace_http.js'
+      - 'docs/specs/native-agent-store-gateway.md'
+      - '.github/workflows/native-agent-store-gateway.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  account-store:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ai-backend/package-lock.json
+      - name: Bind exact source and test gateway routing
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          node --test fabushi/web/tests/account-agent-store-gateway.test.js
+      - name: Install existing backend dependencies
+        working-directory: ai-backend
+        run: npm ci --prefer-offline --no-audit --no-fund
+      - name: Preserve actual account storage and multi-device HTTP behavior
+        working-directory: ai-backend
+        run: node --test test/account_sync_store.test.js test/multidevice_account_sync_integration.test.js
