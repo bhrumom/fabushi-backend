@@ -36,3 +36,6 @@ Discovery: the existing store supports 8 MiB objects including empty bytes, but 
 
 ## References / compliance
 AGENTS.md; docs/specs/spec-first-ai-development.md; ai-backend/src/account_sync_store.js; ai-backend/src/miniapp_marketplace_http.js; fabushi/web/src/router.js and routes/platform-gateway-routes.js; Desktop PR #172; Core PR #24. All ACs pending. No production writes or deployment performed by discovery.
+
+## Public route readiness evidence
+After the existing protected production delivery, run an Actions-only read-only readiness check against fixed public api.ombhrum.com and direct ai.ombhrum.com. GET Agent collection/detail/store, Bot collection and account sync without credentials must return 401 with a JSON error, no redirect, and the public gateway's selected-owner header. Record exact check source, run, status and owner without response bodies or tokens. This proves route ownership and anonymous refusal only, not authenticated account/file parity, deployed service source provenance, Desktop cutover or complete AC3. Bind deployed source separately to the existing delivery artifacts. Unit-test readiness failures with injected fetch in Actions; production probes only on main manual dispatch.
