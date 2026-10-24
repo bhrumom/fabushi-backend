@@ -120,3 +120,6 @@ Current status: AC-FDN-B1 is being implemented in this branch. AC-FDN-B2..B4 rem
 - B-FDN-28: This client is an enabling dependency only. The existing reverse-WSS device executor remains non-canonical until Desktop Host performs target-side grant/claim/result and Backend operationJournal wiring is switched to the real Core controller client. No G09/G16 or FDN-A04/A08/A16 is passed by this slice.
 
 - AC-FDN-B10: Exact-head Actions prove service Authorization is used, request JSON/path identities are exact, malformed identifiers/digests fail before fetch, response identity mismatch fails closed, and target-only endpoints are absent from this service client.
+
+### Native cloud inventory extension — 2026-10-24
+The same protected Platform delivery workflow gains an explicit inventory_only mode for reviewing live schema and pending migrations before native automation cutover. It retains all canonical-source/broker/environment/concurrency guards, reads only schema/migration names and existing recovery bookmarks, and excludes every migration/deploy/production verification step. Inventory provenance must explicitly say no deployment was performed. Default false preserves the existing reviewed delivery path. Native migration scope and acceptance are in docs/specs/native-agent-store-gateway.md; inventory is not MCP or cloud-service deployment acceptance.

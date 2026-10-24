@@ -10,6 +10,10 @@ on:
         description: Apply reviewed pending canonical PLATFORM_DB migrations before deployment
         type: boolean
         default: false
+      inventory_only:
+        description: Read live schema and pending migrations without migrations or deployment
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -61,13 +65,16 @@ jobs:
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !inputs.inventory_only }}
         with:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        if: ${{ !inputs.inventory_only }}
         with:
           workspaces: core/deploy/platform-worker -> target
       - name: Install pinned Worker builder
+        if: ${{ !inputs.inventory_only }}
         run: cargo install worker-build --version 0.8.5 --locked
       - name: Confirm existing signing and provider registrations
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
@@ -107,6 +114,7 @@ jobs:
               assert ok,'Provider registration incomplete: '+provider
           PY
       - name: Compile verified Worker source
+        if: ${{ !inputs.inventory_only }}
         working-directory: core/deploy/platform-worker
         run: worker-build --release --no-panic-recovery --locked
       - name: Capture ACCOUNT_DB recovery bookmark before mutation
@@ -118,14 +126,23 @@ jobs:
       - name: Inventory pending canonical PLATFORM_DB migrations
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
         run: npx --yes wrangler@4.110.0 d1 migrations list PLATFORM_DB --remote > "$RUNNER_TEMP/mcp-platform-pending.txt"
+      - name: Inventory pending account migrations and schema names
+        working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4.110.0 d1 migrations list ACCOUNT_DB --remote > "$RUNNER_TEMP/mcp-account-pending.txt"
+          npx --yes wrangler@4.110.0 d1 execute ACCOUNT_DB --remote --command "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;" --json > "$RUNNER_TEMP/mcp-account-schema.json"
+          npx --yes wrangler@4.110.0 d1 execute PLATFORM_DB --remote --command "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;" --json > "$RUNNER_TEMP/mcp-platform-schema.json"
       - name: Apply reviewed canonical PLATFORM_DB migrations
-        if: inputs.migrate_platform
+        if: ${{ !inputs.inventory_only && inputs.migrate_platform }}
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
         run: npx --yes wrangler@4.110.0 d1 migrations apply PLATFORM_DB --remote
       - name: Apply additive account connection migrations
+        if: ${{ !inputs.inventory_only }}
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
         run: npx --yes wrangler@4.110.0 d1 migrations apply ACCOUNT_DB --remote
       - name: Deploy the verified platform artifact
+        if: ${{ !inputs.inventory_only }}
         working-directory: core/third_party/mahayana/mahayana-rs/mahayana-platform-worker
         run: |
           python3 - <<'PYBUILD'
@@ -138,6 +155,7 @@ jobs:
           PYBUILD
           npx --yes wrangler@4.110.0 deploy --config wrangler.toml
       - name: Verify real public routing and credential boundary
+        if: ${{ !inputs.inventory_only }}
         run: |
           set -euo pipefail
           user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/154.0.0.0 Safari/537.36'
@@ -151,8 +169,13 @@ jobs:
           jq -e '.error == "callback_expired"' "$RUNNER_TEMP/mcp-callback-body"
           grep -qi '^x-fabushi-control-plane: mahayana-platform' "$RUNNER_TEMP/mcp-callback-headers"
       - name: Record exact deployment provenance
+        if: ${{ !inputs.inventory_only }}
         run: |
           jq -n --arg coreSha "$CORE_SHA" --arg backendSha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" '{coreRepository:"bhrumom/fabushi-platform-core",coreSha:$coreSha,backendRepository:"bhrumom/fabushi-backend",backendSha:$backendSha,runId:$run,worker:"mahayana-platform",route:"https://api.ombhrum.com/api/mcp/oauth/start",result:"deployed; real provider consent and packaged acceptance still required"}' > official-mcp-delivery.json
+      - name: Record read-only inventory provenance
+        if: inputs.inventory_only
+        run: |
+          jq -n --arg coreSha "$CORE_SHA" --arg backendSha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" '{coreSha:$coreSha,backendSha:$backendSha,runId:$run,mode:"inventory_only",deployment:"not-performed",migrations:"not-applied",scope:"schema names, pending migration names and recovery bookmarks only"}' > native-cloud-inventory.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -160,6 +183,10 @@ jobs:
           if-no-files-found: error
           path: |
             official-mcp-delivery.json
+            native-cloud-inventory.json
             ${{ runner.temp }}/mcp-account-recovery.json
             ${{ runner.temp }}/mcp-platform-recovery.json
             ${{ runner.temp }}/mcp-platform-pending.txt
+            ${{ runner.temp }}/mcp-account-pending.txt
+            ${{ runner.temp }}/mcp-account-schema.json
+            ${{ runner.temp }}/mcp-platform-schema.json
