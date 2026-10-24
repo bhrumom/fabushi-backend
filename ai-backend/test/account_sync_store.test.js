@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { Worker } from 'node:worker_threads';
 
 import { AccountSyncStore } from '../src/account_sync_store.js';
 
@@ -36,6 +37,77 @@ function globalDharmaManifest() {
     },
   };
 }
+
+test('identical rejected Agent writes retain one durable conflict copy across reopen', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabushi-conflict-replay-'));
+  const dbPath = path.join(root, 'sync.sqlite');
+  let store = new AccountSyncStore({ dbPath, now: () => 1_900_000_000_000 });
+  try {
+    store.putAgentObject('user:race', 'agent-race', 'root', Buffer.from('first'), { expectAbsent: true });
+    const rejected = () => store.putAgentObject('user:race', 'agent-race', 'root', Buffer.from('second'), { expectAbsent: true });
+    const conflict = rejected();
+    const cursor = store.currentCursor('user:race');
+    for (let i = 0; i < 10; i++) {
+      assert.equal(rejected().conflictPath, conflict.conflictPath);
+    }
+    assert.equal(store.currentCursor('user:race'), cursor, 'replay must not append duplicate sync events');
+    store.close(); store = new AccountSyncStore({ dbPath });
+    assert.equal(rejected().conflictPath, conflict.conflictPath);
+    assert.equal(store.currentCursor('user:race'), cursor);
+    assert.equal(store.listAgentObjects('user:race', 'agent-race').length, 2);
+    assert.equal(store.getAgentObject('user:race', 'agent-race', 'root').data.toString(), 'first');
+    assert.equal(store.getAgentObject('user:race', 'agent-race', conflict.conflictPath).data.toString(), 'second');
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+async function race(dbPath, operations) {
+  const barrier = new SharedArrayBuffer(4);
+  const workers = operations.map((operation) => new Worker(new URL('./account_store_race_worker.js', import.meta.url), {
+    workerData: { ...operation, dbPath, barrier },
+  }));
+  const ready = [];
+  const results = [];
+  for (const worker of workers) {
+    let onReady, onResult;
+    ready.push(new Promise((resolve, reject) => { onReady = resolve; worker.once('error', reject); }));
+    results.push(new Promise((resolve, reject) => {
+      onResult = resolve; worker.once('error', reject);
+      worker.once('exit', (code) => { if (code !== 0) reject(new Error(`race worker exit ${code}`)); });
+    }));
+    worker.on('message', (message) => { if (message.ready) onReady(); else onResult(message.result); });
+  }
+  try {
+    await Promise.all(ready);
+    Atomics.store(new Int32Array(barrier), 0, 1); Atomics.notify(new Int32Array(barrier), 0);
+    return await Promise.all(results);
+  } finally { await Promise.all(workers.map((worker) => worker.terminate())); }
+}
+
+test('separate SQLite writers permit one CAS winner and preserve the losing bytes', { timeout: 30_000 }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fabushi-file-cas-'));
+  const dbPath = path.join(root, 'sync.sqlite');
+  const store = new AccountSyncStore({ dbPath });
+  try {
+    const initial = store.putAgentObject('user:race', 'agent-race', 'root', Buffer.from('initial'), { expectAbsent: true });
+    const outcomes = await race(dbPath, ['a', 'b'].map((content) => ({ content, precondition: { baseEtag: initial.etag } })));
+    assert.equal(outcomes.filter((r) => r.outcome === 'written').length, 1);
+    assert.equal(outcomes.filter((r) => r.outcome === 'conflict').length, 1);
+    let winner = store.getAgentObject('user:race', 'agent-race', 'root');
+    const loser = store.getAgentObject('user:race', 'agent-race', outcomes.find((r) => r.outcome === 'conflict').conflictPath);
+    assert.deepEqual(new Set([winner.data.toString(), loser.data.toString()]), new Set(['a', 'b']));
+    assert.equal(store.deleteAgentObject('user:race', 'agent-race', 'root', { baseEtag: winner.etag }).deleted, true);
+    const absentRace = await race(dbPath, ['c', 'd'].map((content) => ({ content, precondition: { expectAbsent: true } })));
+    assert.equal(absentRace.filter((r) => r.outcome === 'written').length, 1);
+    assert.equal(absentRace.filter((r) => r.outcome === 'conflict').length, 1);
+    winner = store.getAgentObject('user:race', 'agent-race', 'root');
+    const deleteRace = await race(dbPath, [
+      { operation: 'delete', baseEtag: winner.etag },
+      { content: 'updated', precondition: { baseEtag: winner.etag } },
+    ]);
+    if (deleteRace[0].deleted) assert.equal(deleteRace[1].outcome, 'conflict');
+    else { assert.equal(deleteRace[0].conflict, true); assert.equal(deleteRace[1].outcome, 'written'); }
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test('same account converges installed Mini App and Bot while another account stays isolated', () => {
   const scope = fixture();
