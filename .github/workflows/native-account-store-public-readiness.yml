@@ -1,0 +1,38 @@
+name: Native account store public readiness
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/scripts/*native-account-store-public-readiness.mjs'
+      - '.github/workflows/native-account-store-public-readiness.yml'
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: node --test .github/scripts/test-native-account-store-public-readiness.mjs
+  public-readiness:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: node .github/scripts/native-account-store-public-readiness.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-account-store-public-readiness-${{ github.sha }}
+          path: native-account-store-public-readiness.json
+          if-no-files-found: error
