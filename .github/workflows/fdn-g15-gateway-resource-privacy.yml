@@ -1,0 +1,97 @@
+name: FDN G15 gateway resource privacy
+
+on:
+  pull_request:
+    paths:
+      - "official-device-mcp/**"
+      - "fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service"
+      - ".github/scripts/fdn-g15-gateway-resource-privacy.sh"
+      - ".github/workflows/fdn-g15-gateway-resource-privacy.yml"
+  push:
+    branches: [main]
+    paths:
+      - "official-device-mcp/**"
+      - "fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service"
+      - ".github/scripts/fdn-g15-gateway-resource-privacy.sh"
+      - ".github/workflows/fdn-g15-gateway-resource-privacy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gateway-resource-privacy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Bind exact tested HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git status --porcelain)" = ""
+      - name: Setup exact Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: official-device-mcp/package-lock.json
+      - name: Install locked production dependencies
+        working-directory: official-device-mcp
+        shell: bash
+        run: npm ci --ignore-scripts
+      - name: Verify gateway service fences
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fx 'MemoryMax=150M' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -Fx 'TasksMax=256' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          grep -F 'ReadWritePaths=/var/lib/fabushi-fdn' fdn-network-coordinator/systemd/fabushi-fdn-official-device-mcp.service
+          node --test official-device-mcp/tests/production-startup.test.js
+      - name: Measure production gateway steady state and privacy
+        shell: bash
+        run: bash .github/scripts/fdn-g15-gateway-resource-privacy.sh evidence
+      - name: Secret/privacy scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          ps=[re.compile(rb"(?i)authorization:\s*bearer\s+[A-Za-z0-9._~+/-]{12,}"),re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")]
+          for p in Path("evidence").rglob("*"):
+              if p.is_file():
+                  b=p.read_bytes()
+                  if any(x.search(b) for x in ps): raise SystemExit(f"secret-like material in {p}")
+          print("gateway secret scan pass")
+          PY
+      - name: Seal evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c evidence/SHA256SUMS
+          git diff --exit-code
+      - name: Upload exact-head gateway evidence
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fdn-g15-gateway-resource-privacy-${{ env.EXPECTED_SHA }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Report evidence identity
+        shell: bash
+        run: |
+          {
+            echo "source_sha=$EXPECTED_SHA"
+            echo "artifact_id=${{ steps.upload.outputs.artifact-id }}"
+            echo "artifact_digest=sha256:${{ steps.upload.outputs.artifact-digest }}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
