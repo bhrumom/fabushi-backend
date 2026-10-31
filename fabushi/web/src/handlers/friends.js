@@ -700,23 +700,26 @@ export async function handleEditDirectMessage(request, env, db, messageId) {
 
   const now = new Date().toISOString();
   const resultRevision = expectedRevision + 1;
-  const [updateResult] = await db.batch([
+  const [journalResult, updateResult] = await db.batch([
+    db.prepare(`
+      INSERT INTO direct_message_mutations (
+        sender_user_id, operation_id, message_id, mutation_kind,
+        expected_revision, result_revision, request_digest, created_at
+      )
+      SELECT ?, ?, id, 'edit', ?, ?, ?, ?
+      FROM direct_messages
+      WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at IS NULL
+    `).bind(
+      auth.userId, operationId, expectedRevision, resultRevision, requestDigest, now,
+      target.id, auth.userId, expectedRevision,
+    ),
     db.prepare(`
       UPDATE direct_messages
       SET body = ?, revision = ?, edited_at = ?
       WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at IS NULL
     `).bind(text, resultRevision, now, target.id, auth.userId, expectedRevision),
-    db.prepare(`
-      INSERT INTO direct_message_mutations (
-        sender_user_id, operation_id, message_id, mutation_kind,
-        expected_revision, result_revision, request_digest, created_at
-      ) VALUES (?, ?, ?, 'edit', ?, ?, ?, ?)
-    `).bind(
-      auth.userId, operationId, target.id,
-      expectedRevision, resultRevision, requestDigest, now,
-    ),
   ]);
-  if (updateResult?.meta?.changes !== 1) {
+  if (journalResult?.meta?.changes !== 1 || updateResult?.meta?.changes !== 1) {
     return jsonResponse({
       success: false,
       error: '消息版本已更新',
@@ -774,32 +777,40 @@ export async function handleDeleteDirectMessage(request, env, db, messageId) {
 
   const now = new Date().toISOString();
   const resultRevision = expectedRevision + 1;
-  const [updateResult] = await db.batch([
+  const [journalResult, updateResult] = await db.batch([
+    db.prepare(`
+      INSERT INTO direct_message_mutations (
+        sender_user_id, operation_id, message_id, mutation_kind,
+        expected_revision, result_revision, request_digest, created_at
+      )
+      SELECT ?, ?, id, 'delete', ?, ?, ?, ?
+      FROM direct_messages
+      WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at IS NULL
+    `).bind(
+      auth.userId, operationId, expectedRevision, resultRevision, requestDigest, now,
+      target.id, auth.userId, expectedRevision,
+    ),
     db.prepare(`
       UPDATE direct_messages
       SET body = '', attachments_json = '[]', revision = ?, deleted_at = ?
       WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at IS NULL
     `).bind(resultRevision, now, target.id, auth.userId, expectedRevision),
-    db.prepare(`
-      DELETE FROM direct_message_reactions WHERE message_id = ?
-    `).bind(target.id),
-    db.prepare(`
-      INSERT INTO direct_message_mutations (
-        sender_user_id, operation_id, message_id, mutation_kind,
-        expected_revision, result_revision, request_digest, created_at
-      ) VALUES (?, ?, ?, 'delete', ?, ?, ?, ?)
-    `).bind(
-      auth.userId, operationId, target.id,
-      expectedRevision, resultRevision, requestDigest, now,
-    ),
   ]);
-  if (updateResult?.meta?.changes !== 1) {
+  if (journalResult?.meta?.changes !== 1 || updateResult?.meta?.changes !== 1) {
     return jsonResponse({
       success: false,
       error: '消息版本已更新',
       message: await readCanonicalDirectMessage(db, target.id, auth.userId),
     }, 409);
   }
+  await db.prepare(`
+    DELETE FROM direct_message_reactions
+    WHERE message_id = ?
+      AND EXISTS (
+        SELECT 1 FROM direct_messages
+        WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at = ?
+      )
+  `).bind(target.id, target.id, auth.userId, resultRevision, now).run();
   return jsonResponse({
     success: true,
     deduplicated: false,
