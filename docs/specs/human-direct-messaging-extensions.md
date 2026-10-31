@@ -2,7 +2,7 @@
 
 Status: active
 Owner: Fabushi Backend / Social Messaging
-Last updated: 2026-10-05
+Last updated: 2026-10-31
 Related issue/task/PR: Fabushi Desktop FBCP Phase 1 / desktop PR #27
 
 ## 1. Context / problem
@@ -34,6 +34,9 @@ Extend the existing social direct-message owner so Fabushi clients can durably s
 - R8: Cross-device semantics distinguish account identity from `x-fabushi-device-id`; device identity may be used for observability but cannot become message ownership truth.
 - R9: Existing plain-text clients remain compatible.
 - R10: Server validation fails closed for foreign reply targets, foreign resources, non-friends, malformed reactions, oversized text/resources, and missing R2 bindings for upload/download.
+- R11: A sender may edit an existing non-deleted direct message without changing its canonical message ID. Each mutation carries a unique `operationId` plus `expectedRevision`; successful edits increment a monotonic `revision`, set `editedAt`, and preserve reply/resource/reaction identity unless explicitly changed by another typed capability.
+- R12: A sender may delete an existing direct message as a tombstone mutation. Delete preserves the canonical message row/ID for reply provenance and synchronization, increments `revision`, records `deletedAt`, clears message body and attachment references, and removes reactions. Recipients cannot edit/delete another sender's message.
+- R13: Mutation retries are idempotent by `operationId`. Reusing an operation ID for a different message/kind/payload is rejected; stale `expectedRevision` is rejected with HTTP 409 and the current canonical message so clients can reconcile instead of minting a replacement.
 
 ## 5. Current state
 
@@ -84,7 +87,17 @@ New:
 `before` and `afterId` are mutually exclusive.
 
 Each message includes:
-`id,senderUserId,senderUsername,recipientUserId,recipientUsername,text,clientRequestId,createdAt,readAt,isOutgoing,replyToMessageId,attachments,reactions`.
+`id,senderUserId,senderUsername,recipientUserId,recipientUsername,text,clientRequestId,createdAt,readAt,isOutgoing,replyToMessageId,attachments,reactions,revision,editedAt,deletedAt,isDeleted`.
+
+### PATCH /api/social/messages/:messageId
+
+Body `{ text, operationId, expectedRevision }`. Only the original sender may edit. The message ID is stable; a successful mutation increments `revision`, sets `editedAt`, and returns the authoritative canonical message. Empty text is accepted only when the existing message still has canonical attachments. Deleted messages cannot be edited.
+
+### DELETE /api/social/messages/:messageId
+
+Body `{ operationId, expectedRevision }`. Only the original sender may delete. Deletion is a durable tombstone rather than row removal: the message ID remains addressable for reply/provenance, `revision` increments, `deletedAt` is set, body/attachments are cleared, and message reactions are removed. A new delete operation against an already deleted message is rejected; retrying the same `operationId` is idempotent.
+
+Both mutation endpoints return HTTP 409 for stale `expectedRevision` and include the current canonical message when available. `operationId` is bounded to 200 characters and is persisted in `direct_message_mutations` with a SHA-256 request digest so an ID cannot be reused for another payload.
 
 ### POST /api/social/messages/:messageId/reactions
 
@@ -109,6 +122,9 @@ Body `{ emoji, active }`. `active=true` upserts the authenticated user's reactio
 - Missing R2 binding returns 503/500 without writing a dangling message resource.
 - Network retry after ambiguous POST is safe because `clientRequestId` remains idempotent.
 - Incremental sync may repeat already materialized messages; stable server message IDs make reconciliation idempotent.
+- Mutation retry after an ambiguous response is safe because the same `operationId` resolves to the already-applied authoritative mutation.
+- A stale edit/delete cannot overwrite a newer revision; the service returns 409 with current canonical state for reconciliation.
+- A tombstoned message stays in history/reconnect results with stable ID and deletion metadata, while body/attachments/reactions are removed.
 - Deleted/missing resource fetch returns 404; message metadata remains durable for provenance.
 
 ## 11. Implementation strategy
@@ -119,11 +135,13 @@ Body `{ emoji, active }`. `active=true` upserts the authenticated user's reactio
 4. Extend message POST/GET with reply/resources/afterId/search.
 5. Add reaction mutation route.
 6. Add focused Node contracts and integration-style D1/R2 mocks.
-7. Wire Desktop Host adapter only after these server contracts exist.
+7. Add monotonic message revision fields plus a durable mutation-operation table; implement sender-only edit/tombstone-delete routes with optimistic revision fencing and operation-idempotency.
+8. Extend focused contracts and D1 mocks for edit/delete replay, stale-revision rejection, recipient denial, and tombstone projection.
+9. Wire Desktop Host adapter only after these server contracts exist.
 
 ## 12. Verification / test strategy
 
-GitHub Actions only. Verify migration shape, old plain-text behavior, idempotent POST, cross-pair rejection, resource ownership, R2 authorization, attachment-only messages, reply projection, reaction toggle/projection, before/after pagination, q search, and two-device convergence by server message ID/clientRequestId.
+GitHub Actions only. Verify migration shape, old plain-text behavior, idempotent POST, cross-pair rejection, resource ownership, R2 authorization, attachment-only messages, reply projection, reaction toggle/projection, before/after pagination, q search, and two-device convergence by server message ID/clientRequestId. For message mutations additionally verify stable ID, monotonic revision, same-operation replay, operation-ID mismatch rejection, stale-revision 409, sender-only authorization, edit-after-delete rejection, and tombstone content/reaction cleanup. During FMEP Stage A these tests are authored but not executed; validation remains `not-run` until the frozen validation campaign.
 
 ## 13. Acceptance criteria / Definition of Done
 
@@ -135,10 +153,13 @@ GitHub Actions only. Verify migration shape, old plain-text behavior, idempotent
 - AC-6: Two devices authenticated to one account converge on the same remote message IDs without device identity becoming account identity.
 - AC-7: Message resource bytes are private and readable only by authorized participants.
 - AC-8: All backend exact-HEAD required CI is green before merge.
+- AC-9: Edit changes the existing canonical message in place, increments `revision`, and converges to the same server message ID on all clients.
+- AC-10: Delete produces a durable tombstone with the same message ID, clears user content/attachments/reactions, and keeps reply/reconnect ordering deterministic.
+- AC-11: Mutation idempotency and optimistic concurrency are fail-closed: exact operation replay is safe, operation-ID reuse is rejected, and stale revisions cannot overwrite newer state.
 
 ## 14. Release / migration / rollback
 
-Migration is additive. New nullable/defaulted fields preserve existing rows. New tables may remain unused by old clients. Rollback of application code leaves additive schema intact. R2 bytes are not deleted by rollback; cleanup policy is a later lifecycle responsibility.
+Migration is additive. New nullable/defaulted mutation fields preserve existing rows and initialize them at revision 1. The mutation-operation table may remain unused by old clients. Tombstone deletion clears message attachment references but deliberately does not synchronously delete R2 bytes; resource garbage collection remains a separate lifecycle responsibility. Rollback of application code leaves additive schema intact.
 
 ## 15. Observability / evidence
 
@@ -157,4 +178,5 @@ CI logs and exact commit SHA are required evidence. API failures return bounded 
 | Requirement / AC | Status | Evidence / reason |
 | --- | --- | --- |
 | R1-R10 | passed | Implemented in the canonical social messaging owner; executable source + handler-level D1/R2 contracts passed on implementation HEAD `1c544e5405512a4bd55b25cc9759fc5f55ad3612`, Human Messaging CI run `37249986917`. |
-| AC-1-AC-8 | passed | Backward compatibility, reply/resources/reactions, fail-closed authorization, `afterId` reconnect, `q` search, two-device convergence, private R2 reads, and exact-HEAD CI are covered by run `37249986917`; this evidence-only spec update must also pass the same workflow before integration. |
+| AC-1-AC-8 | passed (historical baseline) | Backward compatibility, reply/resources/reactions, fail-closed authorization, `afterId` reconnect, `q` search, two-device convergence, private R2 reads, and exact-HEAD CI were covered by run `37249986917` on the prior implementation baseline. This is not validation evidence for the Stage-A mutation work. |
+| R11-R13 / AC-9-AC-11 | specified; validation not-run | Stage-A contract for edit/delete. Runtime/schema/tests must be implemented on the isolated checkpoint and remain unverified until the frozen GitHub Actions validation campaign. |
