@@ -2,7 +2,7 @@
 
 Status: active
 Owner: Fabushi Backend / Social Messaging
-Last updated: 2026-10-31
+Last updated: 2026-11-02
 Related issue/task/PR: Fabushi Desktop FBCP Phase 1 / desktop PR #27
 
 ## 1. Context / problem
@@ -37,6 +37,7 @@ Extend the existing social direct-message owner so Fabushi clients can durably s
 - R11: A sender may edit an existing non-deleted direct message without changing its canonical message ID. Each mutation carries a unique `operationId` plus `expectedRevision`; successful edits increment a monotonic `revision`, set `editedAt`, and preserve reply/resource/reaction identity unless explicitly changed by another typed capability.
 - R12: A sender may delete an existing direct message as a tombstone mutation. Delete preserves the canonical message row/ID for reply provenance and synchronization, increments `revision`, records `deletedAt`, clears message body and attachment references, and removes reactions. Recipients cannot edit/delete another sender's message.
 - R13: Mutation retries are idempotent by `operationId`. Reusing an operation ID for a different message/kind/payload is rejected; stale `expectedRevision` is rejected with HTTP 409 and the current canonical message so clients can reconcile instead of minting a replacement.
+- R14: An explicit `afterId=0` starts a complete, bounded traversal of the authorized pair in ascending message-ID order. Accept only decimal non-negative safe integers; reject negative, fractional, non-decimal, non-numeric and unsafe values. Preserve the existing `before`/`afterId` exclusion and 200-message page ceiling. An empty page retains its input `nextAfterId`, including zero, so a client can persist progress without inventing coverage from a timestamp overlap.
 
 ## 5. Current state
 
@@ -81,10 +82,20 @@ Text may be empty only when at least one canonical attachment is present. Existi
 
 Existing `contactId|username`, `limit`, `before` remain.
 New:
-- `afterId`: positive integer; returns messages with id greater than the cursor in ascending order.
+- `afterId`: decimal non-negative safe integer (`0` through `9007199254740991`); returns messages with id greater than the cursor in ascending order. Explicit zero is the history origin. Omitted/blank values retain the legacy history query.
 - `q`: trimmed search query, max 200 chars, case-insensitive substring search within the authorized peer pair.
 
 `before` and `afterId` are mutually exclusive.
+
+The response remains `{ success:true, data:{ contact, messages, nextAfterId } }`.
+For an explicit cursor, `nextAfterId` is the last returned message ID, or
+the input cursor when no messages are returned. It is therefore zero for
+an empty origin page. No `hasMore` or timestamp-contiguity claim is added.
+ID traversal covers equal timestamps and messages whose creation times do
+not follow ID order. Existing requests without a cursor keep their
+`created_at`/ID ordering and strict `before` behavior; clients needing full
+coverage must use the explicit ID cursor. The cursor is not a changefeed
+for reactions or edits to older message IDs.
 
 Each message includes:
 `id,senderUserId,senderUsername,recipientUserId,recipientUsername,text,clientRequestId,createdAt,readAt,isOutgoing,replyToMessageId,attachments,reactions,revision,editedAt,deletedAt,isDeleted`.
@@ -141,7 +152,14 @@ Body `{ emoji, active }`. `active=true` upserts the authenticated user's reactio
 
 ## 12. Verification / test strategy
 
-GitHub Actions only. Verify migration shape, old plain-text behavior, idempotent POST, cross-pair rejection, resource ownership, R2 authorization, attachment-only messages, reply projection, reaction toggle/projection, before/after pagination, q search, and two-device convergence by server message ID/clientRequestId. For message mutations additionally verify stable ID, monotonic revision, same-operation replay, operation-ID mismatch rejection, stale-revision 409, sender-only authorization, edit-after-delete rejection, and tombstone content/reaction cleanup. During FMEP Stage A these tests are authored but not executed; validation remains `not-run` until the frozen validation campaign.
+GitHub Actions only. Verify migration shape, old plain-text behavior, idempotent POST, cross-pair rejection, resource ownership, R2 authorization, attachment-only messages, reply projection, reaction toggle/projection, before/after pagination, q search, and two-device convergence by server message ID/clientRequestId. For message mutations additionally verify stable ID, monotonic revision, same-operation replay, operation-ID mismatch rejection, stale-revision 409, sender-only authorization, edit-after-delete rejection, and tombstone content/reaction cleanup. The 2026-11-02 FMEP-001 Revision 2 authorization permits focused batch validation on the existing checkpoint in GitHub Actions; no local validation is permitted. Authored tests remain `not-run` until exact-commit execution evidence exists.
+
+R14 uses the existing handler/D1-mock behavior harness to traverse 450
+same-timestamp messages in pages of 200/200/50/0, prove participant-pair
+isolation, zero and terminal empty cursors, page limits, malformed cursor
+rejection before message reads, and compatibility of legacy history
+ordering. These controlled handler contracts do not establish deployed
+service acceptance or independently validate the SQLite engine.
 
 ## 13. Acceptance criteria / Definition of Done
 
@@ -156,10 +174,17 @@ GitHub Actions only. Verify migration shape, old plain-text behavior, idempotent
 - AC-9: Edit changes the existing canonical message in place, increments `revision`, and converges to the same server message ID on all clients.
 - AC-10: Delete produces a durable tombstone with the same message ID, clears user content/attachments/reactions, and keeps reply/reconnect ordering deterministic.
 - AC-11: Mutation idempotency and optimistic concurrency are fail-closed: exact operation replay is safe, operation-ID reuse is rejected, and stale revisions cannot overwrite newer state.
+- AC-12: Origin-ID pagination executes the R14 behavior matrix at the exact backend commit with no failed/skipped cases; preserve all existing messaging and call contracts. Bind workflow checkout, complete logs and actual test totals to that SHA. Desktop persistence/32-page continuation/restart and eventual production deployment require their own evidence and are not implied by this backend increment.
 
 ## 14. Release / migration / rollback
 
 Migration is additive. New nullable/defaulted mutation fields preserve existing rows and initialize them at revision 1. The mutation-operation table may remain unused by old clients. Tombstone deletion clears message attachment references but deliberately does not synchronously delete R2 bytes; resource garbage collection remains a separate lifecycle responsibility. Rollback of application code leaves additive schema intact.
+
+R14 changes no database schema or stored data. Rollback of cursor admission
+makes origin requests fail with 400; dependent clients must retain their
+durable progress and surface that failure, not silently substitute a
+timestamp query and claim complete coverage. This checkpoint is not a
+production deployment authorization or proof.
 
 ## 15. Observability / evidence
 
@@ -180,3 +205,5 @@ CI logs and exact commit SHA are required evidence. API failures return bounded 
 | R1-R10 | passed | Implemented in the canonical social messaging owner; executable source + handler-level D1/R2 contracts passed on implementation HEAD `1c544e5405512a4bd55b25cc9759fc5f55ad3612`, Human Messaging CI run `37249986917`. |
 | AC-1-AC-8 | passed (historical baseline) | Backward compatibility, reply/resources/reactions, fail-closed authorization, `afterId` reconnect, `q` search, two-device convergence, private R2 reads, and exact-HEAD CI were covered by run `37249986917` on the prior implementation baseline. This is not validation evidence for the Stage-A mutation work. |
 | R11-R13 / AC-9-AC-11 | specified; validation not-run | Stage-A contract for edit/delete. Runtime/schema/tests must be implemented on the isolated checkpoint and remain unverified until the frozen GitHub Actions validation campaign. |
+| R14 / AC-12 | specified; validation not-run | Task `20bf9475-a885-4314-b509-bea53ef8849f`, round 6; backend base `ac51cb41054fd96f650a96cdd96ec05363b46b1e`. Origin cursor contract and focused behavior cases require new exact-commit Actions evidence. No existing pass or deployed-state claim is inherited. |
+

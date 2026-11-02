@@ -596,7 +596,7 @@ export async function handleListDirectMessages(request, env, db) {
   const afterRaw = (url.searchParams.get('afterId') || '').trim();
   const afterId = afterRaw ? Number(afterRaw) : 0;
   if (before && afterRaw) return jsonResponse({ success: false, error: 'before 与 afterId 不能同时使用' }, 400);
-  if (afterRaw && (!Number.isSafeInteger(afterId) || afterId <= 0)) {
+  if (afterRaw && (!/^\d+$/.test(afterRaw) || !Number.isSafeInteger(afterId) || afterId < 0)) {
     return jsonResponse({ success: false, error: 'afterId 无效' }, 400);
   }
   const query = (url.searchParams.get('q') || '').trim();
@@ -606,7 +606,7 @@ export async function handleListDirectMessages(request, env, db) {
   const like = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
   const pair = [auth.userId, target.id, target.id, auth.userId];
   let rows;
-  if (afterId > 0) {
+  if (afterRaw) {
     rows = await db.prepare(`
       SELECT id, sender_user_id, sender_username, recipient_user_id,
         recipient_username, body, client_request_id, created_at, read_at,
@@ -642,7 +642,9 @@ export async function handleListDirectMessages(request, env, db) {
     data: {
       contact: mapContact(target),
       messages,
-      nextAfterId: messages.length === 0 ? afterId || null : messages[messages.length - 1].id,
+      nextAfterId: messages.length === 0
+        ? (afterRaw ? afterId : null)
+        : messages[messages.length - 1].id,
     },
   });
 }
@@ -855,3 +857,4 @@ export async function handleSetDirectMessageReaction(request, env, db, messageId
     reactions: reactions.get(message.id) || [],
   });
 }
+

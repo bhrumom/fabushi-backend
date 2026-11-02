@@ -1,6 +1,13 @@
 name: Human Messaging CI
 
 on:
+  push:
+    branches: [checkpoint/tdrp-stage-a-msg-mutations-7457eb1c-r1]
+    paths:
+      - "fabushi/web/src/handlers/friends.js"
+      - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
+      - "docs/specs/human-direct-messaging-extensions.md"
+      - ".github/workflows/human-messaging-ci.yml"
   pull_request:
     branches: [main]
     paths:
@@ -29,11 +36,23 @@ permissions:
 jobs:
   human-messaging-contracts:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: fabushi/web
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Bind exact Human messaging source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/human-messaging"
+          git rev-parse HEAD > "$GITHUB_WORKSPACE/artifacts/human-messaging/target-sha.txt"
+          printf '%s\n' 'R14 / AC-12; handler D1/R2 mock behavior and existing contracts; no deployed-service acceptance' > "$GITHUB_WORKSPACE/artifacts/human-messaging/scope.txt"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -44,4 +63,23 @@ jobs:
       - name: Check call signaling syntax
         run: node --check src/handlers/call-signaling.js
       - name: Run existing and Phase 1 messaging contracts
-        run: node --test tests/friends-and-messages-contract.test.js tests/human-messaging-extensions-contract.test.js tests/human-messaging-extensions-behavior.test.js tests/human-message-mutations-contract.test.js tests/human-call-signaling-behavior.test.js
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$GITHUB_WORKSPACE/artifacts/human-messaging/contracts.log"
+          node --test --test-reporter=tap tests/friends-and-messages-contract.test.js tests/human-messaging-extensions-contract.test.js tests/human-messaging-extensions-behavior.test.js tests/human-message-mutations-contract.test.js tests/human-call-signaling-behavior.test.js 2>&1 | tee "$log"
+          grep -E '^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)' "$log" > "$GITHUB_WORKSPACE/artifacts/human-messaging/test-counts.txt"
+          grep -Eq '^# tests 28$' "$log"
+          grep -Eq '^# pass 28$' "$log"
+          grep -Eq '^# fail 0$' "$log"
+          grep -Eq '^# cancelled 0$' "$log"
+          grep -Eq '^# skipped 0$' "$log"
+          grep -Eq '^# todo 0$' "$log"
+      - name: Preserve exact Human messaging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: human-messaging-contracts-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/human-messaging
+          if-no-files-found: error
+
