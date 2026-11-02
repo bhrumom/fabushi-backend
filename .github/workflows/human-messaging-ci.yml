@@ -12,6 +12,8 @@ on:
       - "fabushi/web/migrations/20261005_human_message_extensions.sql"
       - "fabushi/web/migrations/20261031_human_message_mutations.sql"
       - "docs/specs/human-direct-messaging-extensions.md"
+      - ".github/scripts/human-messaging-production-readiness.mjs"
+      - ".github/scripts/human-messaging-production-readiness.test.mjs"
       - ".github/workflows/human-messaging-ci.yml"
   pull_request:
     branches: [main]
@@ -33,8 +35,23 @@ on:
       - "fabushi/web/tests/human-call-signaling-behavior.test.js"
       - "docs/specs/human-direct-messaging-extensions.md"
       - "docs/specs/human-call-signaling.md"
+      - ".github/scripts/human-messaging-production-readiness.mjs"
+      - ".github/scripts/human-messaging-production-readiness.test.mjs"
       - ".github/workflows/human-messaging-ci.yml"
   workflow_dispatch:
+    inputs:
+      production_readiness:
+        description: Run approved GET-only production message checks (requires protected production configuration)
+        type: boolean
+        default: false
+      provenance_run_id:
+        description: Successful canonical production Worker delivery run to bind to the live version
+        type: string
+        required: false
+      expected_production_sha:
+        description: Full deployed source SHA, which must equal the protected approved source SHA
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -58,7 +75,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           mkdir -p "$GITHUB_WORKSPACE/artifacts/human-messaging"
           git rev-parse HEAD > "$GITHUB_WORKSPACE/artifacts/human-messaging/target-sha.txt"
-          printf '%s\n' 'R14-R16 / AC-12-AC-14; handler D1/R2 mock contracts plus real SQLite migration, atomic mutation and restart contracts; no deployed-D1 or production acceptance' > "$GITHUB_WORKSPACE/artifacts/human-messaging/scope.txt"
+          printf '%s\n' 'R14-R17 / AC-12-AC-15; handler, SQLite and injected-fetch read-only readiness contracts; no deployed-D1 or production acceptance' > "$GITHUB_WORKSPACE/artifacts/human-messaging/scope.txt"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -94,6 +111,20 @@ jobs:
           grep -Eq '^# cancelled 0$' "$log"
           grep -Eq '^# skipped 0$' "$log"
           grep -Eq '^# todo 0$' "$log"
+      - name: Run read-only production readiness behavior contracts without production access
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$GITHUB_WORKSPACE/artifacts/human-messaging/readiness-contracts.log"
+          node --test --test-reporter=tap .github/scripts/human-messaging-production-readiness.test.mjs 2>&1 | tee "$log"
+          grep -E '^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)' "$log" > "$GITHUB_WORKSPACE/artifacts/human-messaging/readiness-test-counts.txt"
+          grep -Eq '^# tests 24$' "$log"
+          grep -Eq '^# pass 24$' "$log"
+          grep -Eq '^# fail 0$' "$log"
+          grep -Eq '^# cancelled 0$' "$log"
+          grep -Eq '^# skipped 0$' "$log"
+          grep -Eq '^# todo 0$' "$log"
       - name: Preserve exact Human messaging evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -101,5 +132,50 @@ jobs:
           name: human-messaging-contracts-${{ github.event.pull_request.head.sha || github.sha }}
           path: artifacts/human-messaging
           if-no-files-found: error
-
-
+  production-readonly-readiness:
+    if: github.event_name == 'workflow_dispatch' && inputs.production_readiness && github.ref == 'refs/heads/main'
+    needs: human-messaging-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Bind exact reviewed consumer source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = bhrumom/fabushi-backend
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Read approved production source and existing message fixture without mutations
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FABUSHI_MESSAGE_PROBE_DISPATCH: ${{ inputs.production_readiness }}
+          FABUSHI_MESSAGE_PROBE_PROVENANCE_RUN_ID: ${{ inputs.provenance_run_id }}
+          FABUSHI_MESSAGE_PROBE_EXPECTED_SOURCE_SHA: ${{ inputs.expected_production_sha }}
+          FABUSHI_MESSAGE_PROBE_AUTHORIZED: ${{ vars.FABUSHI_MESSAGE_PROBE_AUTHORIZED }}
+          FABUSHI_MESSAGE_PROBE_APPROVED_SOURCE_SHA: ${{ vars.FABUSHI_MESSAGE_PROBE_APPROVED_SOURCE_SHA }}
+          FABUSHI_MESSAGE_PROBE_CF_READ_TOKEN: ${{ secrets.FABUSHI_MESSAGE_PROBE_CF_READ_TOKEN }}
+          FABUSHI_MESSAGE_PROBE_CF_ACCOUNT_ID: ${{ secrets.FABUSHI_MESSAGE_PROBE_CF_ACCOUNT_ID }}
+          FABUSHI_MESSAGE_PROBE_ACCOUNT_TOKEN: ${{ secrets.FABUSHI_MESSAGE_PROBE_ACCOUNT_TOKEN }}
+          FABUSHI_MESSAGE_PROBE_NONCONTACT_TOKEN: ${{ secrets.FABUSHI_MESSAGE_PROBE_NONCONTACT_TOKEN }}
+          FABUSHI_MESSAGE_PROBE_FIXTURE_JSON: ${{ secrets.FABUSHI_MESSAGE_PROBE_FIXTURE_JSON }}
+        run: node .github/scripts/human-messaging-production-readiness.mjs
+      - name: Preserve only redacted read-only production evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: human-messaging-production-readiness-${{ github.sha }}-${{ github.run_id }}
+          path: artifacts/human-messaging-production-readiness/report.json
+          if-no-files-found: error
+          retention-days: 7

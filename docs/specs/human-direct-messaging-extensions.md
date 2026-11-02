@@ -41,6 +41,120 @@ Extend the existing social direct-message owner so Fabushi clients can durably s
 - R15: For every explicit `afterId` query, including zero and empty pages, respond with `data.historyCursor = { mode: 'after-id', afterId: requestedSafeInteger }` distinct from `nextAfterId`. Legacy `before` or latest requests must omit `historyCursor`; neither may imply complete coverage. Authentication and pair-scoped ascending query, bounded limits and malformed-input rejection are unchanged. Desktop rejects a missing or mismatched declaration before persistence.
 - R16: Tombstone deletion, operation journal and reaction cleanup commit in one D1 batch transaction. A cleanup failure rolls back all three; a lost acknowledgement is recovered with the same operation ID after restart. Retrying an already journaled delete also repairs reactions left by the older separate-cleanup path without changing the message ID/revision or deleting resource bytes. Reaction writes atomically require a non-deleted message and participant identity, and reject a concurrent tombstone observed before the response rather than acknowledging a stale toggle. Storage errors remain visible and retryable.
 
+
+### R17: Read-only production history verification
+
+The existing Social Messaging owner gains a GitHub Actions-only, GET-only
+verification consumer in `.github/scripts/human-messaging-production-readiness.mjs`.
+Ordinary pushes and pull requests run its injected-fetch behavior tests only.
+Production access requires an explicit `workflow_dispatch` with
+`production_readiness=true`, canonical `main`, the `production` environment,
+a protected authorization flag and approved source SHA, and separately supplied
+protected credentials and a reviewed, pre-existing fixture. This is not permission
+to merge, deploy, create accounts/messages/friendships, migrate, restore D1, or
+modify production data. There is no default account, fixture, token or source SHA.
+The protected approval must include a read-only call-chain review of the exact
+deployed messaging source and its bound canonical identity service; HTTP GET
+alone does not establish absence of state changes.
+
+Before sending ordinary account credentials, the consumer reads the specified
+successful canonical backend `production-worker-delivery.yml` main dispatch and
+its exact run-attempt job from the fixed GitHub repository. The complete bounded
+job log must bind the checked-out source SHA, deployed
+`fabushi-flutter-web-prod` name and one emitted `Current Version ID`.
+The consumer separately reads Cloudflare's current deployment and custom-domain
+mapping. `api.ombhrum.com` must be enabled for this Worker's `production`
+environment, and the first deployment must assign 100 percent of traffic to that exact version. The expected
+SHA is an authorization constraint, not observed provenance on its own. The
+consumer repeats the live deployment/domain reads after message checks and rejects
+a changed deployment. This establishes a bounded control-plane/source association;
+it is not per-request cryptographic attestation or a D1 data snapshot.
+
+Only three credential-bearing origins are permitted:
+`https://api.github.com` for the Actions read token,
+`https://api.cloudflare.com` for a dedicated Workers Scripts Read token,
+and `https://api.ombhrum.com` for ordinary account tokens.
+All requests use GET and reject redirects. The sole exception is GitHub's
+documented job-log 302: follow only the HTTPS Location returned by the fixed,
+authenticated GitHub log endpoint, limited to documented Actions log hosts
+(`*.blob.core.windows.net` or `results-receiver.actions.githubusercontent.com`),
+with no Authorization header, no cookies and no second redirect. A URL supplied
+by an operator or response body is never accepted as a network destination.
+Bound response streams, total requests, per-request time, and the complete run;
+never interpolate remote errors, bodies or URLs into logs.
+
+The protected JSON fixture contains `actorUserId`, `peerUserId`,
+`noncontactUserId`, `emptyPeerUserId`, `pageSize`, and the complete strictly
+ascending `expectedMessageIds` for a stable existing conversation. All four
+identities must be distinct positive safe integers. The expected set must span at
+least two non-empty pages, with at most 31 non-empty pages and one terminal page
+per traversal; `pageSize` is 1..200. The actor must already be friends with the
+two peer fixtures, and the noncontact actor must already lack a friendship with
+the target peer. No fixture is allocated or repaired by this consumer.
+
+GET `/api/auth/user-info` must bind each existing ordinary account token to its
+expected actor before any message result is accepted. Each explicit after-ID page
+must echo exactly `historyCursor: {mode:'after-id', afterId:requestedCursor}`,
+return the expected contact, remain within the declared participant pair, contain
+strictly ascending unique safe message IDs matching the approved complete fixture,
+and set `nextAfterId` to its last ID or the unchanged input cursor when empty.
+The origin traversal, empty-origin pair and terminal empty page must all pass.
+An anonymous origin GET must return 401; the existing authenticated noncontact
+must return 403, with JSON error metadata and no message data. No other status is
+accepted as an authorization-denial success.
+
+Source review anchors for this verifier: backend
+`06047d3ea69313ec4cfec58bbee36a7afc9cf007` routes `/api/social/messages` through
+`community-routes.js` to `friends.js::handleListDirectMessages`. Its identity,
+contact, accepted-friendship, page and reaction lookups are SELECTs; `read_at`
+is projected as `readAt` without a read-receipt update. The earlier
+`platform-gateway-routes.js` intercepts `/api/auth/user-info` and forwards to
+the bound `MAHAYANA_PLATFORM` owner. Canonical Platform Core source
+`26c3cc8c69ab89e8fb38952adb8c438ec0b68e05`,
+`third_party/mahayana/mahayana-rs/mahayana-platform-worker/src/worker_api.rs`
+and `src/worker_api/account.rs`, routes this GET to `account_user_info`,
+validates the token and current session, and SELECTs the existing account.
+`serialize_account_user` emits top-level `id`, `role` and `isAdmin`; ordinary
+fixtures require the expected ID, role `user` and `isAdmin=false`.
+These source reads are not evidence of the identity Worker's current deployed
+revision. Approval must confirm the live bound identity source remains read-only;
+the verifier's messaging Worker provenance does not independently attest Core.
+
+After the first page, retain a checkpoint only in memory, finish the traversal,
+then re-read the exact suffix from that checkpoint and require the same identity
+sequence and terminal cursor. Label this `client-readonly-checkpoint-reread`.
+It does not prove a persisted Desktop restart, server restart, remote D1 restore,
+rollback, or database recovery. Those remain separate acceptance requirements.
+
+Environment contract:
+- `FABUSHI_MESSAGE_PROBE_AUTHORIZED=true` and
+  `FABUSHI_MESSAGE_PROBE_APPROVED_SOURCE_SHA` are protected production variables.
+- Dispatch inputs supply only `provenance_run_id` and
+  `expected_production_sha`; the latter must equal the protected approved SHA.
+- `GITHUB_TOKEN` has repository Actions read permission.
+- Dedicated production secrets are
+  `FABUSHI_MESSAGE_PROBE_CF_READ_TOKEN`,
+  `FABUSHI_MESSAGE_PROBE_CF_ACCOUNT_ID`,
+  `FABUSHI_MESSAGE_PROBE_ACCOUNT_TOKEN`,
+  `FABUSHI_MESSAGE_PROBE_NONCONTACT_TOKEN`, and
+  `FABUSHI_MESSAGE_PROBE_FIXTURE_JSON`.
+- No fallback to broader deployment credentials, account factories, local private
+  files or unrelated production accounts is permitted.
+
+Evidence contains source/run/version references, request status codes, counts and
+redacted cursor ordinals. Actual account/message IDs, message bodies, token values,
+Cloudflare account IDs, signed URLs and complete downloaded production logs stay
+in memory and are not written to artifacts. Missing authorization, credentials,
+fixture, source evidence, or current single-version routing returns non-zero
+`blocked`; observed behavior mismatch returns non-zero `failed`. A successful
+probe proves only the named read-only fixture checks, never full migration ACCEPT.
+
+Official API contracts reviewed 2026-11-02:
+- https://docs.github.com/en/rest/actions/workflow-jobs#download-job-logs-for-a-workflow-run
+- https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+- https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/list/
+- https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/list/
+
 ## 5. Current state
 
 `fabushi/web/src/handlers/friends.js` owns friend-gated direct messages. Migration `20260713_friends_and_direct_messages.sql` defines `direct_messages`, including sender/recipient identity, body, created/read timestamps, and sender-scoped `client_request_id`. GET supports `before`; POST supports plain text only. Existing R2 handling can read objects but has no ordinary-user message upload ownership contract.
@@ -193,6 +307,8 @@ remain separate requirements. No local tests are authorized by this addition.
 - AC-13: Explicit cursor echo and unchanged legacy shape pass a real handler/D1 mock contract with origin, sparse, empty, max-safe and unauthorized scenarios. Exact-commit CI must execute 29/29; mocked handler acceptance never establishes active production deployment.
 - AC-14: The exact backend commit passes the existing 29 checks and all ten separately counted SQLite behavior/recovery tests with zero failed/skipped/cancelled cases. A delete cleanup failure leaves the original message/revision/reactions and no journal; restart/retry or lost-ack replay yields one journal and a stable tombstone without reactions. Delayed reaction add/remove against that tombstone fails closed. Existing message/resource identity and foreign keys survive additive migration and reopen. These results do not authorize deployment or establish remote D1 restore acceptance.
 
+- AC-15: The read-only production verifier passes its separately counted injected-fetch contracts at the exact backend commit. Tests cover real provenance request construction and token-origin isolation, log redirect handling, active-version/domain drift, identity and pair isolation, bounded pagination and empty cursors, denial failures, redaction and checkpoint reread. Mock provenance/handler responses are not production acceptance. Actual execution requires the R17 protected configuration and a successful live report; remote D1 recovery and independent ACCEPT remain unverified.
+
 ## 14. Release / migration / rollback
 
 Migration is additive. New nullable/defaulted mutation fields preserve existing rows and initialize them at revision 1. The mutation-operation table may remain unused by old clients. Tombstone deletion clears message attachment references but deliberately does not synchronously delete R2 bytes; resource garbage collection remains a separate lifecycle responsibility. Rollback of application code leaves additive schema intact.
@@ -222,9 +338,26 @@ CI logs and exact commit SHA are required evidence. API failures return bounded 
 | --- | --- | --- |
 | R1-R10 | passed | Implemented in the canonical social messaging owner; executable source + handler-level D1/R2 contracts passed on implementation HEAD `1c544e5405512a4bd55b25cc9759fc5f55ad3612`, Human Messaging CI run `37249986917`. |
 | AC-1-AC-8 | passed (historical baseline) | Backward compatibility, reply/resources/reactions, fail-closed authorization, `afterId` reconnect, `q` search, two-device convergence, private R2 reads, and exact-HEAD CI were covered by run `37249986917` on the prior implementation baseline. This is not validation evidence for the Stage-A mutation work. |
-| R11-R13 / AC-9-AC-11 | specified; validation not-run | Stage-A contract for edit/delete. Runtime/schema/tests must be implemented on the isolated checkpoint and remain unverified until the frozen GitHub Actions validation campaign. |
+| R11-R13 / AC-9-AC-11 | implemented; scoped handler/SQLite evidence passed | Exact `06047d3ea69313ec4cfec58bbee36a7afc9cf007`, runs `41427242843` and `41427235133`: existing29 plus real SQLite10, zero failed/skipped/cancelled. Includes atomic delete/reaction cleanup, rollback, lost-ack replay, concurrent mutation and reopen. Deployed D1 and complete production acceptance remain blocked. |
 | R14 / AC-12 | passed on checkpoint only | `cc3b7ef10a6646c6ee1a99bd068238c7f9530421`, run 41407127408: 28 tests passed, zero failed/skipped; does not imply deployed acceptance. |
-| R15 / AC-13 | implemented; exact-H validation pending | Round 8 explicit historyCursor response and handler behavior test; target 29/29 via GitHub Actions. Active Worker and desktop continuation remain blocked until separate evidence. |
-| R16 / AC-14 | implemented; exact-H validation not-run | Round 11 atomic delete/reaction recovery and ten real-SQLite handler contracts. Requires the new exact-commit Actions results; no production mutation or restore performed. |
+| R15 / AC-13 | passed on exact checkpoint only | Exact `06047d3ea69313ec4cfec58bbee36a7afc9cf007`, runs `41427242843` and `41427235133`: existing29/29 including cursor echo. Additional SQLite10 includes real-engine afterId=0 multipage/empty/pair isolation. No active Worker or authenticated production qualification is implied. |
+| R16 / AC-14 | passed on exact checkpoint only | Same exact `06047d3ea69313ec4cfec58bbee36a7afc9cf007` push/PR runs passed real SQLite10/10 and original29/29. Full logs were read in round12; artifacts `13131943502` (`sha256:80f1e5a3ee86ec2c069c195238700fdfaac5b68e16bfa66f28e80bfe8945080f`) and `13132637021` (`sha256:494a06c311d6a7105d36b1870eb00ad66e00e998f42cbbcada7ee8682fb44809`). No production mutation or remote D1 restore performed. |
+| R17 / AC-15 | implemented; tests authored; validation not-run | Round 12 read-only production verifier and injected-fetch contracts. Requires exact-head Actions execution; protected configuration and real production fixture/source evidence remain separate gates. |
 
+### Round12 current delivery and production boundary
 
+On 2026-11-02 the backend checkpoint and Draft PR137 were reread at
+`06047d3ea69313ec4cfec58bbee36a7afc9cf007`; main remained
+`687718ce9e0083aa124d29005bcce4051d357919`. Reviews and conversation comments
+were both zero, the PR was unmerged, and no formal production authorization was
+observed. The latest traceable canonical delivery read was run `40047409890`,
+source `33a26692ce2f74e3fdca3940dfc4cbfb3ede151b`, Worker version
+`3ad1a889-4c28-4344-8472-8c8adc225a3c`. Its full logs and provenance/recovery
+artifacts were inspected. This historical delivery is not a current active
+control-plane observation, and its recovery artifact contains only a D1 bookmark,
+not a successful restore. That source rejects origin `afterId=0` and has no
+historyCursor contract. The verifier is newly authored and its exact-head
+Actions remain required; no production probe, merge, deployment, fixture creation
+or data modification occurred in this increment. Missing compatible authorized
+deployment, protected read credentials and approved existing fixture remain
+explicit production blockers.
