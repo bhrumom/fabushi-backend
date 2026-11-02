@@ -342,7 +342,7 @@ CI logs and exact commit SHA are required evidence. API failures return bounded 
 | R14 / AC-12 | passed on checkpoint only | `cc3b7ef10a6646c6ee1a99bd068238c7f9530421`, run 41407127408: 28 tests passed, zero failed/skipped; does not imply deployed acceptance. |
 | R15 / AC-13 | passed on exact checkpoint only | Exact `06047d3ea69313ec4cfec58bbee36a7afc9cf007`, runs `41427242843` and `41427235133`: existing29/29 including cursor echo. Additional SQLite10 includes real-engine afterId=0 multipage/empty/pair isolation. No active Worker or authenticated production qualification is implied. |
 | R16 / AC-14 | passed on exact checkpoint only | Same exact `06047d3ea69313ec4cfec58bbee36a7afc9cf007` push/PR runs passed real SQLite10/10 and original29/29. Full logs were read in round12; artifacts `13131943502` (`sha256:80f1e5a3ee86ec2c069c195238700fdfaac5b68e16bfa66f28e80bfe8945080f`) and `13132637021` (`sha256:494a06c311d6a7105d36b1870eb00ad66e00e998f42cbbcada7ee8682fb44809`). No production mutation or remote D1 restore performed. |
-| R17 / AC-15 | implemented; tests authored; validation not-run | Round 12 read-only production verifier and injected-fetch contracts. Requires exact-head Actions execution; protected configuration and real production fixture/source evidence remain separate gates. |
+| R17 / AC-15 | verifier contract passed; real production blocked | Exact `013c5460049f2f75843ebc0c8c736e287d32789c`, push `41509986961` and PR `41509996583`: original29/29 + SQLite10/10 + readiness24/24, all fail/cancelled/skipped/todo0. Both production jobs were skipped, not passed. Full logs, actual ZIP contents/digests, source binding and independent static review are in `docs/evidence/human-messaging-readiness-round12-20261102.json`. Real authorized production fixture/source execution remains unaccepted. |
 
 ### Round12 current delivery and production boundary
 
@@ -356,8 +356,9 @@ source `33a26692ce2f74e3fdca3940dfc4cbfb3ede151b`, Worker version
 artifacts were inspected. This historical delivery is not a current active
 control-plane observation, and its recovery artifact contains only a D1 bookmark,
 not a successful restore. That source rejects origin `afterId=0` and has no
-historyCursor contract. The verifier is newly authored and its exact-head
-Actions remain required; no production probe, merge, deployment, fixture creation
-or data modification occurred in this increment. Missing compatible authorized
+historyCursor contract. The verifier passed its exact-head controlled Actions at `013c5460049f2f75843ebc0c8c736e287d32789c`
+(push `41509986961`, PR `41509996583`), each63/63 with production explicitly
+skipped; no production probe, merge, deployment, fixture creation or data
+modification occurred in this increment. Missing compatible authorized
 deployment, protected read credentials and approved existing fixture remain
 explicit production blockers.
