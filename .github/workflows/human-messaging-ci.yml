@@ -7,6 +7,10 @@ on:
       - "fabushi/web/src/handlers/friends.js"
       - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
       - "fabushi/web/tests/human-message-mutations-contract.test.js"
+      - "fabushi/web/tests/human-message-mutations-sqlite.test.js"
+      - "fabushi/web/migrations/20260713_friends_and_direct_messages.sql"
+      - "fabushi/web/migrations/20261005_human_message_extensions.sql"
+      - "fabushi/web/migrations/20261031_human_message_mutations.sql"
       - "docs/specs/human-direct-messaging-extensions.md"
       - ".github/workflows/human-messaging-ci.yml"
   pull_request:
@@ -25,6 +29,7 @@ on:
       - "fabushi/web/tests/human-messaging-extensions-contract.test.js"
       - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
       - "fabushi/web/tests/human-message-mutations-contract.test.js"
+      - "fabushi/web/tests/human-message-mutations-sqlite.test.js"
       - "fabushi/web/tests/human-call-signaling-behavior.test.js"
       - "docs/specs/human-direct-messaging-extensions.md"
       - "docs/specs/human-call-signaling.md"
@@ -53,7 +58,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           mkdir -p "$GITHUB_WORKSPACE/artifacts/human-messaging"
           git rev-parse HEAD > "$GITHUB_WORKSPACE/artifacts/human-messaging/target-sha.txt"
-          printf '%s\n' 'R14 / AC-12; handler D1/R2 mock behavior and existing contracts; no deployed-service acceptance' > "$GITHUB_WORKSPACE/artifacts/human-messaging/scope.txt"
+          printf '%s\n' 'R14-R16 / AC-12-AC-14; handler D1/R2 mock contracts plus real SQLite migration, atomic mutation and restart contracts; no deployed-D1 or production acceptance' > "$GITHUB_WORKSPACE/artifacts/human-messaging/scope.txt"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -76,6 +81,19 @@ jobs:
           grep -Eq '^# cancelled 0$' "$log"
           grep -Eq '^# skipped 0$' "$log"
           grep -Eq '^# todo 0$' "$log"
+      - name: Run real SQLite mutation and recovery contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$GITHUB_WORKSPACE/artifacts/human-messaging/sqlite-contracts.log"
+          node --test --test-reporter=tap tests/human-message-mutations-sqlite.test.js 2>&1 | tee "$log"
+          grep -E '^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)' "$log" > "$GITHUB_WORKSPACE/artifacts/human-messaging/sqlite-test-counts.txt"
+          grep -Eq '^# tests 10$' "$log"
+          grep -Eq '^# pass 10$' "$log"
+          grep -Eq '^# fail 0$' "$log"
+          grep -Eq '^# cancelled 0$' "$log"
+          grep -Eq '^# skipped 0$' "$log"
+          grep -Eq '^# todo 0$' "$log"
       - name: Preserve exact Human messaging evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -83,4 +101,5 @@ jobs:
           name: human-messaging-contracts-${{ github.event.pull_request.head.sha || github.sha }}
           path: artifacts/human-messaging
           if-no-files-found: error
+
 

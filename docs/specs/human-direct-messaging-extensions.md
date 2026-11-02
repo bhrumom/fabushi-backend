@@ -39,6 +39,7 @@ Extend the existing social direct-message owner so Fabushi clients can durably s
 - R13: Mutation retries are idempotent by `operationId`. Reusing an operation ID for a different message/kind/payload is rejected; stale `expectedRevision` is rejected with HTTP 409 and the current canonical message so clients can reconcile instead of minting a replacement.
 - R14: An explicit `afterId=0` starts a complete, bounded traversal of the authorized pair in ascending message-ID order. Accept only decimal non-negative safe integers; reject negative, fractional, non-decimal, non-numeric and unsafe values. Preserve the existing `before`/`afterId` exclusion and 200-message page ceiling. An empty page retains its input `nextAfterId`, including zero, so a client can persist progress without inventing coverage from a timestamp overlap.
 - R15: For every explicit `afterId` query, including zero and empty pages, respond with `data.historyCursor = { mode: 'after-id', afterId: requestedSafeInteger }` distinct from `nextAfterId`. Legacy `before` or latest requests must omit `historyCursor`; neither may imply complete coverage. Authentication and pair-scoped ascending query, bounded limits and malformed-input rejection are unchanged. Desktop rejects a missing or mismatched declaration before persistence.
+- R16: Tombstone deletion, operation journal and reaction cleanup commit in one D1 batch transaction. A cleanup failure rolls back all three; a lost acknowledgement is recovered with the same operation ID after restart. Retrying an already journaled delete also repairs reactions left by the older separate-cleanup path without changing the message ID/revision or deleting resource bytes. Reaction writes atomically require a non-deleted message and participant identity, and reject a concurrent tombstone observed before the response rather than acknowledging a stale toggle. Storage errors remain visible and retryable.
 
 ## 5. Current state
 
@@ -162,6 +163,19 @@ rejection before message reads, and compatibility of legacy history
 ordering. These controlled handler contracts do not establish deployed
 service acceptance or independently validate the SQLite engine.
 
+R16 adds a separate Node 22 built-in SQLite suite that loads the real three
+message migrations and invokes the production handlers through a D1-shaped
+SQLite adapter. It checks preservation of existing rows and foreign keys,
+cleanup-trigger rollback, post-commit acknowledgement loss, repair of an older
+partial tombstone, delayed reaction add/remove versus deletion, reaction replay
+and authorization, edit replay/revision conflicts, competing edits, and real
+450-row origin pagination with file-database reopen. The original 29 checks
+include five source-marker mutation contracts; they are not mutation behavior
+proof. The additional ten SQLite tests have their own count/log gate. A local
+SQLite transaction is not an observation of deployed Cloudflare D1; production
+authenticated pagination, active Worker provenance and isolated remote recovery
+remain separate requirements. No local tests are authorized by this addition.
+
 ## 13. Acceptance criteria / Definition of Done
 
 - AC-1: Existing plain-text friend direct messaging remains passing and backward compatible.
@@ -177,6 +191,7 @@ service acceptance or independently validate the SQLite engine.
 - AC-11: Mutation idempotency and optimistic concurrency are fail-closed: exact operation replay is safe, operation-ID reuse is rejected, and stale revisions cannot overwrite newer state.
 - AC-12: Origin-ID pagination executes the R14 behavior matrix at the exact backend commit with no failed/skipped cases; preserve all existing messaging and call contracts. Bind workflow checkout, complete logs and actual test totals to that SHA. Desktop persistence/32-page continuation/restart and eventual production deployment require their own evidence and are not implied by this backend increment.
 - AC-13: Explicit cursor echo and unchanged legacy shape pass a real handler/D1 mock contract with origin, sparse, empty, max-safe and unauthorized scenarios. Exact-commit CI must execute 29/29; mocked handler acceptance never establishes active production deployment.
+- AC-14: The exact backend commit passes the existing 29 checks and all ten separately counted SQLite behavior/recovery tests with zero failed/skipped/cancelled cases. A delete cleanup failure leaves the original message/revision/reactions and no journal; restart/retry or lost-ack replay yields one journal and a stable tombstone without reactions. Delayed reaction add/remove against that tombstone fails closed. Existing message/resource identity and foreign keys survive additive migration and reopen. These results do not authorize deployment or establish remote D1 restore acceptance.
 
 ## 14. Release / migration / rollback
 
@@ -199,6 +214,7 @@ CI logs and exact commit SHA are required evidence. API failures return bounded 
 - Existing migration `fabushi/web/migrations/20260713_friends_and_direct_messages.sql`.
 - Existing R2 read owner `fabushi/web/src/handlers/assets.js`.
 - Telegram Desktop frozen source is a product-behavior research source only; no Telegram code/protocol is introduced here.
+- D1 batch transaction/rollback contract: https://developers.cloudflare.com/d1/worker-api/d1-database/#batch (read 2026-11-02).
 
 ## 17. Spec compliance record
 
@@ -209,4 +225,6 @@ CI logs and exact commit SHA are required evidence. API failures return bounded 
 | R11-R13 / AC-9-AC-11 | specified; validation not-run | Stage-A contract for edit/delete. Runtime/schema/tests must be implemented on the isolated checkpoint and remain unverified until the frozen GitHub Actions validation campaign. |
 | R14 / AC-12 | passed on checkpoint only | `cc3b7ef10a6646c6ee1a99bd068238c7f9530421`, run 41407127408: 28 tests passed, zero failed/skipped; does not imply deployed acceptance. |
 | R15 / AC-13 | implemented; exact-H validation pending | Round 8 explicit historyCursor response and handler behavior test; target 29/29 via GitHub Actions. Active Worker and desktop continuation remain blocked until separate evidence. |
+| R16 / AC-14 | implemented; exact-H validation not-run | Round 11 atomic delete/reaction recovery and ten real-SQLite handler contracts. Requires the new exact-commit Actions results; no production mutation or restore performed. |
+
 

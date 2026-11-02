@@ -150,6 +150,7 @@ function createDb() {
                     id: row.id,
                     sender_user_id: row.sender_user_id,
                     recipient_user_id: row.recipient_user_id,
+                    deleted_at: row.deleted_at ?? null,
                   }
                   : null;
               }
@@ -267,6 +268,12 @@ function createDb() {
 
               if (query.startsWith('INSERT INTO direct_message_reactions')) {
                 const [messageId, userId, emoji, createdAt] = params;
+                const target = messages.get(Number(messageId));
+                if (!target || target.deleted_at
+                    || (target.sender_user_id !== Number(userId)
+                      && target.recipient_user_id !== Number(userId))) {
+                  return { meta: { changes: 0 } };
+                }
                 const exists = reactions.some(
                   (reaction) => reaction.message_id === Number(messageId)
                     && reaction.user_id === Number(userId)
@@ -285,6 +292,12 @@ function createDb() {
 
               if (query.startsWith('DELETE FROM direct_message_reactions')) {
                 const [messageId, userId, emoji] = params;
+                const target = messages.get(Number(messageId));
+                if (!target || target.deleted_at
+                    || (target.sender_user_id !== Number(userId)
+                      && target.recipient_user_id !== Number(userId))) {
+                  return { meta: { changes: 0 } };
+                }
                 const index = reactions.findIndex(
                   (reaction) => reaction.message_id === Number(messageId)
                     && reaction.user_id === Number(userId)
@@ -805,3 +818,4 @@ test('explicit ID history proves requested cursor and preserves legacy response'
   assert.equal(denied.status, 403);
   assert.equal(Object.hasOwn(await denied.json(), 'data'), false);
 });
+

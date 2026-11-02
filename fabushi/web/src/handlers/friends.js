@@ -761,6 +761,16 @@ export async function handleDeleteDirectMessage(request, env, db, messageId) {
         || prior.expected_revision !== expectedRevision || prior.request_digest !== requestDigest) {
       return jsonResponse({ success: false, error: '消息操作编号已被其他操作使用' }, 409);
     }
+    // Repair a persisted tombstone from an older Worker that committed its
+    // journal before clearing reactions. A failed repair must remain retryable.
+    await db.prepare(`
+      DELETE FROM direct_message_reactions
+      WHERE message_id = ?
+        AND EXISTS (
+          SELECT 1 FROM direct_messages
+          WHERE id = ? AND sender_user_id = ? AND deleted_at IS NOT NULL
+        )
+    `).bind(target.id, target.id, auth.userId).run();
     return jsonResponse({
       success: true,
       deduplicated: true,
@@ -798,6 +808,16 @@ export async function handleDeleteDirectMessage(request, env, db, messageId) {
       SET body = '', attachments_json = '[]', revision = ?, deleted_at = ?
       WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at IS NULL
     `).bind(resultRevision, now, target.id, auth.userId, expectedRevision),
+    // D1 batch is a single SQL transaction. Tombstone, operation journal and
+    // reaction cleanup must all commit or all roll back together.
+    db.prepare(`
+      DELETE FROM direct_message_reactions
+      WHERE message_id = ?
+        AND EXISTS (
+          SELECT 1 FROM direct_messages
+          WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at = ?
+        )
+    `).bind(target.id, target.id, auth.userId, resultRevision, now),
   ]);
   if (journalResult?.meta?.changes !== 1 || updateResult?.meta?.changes !== 1) {
     return jsonResponse({
@@ -806,14 +826,6 @@ export async function handleDeleteDirectMessage(request, env, db, messageId) {
       message: await readCanonicalDirectMessage(db, target.id, auth.userId),
     }, 409);
   }
-  await db.prepare(`
-    DELETE FROM direct_message_reactions
-    WHERE message_id = ?
-      AND EXISTS (
-        SELECT 1 FROM direct_messages
-        WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at = ?
-      )
-  `).bind(target.id, target.id, auth.userId, resultRevision, now).run();
   return jsonResponse({
     success: true,
     deduplicated: false,
@@ -842,20 +854,39 @@ export async function handleSetDirectMessageReaction(request, env, db, messageId
   if (active) {
     await db.prepare(`
       INSERT INTO direct_message_reactions (message_id, user_id, emoji, created_at)
-      VALUES (?, ?, ?, ?)
+      SELECT ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM direct_messages
+        WHERE id = ? AND deleted_at IS NULL
+          AND (sender_user_id = ? OR recipient_user_id = ?)
+      )
       ON CONFLICT(message_id, user_id, emoji) DO NOTHING
-    `).bind(message.id, auth.userId, emoji, new Date().toISOString()).run();
+    `).bind(
+      message.id, auth.userId, emoji, new Date().toISOString(),
+      message.id, auth.userId, auth.userId,
+    ).run();
   } else {
     await db.prepare(`
       DELETE FROM direct_message_reactions
       WHERE message_id = ? AND user_id = ? AND emoji = ?
-    `).bind(message.id, auth.userId, emoji).run();
+        AND EXISTS (
+          SELECT 1 FROM direct_messages
+          WHERE id = ? AND deleted_at IS NULL
+            AND (sender_user_id = ? OR recipient_user_id = ?)
+        )
+    `).bind(message.id, auth.userId, emoji, message.id, auth.userId, auth.userId).run();
   }
   const reactions = await loadReactionMap(db, [message.id], auth.userId);
+  // The initial authorization read may precede a concurrent tombstone. Never
+  // acknowledge that stale request as a successful reaction on deleted content.
+  const current = await readMutationTarget(db, message.id, auth.userId);
+  if (!current) return jsonResponse({ success: false, error: '消息不存在或无权访问' }, 404);
+  if (current.deleted_at) return jsonResponse({ success: false, error: '已删除的消息不能添加表情' }, 409);
   return jsonResponse({
     success: true,
     messageId: message.id,
     reactions: reactions.get(message.id) || [],
   });
 }
+
 
