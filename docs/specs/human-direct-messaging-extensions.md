@@ -38,6 +38,7 @@ Extend the existing social direct-message owner so Fabushi clients can durably s
 - R12: A sender may delete an existing direct message as a tombstone mutation. Delete preserves the canonical message row/ID for reply provenance and synchronization, increments `revision`, records `deletedAt`, clears message body and attachment references, and removes reactions. Recipients cannot edit/delete another sender's message.
 - R13: Mutation retries are idempotent by `operationId`. Reusing an operation ID for a different message/kind/payload is rejected; stale `expectedRevision` is rejected with HTTP 409 and the current canonical message so clients can reconcile instead of minting a replacement.
 - R14: An explicit `afterId=0` starts a complete, bounded traversal of the authorized pair in ascending message-ID order. Accept only decimal non-negative safe integers; reject negative, fractional, non-decimal, non-numeric and unsafe values. Preserve the existing `before`/`afterId` exclusion and 200-message page ceiling. An empty page retains its input `nextAfterId`, including zero, so a client can persist progress without inventing coverage from a timestamp overlap.
+- R15: For every explicit `afterId` query, including zero and empty pages, respond with `data.historyCursor = { mode: 'after-id', afterId: requestedSafeInteger }` distinct from `nextAfterId`. Legacy `before` or latest requests must omit `historyCursor`; neither may imply complete coverage. Authentication and pair-scoped ascending query, bounded limits and malformed-input rejection are unchanged. Desktop rejects a missing or mismatched declaration before persistence.
 
 ## 5. Current state
 
@@ -87,7 +88,7 @@ New:
 
 `before` and `afterId` are mutually exclusive.
 
-The response remains `{ success:true, data:{ contact, messages, nextAfterId } }`.
+The response remains `{ success:true, data:{ contact, messages, nextAfterId } }` for legacy requests. An explicit `afterId` request additionally returns `historyCursor: { mode: 'after-id', afterId: <requested number> }`; this is the requested cursor, not the returned high-water `nextAfterId`. Empty origin and terminal pages still echo the exact request. Omitted and `before` requests do not receive a cursor declaration.
 For an explicit cursor, `nextAfterId` is the last returned message ID, or
 the input cursor when no messages are returned. It is therefore zero for
 an empty origin page. No `hasMore` or timestamp-contiguity claim is added.
@@ -175,6 +176,7 @@ service acceptance or independently validate the SQLite engine.
 - AC-10: Delete produces a durable tombstone with the same message ID, clears user content/attachments/reactions, and keeps reply/reconnect ordering deterministic.
 - AC-11: Mutation idempotency and optimistic concurrency are fail-closed: exact operation replay is safe, operation-ID reuse is rejected, and stale revisions cannot overwrite newer state.
 - AC-12: Origin-ID pagination executes the R14 behavior matrix at the exact backend commit with no failed/skipped cases; preserve all existing messaging and call contracts. Bind workflow checkout, complete logs and actual test totals to that SHA. Desktop persistence/32-page continuation/restart and eventual production deployment require their own evidence and are not implied by this backend increment.
+- AC-13: Explicit cursor echo and unchanged legacy shape pass a real handler/D1 mock contract with origin, sparse, empty, max-safe and unauthorized scenarios. Exact-commit CI must execute 29/29; mocked handler acceptance never establishes active production deployment.
 
 ## 14. Release / migration / rollback
 
@@ -205,5 +207,6 @@ CI logs and exact commit SHA are required evidence. API failures return bounded 
 | R1-R10 | passed | Implemented in the canonical social messaging owner; executable source + handler-level D1/R2 contracts passed on implementation HEAD `1c544e5405512a4bd55b25cc9759fc5f55ad3612`, Human Messaging CI run `37249986917`. |
 | AC-1-AC-8 | passed (historical baseline) | Backward compatibility, reply/resources/reactions, fail-closed authorization, `afterId` reconnect, `q` search, two-device convergence, private R2 reads, and exact-HEAD CI were covered by run `37249986917` on the prior implementation baseline. This is not validation evidence for the Stage-A mutation work. |
 | R11-R13 / AC-9-AC-11 | specified; validation not-run | Stage-A contract for edit/delete. Runtime/schema/tests must be implemented on the isolated checkpoint and remain unverified until the frozen GitHub Actions validation campaign. |
-| R14 / AC-12 | specified; validation not-run | Task `20bf9475-a885-4314-b509-bea53ef8849f`, round 6; backend base `ac51cb41054fd96f650a96cdd96ec05363b46b1e`. Origin cursor contract and focused behavior cases require new exact-commit Actions evidence. No existing pass or deployed-state claim is inherited. |
+| R14 / AC-12 | passed on checkpoint only | `cc3b7ef10a6646c6ee1a99bd068238c7f9530421`, run 41407127408: 28 tests passed, zero failed/skipped; does not imply deployed acceptance. |
+| R15 / AC-13 | implemented; exact-H validation pending | Round 8 explicit historyCursor response and handler behavior test; target 29/29 via GitHub Actions. Active Worker and desktop continuation remain blocked until separate evidence. |
 

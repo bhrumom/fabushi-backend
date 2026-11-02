@@ -642,6 +642,7 @@ export async function handleListDirectMessages(request, env, db) {
     data: {
       contact: mapContact(target),
       messages,
+      ...(afterRaw ? { historyCursor: { mode: 'after-id', afterId } } : {}),
       nextAfterId: messages.length === 0
         ? (afterRaw ? afterId : null)
         : messages[messages.length - 1].id,

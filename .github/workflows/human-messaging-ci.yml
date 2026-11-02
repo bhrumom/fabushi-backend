@@ -70,8 +70,34 @@ jobs:
           log="$GITHUB_WORKSPACE/artifacts/human-messaging/contracts.log"
           node --test --test-reporter=tap tests/friends-and-messages-contract.test.js tests/human-messaging-extensions-contract.test.js tests/human-messaging-extensions-behavior.test.js tests/human-message-mutations-contract.test.js tests/human-call-signaling-behavior.test.js 2>&1 | tee "$log"
           grep -E '^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)' "$log" > "$GITHUB_WORKSPACE/artifacts/human-messaging/test-counts.txt"
-          grep -Eq '^# tests 28$' "$log"
-          grep -Eq '^# pass 28$' "$log"
+          grep -Eq '^# tests 29
+          grep -Eq '^# fail 0$' "$log"
+          grep -Eq '^# cancelled 0$' "$log"
+          grep -Eq '^# skipped 0$' "$log"
+          grep -Eq '^# todo 0$' "$log"
+      - name: Preserve exact Human messaging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: human-messaging-contracts-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/human-messaging
+          if-no-files-found: error
+
+ "$log"
+          grep -Eq '^# pass 29
+          grep -Eq '^# fail 0$' "$log"
+          grep -Eq '^# cancelled 0$' "$log"
+          grep -Eq '^# skipped 0$' "$log"
+          grep -Eq '^# todo 0$' "$log"
+      - name: Preserve exact Human messaging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: human-messaging-contracts-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/human-messaging
+          if-no-files-found: error
+
+ "$log"
           grep -Eq '^# fail 0$' "$log"
           grep -Eq '^# cancelled 0$' "$log"
           grep -Eq '^# skipped 0$' "$log"

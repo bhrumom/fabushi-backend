@@ -766,3 +766,42 @@ test('origin traversal preserves legacy before ordering while separating ID orde
   }
 });
 
+
+test('explicit ID history proves requested cursor and preserves legacy response', async () => {
+  const db = createDb();
+  seedDirectMessage(db, 1, ALICE, BOB);
+  seedDirectMessage(db, 2, BOB, ALICE);
+  seedDirectMessage(db, 4, ALICE, BOB, '2026-01-01T00:00:00.000Z');
+  seedDirectMessage(db, 3, ALICE, CAROL);
+  for (const [suffix, requested, ids, next] of [
+    ['&afterId=0&limit=2', 0, [1, 2], 2],
+    ['&afterId=2', 2, [4], 4],
+    ['&afterId=4', 4, [], 4],
+    ['&afterId=0&q=nomatch', 0, [], 0],
+    ['&afterId=9007199254740991', Number.MAX_SAFE_INTEGER, [], Number.MAX_SAFE_INTEGER],
+  ]) {
+    const response = await handleListDirectMessages(
+      await get('https://api.example.com/api/social/messages?contactId=2' + suffix, ALICE, 'cursor-device'),
+      ENV, db,
+    );
+    assert.equal(response.status, 200, suffix);
+    const data = (await response.json()).data;
+    assert.deepEqual(data.historyCursor, { mode: 'after-id', afterId: requested }, suffix);
+    assert.deepEqual(data.messages.map((message) => message.id), ids, suffix);
+    assert.equal(data.nextAfterId, next, suffix);
+  }
+  for (const suffix of ['&limit=2', '&before=2026-11-03T00:00:00.000Z']) {
+    const response = await handleListDirectMessages(
+      await get('https://api.example.com/api/social/messages?contactId=2' + suffix, ALICE, 'legacy-device'),
+      ENV, db,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(Object.hasOwn((await response.json()).data, 'historyCursor'), false);
+  }
+  const denied = await handleListDirectMessages(
+    await get('https://api.example.com/api/social/messages?contactId=2&afterId=0', CAROL, 'foreign-device'),
+    ENV, db,
+  );
+  assert.equal(denied.status, 403);
+  assert.equal(Object.hasOwn(await denied.json(), 'data'), false);
+});
