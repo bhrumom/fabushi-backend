@@ -38,7 +38,7 @@ test('REG-MSG-DELETE-TOMBSTONE-001: delete keeps message identity while clearing
   assert.match(handler, /handleDeleteDirectMessage/);
   assert.match(handler, /只能删除自己发送的消息/);
   assert.match(handler, /SET body = '', attachments_json = '\[\]', revision = \?, deleted_at = \?/);
-  assert.match(handler, /DELETE FROM direct_message_reactions WHERE message_id = \?/);
+  assert.match(handler, /DELETE FROM direct_message_reactions\s+WHERE message_id = \?/);
   assert.match(handler, /isDeleted: Boolean\(row\.deleted_at\)/);
   assert.match(handler, /deletedAt: row\.deleted_at \?\? null/);
   assert.match(handler, /revision: Number\(row\.revision \?\? 1\)/);
@@ -54,3 +54,4 @@ test('REG-MSG-DELETED-REACTION-001: tombstones reject new reactions', () => {
   assert.match(handler, /SELECT id, sender_user_id, recipient_user_id, deleted_at/);
   assert.match(handler, /已删除的消息不能添加表情/);
 });
+

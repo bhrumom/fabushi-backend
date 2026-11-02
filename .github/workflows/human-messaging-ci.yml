@@ -6,6 +6,7 @@ on:
     paths:
       - "fabushi/web/src/handlers/friends.js"
       - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
+      - "fabushi/web/tests/human-message-mutations-contract.test.js"
       - "docs/specs/human-direct-messaging-extensions.md"
       - ".github/workflows/human-messaging-ci.yml"
   pull_request:
