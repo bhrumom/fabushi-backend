@@ -356,6 +356,29 @@ function parseMutationOperationId(value) {
   return operationId;
 }
 
+// Parses an edit/delete request. Malformed or non-object JSON returns null so
+// callers answer 400 instead of throwing a 500. DELETE bodies are optional
+// because some clients/proxies drop them; operationId/expectedRevision may then
+// be supplied as query parameters. Body values take precedence.
+async function readMutationRequest(request) {
+  const raw = await request.text();
+  let body = {};
+  if (raw.trim()) {
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  }
+  const query = new URL(request.url).searchParams;
+  return {
+    ...body,
+    operationId: body.operationId ?? query.get('operationId') ?? undefined,
+    expectedRevision: body.expectedRevision ?? query.get('expectedRevision') ?? undefined,
+  };
+}
+
 async function readMutationTarget(db, messageId, authUserId) {
   const id = Number(messageId);
   if (!Number.isSafeInteger(id) || id <= 0) return null;
@@ -659,7 +682,8 @@ export async function handleEditDirectMessage(request, env, db, messageId) {
     return jsonResponse({ success: false, error: '只能编辑自己发送的消息' }, 403);
   }
 
-  const body = await request.json();
+  const body = await readMutationRequest(request);
+  if (!body) return jsonResponse({ success: false, error: '请求体不是有效的 JSON 对象' }, 400);
   const operationId = parseMutationOperationId(body.operationId);
   const expectedRevision = parseExpectedRevision(body.expectedRevision);
   if (!operationId) return jsonResponse({ success: false, error: '消息操作编号无效' }, 400);
@@ -745,7 +769,8 @@ export async function handleDeleteDirectMessage(request, env, db, messageId) {
     return jsonResponse({ success: false, error: '只能删除自己发送的消息' }, 403);
   }
 
-  const body = await request.json();
+  const body = await readMutationRequest(request);
+  if (!body) return jsonResponse({ success: false, error: '请求体不是有效的 JSON 对象' }, 400);
   const operationId = parseMutationOperationId(body.operationId);
   const expectedRevision = parseExpectedRevision(body.expectedRevision);
   if (!operationId) return jsonResponse({ success: false, error: '消息操作编号无效' }, 400);

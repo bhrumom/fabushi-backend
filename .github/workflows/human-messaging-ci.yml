@@ -1,20 +1,6 @@
 name: Human Messaging CI
 
 on:
-  push:
-    branches: [checkpoint/tdrp-stage-a-msg-mutations-7457eb1c-r1]
-    paths:
-      - "fabushi/web/src/handlers/friends.js"
-      - "fabushi/web/tests/human-messaging-extensions-behavior.test.js"
-      - "fabushi/web/tests/human-message-mutations-contract.test.js"
-      - "fabushi/web/tests/human-message-mutations-sqlite.test.js"
-      - "fabushi/web/migrations/20260713_friends_and_direct_messages.sql"
-      - "fabushi/web/migrations/20261005_human_message_extensions.sql"
-      - "fabushi/web/migrations/20261031_human_message_mutations.sql"
-      - "docs/specs/human-direct-messaging-extensions.md"
-      - ".github/scripts/human-messaging-production-readiness.mjs"
-      - ".github/scripts/human-messaging-production-readiness.test.mjs"
-      - ".github/workflows/human-messaging-ci.yml"
   pull_request:
     branches: [main]
     paths:
@@ -105,8 +91,8 @@ jobs:
           log="$GITHUB_WORKSPACE/artifacts/human-messaging/sqlite-contracts.log"
           node --test --test-reporter=tap tests/human-message-mutations-sqlite.test.js 2>&1 | tee "$log"
           grep -E '^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)' "$log" > "$GITHUB_WORKSPACE/artifacts/human-messaging/sqlite-test-counts.txt"
-          grep -Eq '^# tests 10$' "$log"
-          grep -Eq '^# pass 10$' "$log"
+          grep -Eq '^# tests 11$' "$log"
+          grep -Eq '^# pass 11$' "$log"
           grep -Eq '^# fail 0$' "$log"
           grep -Eq '^# cancelled 0$' "$log"
           grep -Eq '^# skipped 0$' "$log"

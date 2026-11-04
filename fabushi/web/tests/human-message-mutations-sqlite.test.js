@@ -411,3 +411,33 @@ test('SQLite afterId zero paginates real rows, retains empty cursors and scopes 
   assert.equal(legacy.status, 200);
   assert.equal('historyCursor' in (await legacy.json()).data, false);
 });
+
+test('SQLite edit/delete reject malformed JSON with 400 and accept body-less DELETE query parameters', async (t) => {
+  const f = fixture(t);
+  const token = await generateToken({ id: 1, username: NAMES[1] }, ENV);
+  const raw = (method, body, query = '') => new Request(`https://api.example.test/api/social/messages/${LEGACY_ID}${query}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    ...(body === undefined ? {} : { body }),
+  });
+  const before = f.message();
+  for (const body of ['{not json', '[1,2]', 'null', '"text"']) {
+    const editResponse = await handleEditDirectMessage(raw('PATCH', body), ENV, f.db, LEGACY_ID);
+    assert.equal(editResponse.status, 400, `edit ${body}`);
+    const deleteResponse = await handleDeleteDirectMessage(raw('DELETE', body), ENV, f.db, LEGACY_ID);
+    assert.equal(deleteResponse.status, 400, `delete ${body}`);
+  }
+  assert.deepEqual(f.message(), before);
+  assert.equal(f.count('direct_message_mutations'), 0);
+
+  const missing = await handleDeleteDirectMessage(raw('DELETE'), ENV, f.db, LEGACY_ID);
+  assert.equal(missing.status, 400);
+  assert.deepEqual(f.message(), before);
+
+  const deleted = await handleDeleteDirectMessage(
+    raw('DELETE', undefined, '?operationId=delete-query-17&expectedRevision=1'), ENV, f.db, LEGACY_ID,
+  );
+  assert.equal(deleted.status, 200);
+  assert.equal(f.message().revision, 2);
+  assert.ok(f.message().deleted_at);
+});

@@ -319,6 +319,15 @@ durable progress and surface that failure, not silently substitute a
 timestamp query and claim complete coverage. This checkpoint is not a
 production deployment authorization or proof.
 
+### Release order (required)
+
+1. Apply `fabushi/web/migrations/20261031_human_message_mutations.sql` to production D1 **once**, before deploying the Worker. The new Worker selects `revision`, `edited_at` and `deleted_at` on every history read; deploying it first would make list/send/reaction requests fail with 500. The migration uses bare `ALTER TABLE ADD COLUMN` and is **not re-runnable** (a second run fails with duplicate column, before any change).
+2. Deploy the Worker through the main-only production delivery workflow with explicit approval.
+3. Run authenticated real-service checks: afterId=0 multi-page and empty-cursor traversal, authorization denial negatives, edit/delete revision conflicts, provenance SHA.
+4. Rollback: redeploy the previous Worker and leave the additive schema in place. Old clients then see tombstoned messages as empty messages and the old reaction handler may accept reactions on them again; edited/deleted content is intentionally unrecoverable.
+
+Edit/delete requests with malformed or non-object JSON return 400. DELETE may omit its body and pass `operationId` and `expectedRevision` as query parameters; body values take precedence.
+
 ## 15. Observability / evidence
 
 CI logs and exact commit SHA are required evidence. API failures return bounded user-safe errors; secrets/object keys are not logged or returned. Device header may be included in future structured telemetry but is not persisted as ownership.
