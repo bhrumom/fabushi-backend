@@ -150,6 +150,7 @@ function createDb() {
                     id: row.id,
                     sender_user_id: row.sender_user_id,
                     recipient_user_id: row.recipient_user_id,
+                    deleted_at: row.deleted_at ?? null,
                   }
                   : null;
               }
@@ -267,6 +268,12 @@ function createDb() {
 
               if (query.startsWith('INSERT INTO direct_message_reactions')) {
                 const [messageId, userId, emoji, createdAt] = params;
+                const target = messages.get(Number(messageId));
+                if (!target || target.deleted_at
+                    || (target.sender_user_id !== Number(userId)
+                      && target.recipient_user_id !== Number(userId))) {
+                  return { meta: { changes: 0 } };
+                }
                 const exists = reactions.some(
                   (reaction) => reaction.message_id === Number(messageId)
                     && reaction.user_id === Number(userId)
@@ -285,6 +292,12 @@ function createDb() {
 
               if (query.startsWith('DELETE FROM direct_message_reactions')) {
                 const [messageId, userId, emoji] = params;
+                const target = messages.get(Number(messageId));
+                if (!target || target.deleted_at
+                    || (target.sender_user_id !== Number(userId)
+                      && target.recipient_user_id !== Number(userId))) {
+                  return { meta: { changes: 0 } };
+                }
                 const index = reactions.findIndex(
                   (reaction) => reaction.message_id === Number(messageId)
                     && reaction.user_id === Number(userId)
@@ -572,3 +585,237 @@ test('reply resource reaction and search remain server-canonical and participant
   );
   assert.equal(outsiderReaction.status, 404);
 });
+
+function seedDirectMessage(db, id, sender = ALICE, recipient = BOB, createdAt = '2026-11-02T00:00:00.000Z') {
+  db.state.messages.set(id, {
+    id,
+    sender_user_id: sender.id,
+    sender_username: sender.username,
+    recipient_user_id: recipient.id,
+    recipient_username: recipient.username,
+    body: `history-${id}`,
+    client_request_id: `history-${id}`,
+    created_at: createdAt,
+    read_at: null,
+    reply_to_message_id: null,
+    attachments_json: '[]',
+    revision: 1,
+    edited_at: null,
+    deleted_at: null,
+  });
+}
+
+test('origin cursor covers equal-timestamp history without crossing participant pairs', async () => {
+  const db = createDb();
+  for (let id = 1; id <= 450; id += 1) {
+    seedDirectMessage(db, id, id % 2 ? ALICE : BOB, id % 2 ? BOB : ALICE);
+  }
+  seedDirectMessage(db, 451, ALICE, CAROL);
+  seedDirectMessage(db, 452, CAROL, ALICE);
+  seedDirectMessage(db, 453, BOB, CAROL);
+
+  const seen = [];
+  let cursor = 0;
+  for (const [pageSize, nextCursor] of [[200, 200], [200, 400], [50, 450], [0, 450]]) {
+    const response = await handleListDirectMessages(
+      await get(
+        `https://api.example.com/api/social/messages?contactId=${BOB.id}&afterId=${cursor}&limit=200`,
+        ALICE,
+        'history-device',
+      ),
+      ENV,
+      db,
+    );
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.contact.id, BOB.id);
+    assert.deepEqual(
+      payload.data.messages.map((message) => message.id),
+      Array.from({ length: pageSize }, (_, index) => cursor + index + 1),
+    );
+    assert.equal(payload.data.nextAfterId, nextCursor);
+    seen.push(...payload.data.messages.map((message) => message.id));
+    cursor = payload.data.nextAfterId;
+  }
+  assert.deepEqual(seen, Array.from({ length: 450 }, (_, index) => index + 1));
+  assert.equal(new Set(seen).size, 450);
+
+  // A later ID remains discoverable even when its creation time precedes the
+  // entire previous traversal; the cursor is an ID, not a timestamp overlap.
+  seedDirectMessage(db, 454, BOB, ALICE, '2026-01-01T00:00:00.000Z');
+  const later = await handleListDirectMessages(
+    await get(
+      `https://api.example.com/api/social/messages?contactId=${BOB.id}&afterId=${cursor}`,
+      ALICE,
+      'history-device-after-reconnect',
+    ),
+    ENV,
+    db,
+  );
+  assert.equal(later.status, 200);
+  const laterPayload = await later.json();
+  assert.deepEqual(laterPayload.data.messages.map((message) => message.id), [454]);
+  assert.equal(laterPayload.data.nextAfterId, 454);
+
+  const denied = await handleListDirectMessages(
+    await get(
+      `https://api.example.com/api/social/messages?contactId=${BOB.id}&afterId=0`,
+      CAROL,
+      'non-friend-device',
+    ),
+    ENV,
+    db,
+  );
+  assert.equal(denied.status, 403);
+  assert.equal((await denied.json()).success, false);
+});
+
+test('origin and terminal cursors retain empty progress and bounded page sizes', async () => {
+  const db = createDb();
+  for (const cursor of [0, Number.MAX_SAFE_INTEGER]) {
+    const response = await handleListDirectMessages(
+      await get(
+        `https://api.example.com/api/social/messages?contactId=${BOB.id}&afterId=${cursor}`,
+        ALICE,
+        'empty-history-device',
+      ),
+      ENV,
+      db,
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.data.messages, []);
+    assert.equal(payload.data.nextAfterId, cursor);
+  }
+
+  for (let id = 1; id <= 205; id += 1) seedDirectMessage(db, id);
+  for (const [limit, expectedSize] of [[null, 50], ['0', 1], ['1', 1], ['200', 200], ['999', 200]]) {
+    const url = new URL(`https://api.example.com/api/social/messages?contactId=${BOB.id}&afterId=0`);
+    if (limit !== null) url.searchParams.set('limit', limit);
+    const response = await handleListDirectMessages(
+      await get(url, ALICE, 'bounded-history-device'),
+      ENV,
+      db,
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(
+      payload.data.messages.map((message) => message.id),
+      Array.from({ length: expectedSize }, (_, index) => index + 1),
+    );
+    assert.equal(payload.data.nextAfterId, expectedSize);
+  }
+});
+
+test('malformed and conflicting history cursors fail before reading private messages', async () => {
+  const db = createDb();
+  seedDirectMessage(db, 1);
+  let privateMessageReads = 0;
+  const watchedDb = {
+    prepare(sql) {
+      if (/FROM direct_messages|FROM direct_message_reactions/.test(sql)) privateMessageReads += 1;
+      return db.prepare(sql);
+    },
+  };
+  for (const value of [
+    '-1', '-0', '1.5', '1.0', '9007199254740992', '9007199254740993',
+    'NaN', 'Infinity', '1e2', '0x10', 'invalid', '+1', '1x', '1 2',
+  ]) {
+    const url = new URL(`https://api.example.com/api/social/messages?contactId=${BOB.id}`);
+    url.searchParams.set('afterId', value);
+    const response = await handleListDirectMessages(
+      await get(url, ALICE, 'invalid-cursor-device'),
+      ENV,
+      watchedDb,
+    );
+    assert.equal(response.status, 400, `invalid cursor ${value}`);
+    assert.equal((await response.json()).success, false);
+  }
+  for (const cursor of [0, 1]) {
+    const response = await handleListDirectMessages(
+      await get(
+        `https://api.example.com/api/social/messages?contactId=${BOB.id}&afterId=${cursor}&before=2026-11-02T00:00:00.000Z`,
+        ALICE,
+        'conflicting-cursor-device',
+      ),
+      ENV,
+      watchedDb,
+    );
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).success, false);
+  }
+  assert.equal(privateMessageReads, 0);
+  assert.equal(db.state.messages.size, 1);
+  assert.equal(db.state.messages.get(1).body, 'history-1');
+});
+
+test('origin traversal preserves legacy before ordering while separating ID order from clocks', async () => {
+  const db = createDb();
+  seedDirectMessage(db, 1, ALICE, BOB, '2026-01-02T00:00:00.000Z');
+  seedDirectMessage(db, 2, BOB, ALICE, '2026-01-01T00:00:00.000Z');
+  seedDirectMessage(db, 3, ALICE, BOB, '2026-01-03T00:00:00.000Z');
+  seedDirectMessage(db, 4, ALICE, CAROL, '2026-01-02T00:00:00.000Z');
+  for (const [suffix, expectedIds, nextCursor] of [
+    ['&limit=2', [1, 3], 3],
+    ['&before=2026-01-03T00:00:00.000Z', [2, 1], 1],
+    ['&afterId=0', [1, 2, 3], 3],
+    ['&afterId=2', [3], 3],
+    ['&before=2025-01-01T00:00:00.000Z', [], null],
+  ]) {
+    const response = await handleListDirectMessages(
+      await get(
+        `https://api.example.com/api/social/messages?contactId=${BOB.id}${suffix}`,
+        ALICE,
+        'legacy-history-device',
+      ),
+      ENV,
+      db,
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.data.messages.map((message) => message.id), expectedIds, suffix);
+    assert.equal(payload.data.nextAfterId, nextCursor, suffix);
+  }
+});
+
+
+test('explicit ID history proves requested cursor and preserves legacy response', async () => {
+  const db = createDb();
+  seedDirectMessage(db, 1, ALICE, BOB);
+  seedDirectMessage(db, 2, BOB, ALICE);
+  seedDirectMessage(db, 4, ALICE, BOB, '2026-01-01T00:00:00.000Z');
+  seedDirectMessage(db, 3, ALICE, CAROL);
+  for (const [suffix, requested, ids, next] of [
+    ['&afterId=0&limit=2', 0, [1, 2], 2],
+    ['&afterId=2', 2, [4], 4],
+    ['&afterId=4', 4, [], 4],
+    ['&afterId=0&q=nomatch', 0, [], 0],
+    ['&afterId=9007199254740991', Number.MAX_SAFE_INTEGER, [], Number.MAX_SAFE_INTEGER],
+  ]) {
+    const response = await handleListDirectMessages(
+      await get('https://api.example.com/api/social/messages?contactId=2' + suffix, ALICE, 'cursor-device'),
+      ENV, db,
+    );
+    assert.equal(response.status, 200, suffix);
+    const data = (await response.json()).data;
+    assert.deepEqual(data.historyCursor, { mode: 'after-id', afterId: requested }, suffix);
+    assert.deepEqual(data.messages.map((message) => message.id), ids, suffix);
+    assert.equal(data.nextAfterId, next, suffix);
+  }
+  for (const suffix of ['&limit=2', '&before=2026-11-03T00:00:00.000Z']) {
+    const response = await handleListDirectMessages(
+      await get('https://api.example.com/api/social/messages?contactId=2' + suffix, ALICE, 'legacy-device'),
+      ENV, db,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(Object.hasOwn((await response.json()).data, 'historyCursor'), false);
+  }
+  const denied = await handleListDirectMessages(
+    await get('https://api.example.com/api/social/messages?contactId=2&afterId=0', CAROL, 'foreign-device'),
+    ENV, db,
+  );
+  assert.equal(denied.status, 403);
+  assert.equal(Object.hasOwn(await denied.json(), 'data'), false);
+});
+

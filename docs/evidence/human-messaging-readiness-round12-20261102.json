@@ -1,0 +1,831 @@
+{
+  "schema": "fabushi.backend.human-messaging-round12-ci-evidence.v1",
+  "taskId": "20bf9475-a885-4314-b509-bea53ef8849f",
+  "round": 12,
+  "repository": "bhrumom/fabushi-backend",
+  "qualifiedSourceHead": "013c5460049f2f75843ebc0c8c736e287d32789c",
+  "sourceCommitUrl": "https://github.com/bhrumom/fabushi-backend/commit/013c5460049f2f75843ebc0c8c736e287d32789c",
+  "evidenceCollectionCompletedAtUtc": "2026-11-02 19:30:01 UTC",
+  "method": {
+    "runAndJobMetadata": "GitHub connector/API",
+    "fullJobLogs": "GitHub connector/API; preserved untruncated",
+    "artifacts": "Actual GitHub artifact ZIPs downloaded, byte count and SHA-256 compared with artifact API, all 8 ZIP members decoded and inspected",
+    "localRepositoryTestsExecuted": false,
+    "productionRequestsMade": false,
+    "ephemeralSignedUrlsIncluded": false,
+    "collectionWasReadOnly": true
+  },
+  "runs": [
+    {
+      "id": 41509986961,
+      "url": "https://github.com/bhrumom/fabushi-backend/actions/runs/41509986961",
+      "event": "push",
+      "workflowPath": ".github/workflows/human-messaging-ci.yml",
+      "runAttempt": 1,
+      "headSha": "013c5460049f2f75843ebc0c8c736e287d32789c",
+      "status": "completed",
+      "conclusion": "success",
+      "createdAt": "2026-11-02T19:26:42Z",
+      "updatedAt": "2026-11-02T19:26:58Z",
+      "exactHeadBinding": {
+        "runHead": "013c5460049f2f75843ebc0c8c736e287d32789c",
+        "artifactRunHead": "013c5460049f2f75843ebc0c8c736e287d32789c",
+        "targetShaFile": "013c5460049f2f75843ebc0c8c736e287d32789c",
+        "checkoutShaSeenInFullLog": true
+      },
+      "jobs": [
+        {
+          "id": 125499030813,
+          "name": "human-messaging-contracts",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Bind exact Human messaging source",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Check handler syntax",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Check community route syntax",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Check call signaling syntax",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Run existing and Phase 1 messaging contracts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run real SQLite mutation and recovery contracts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run read-only production readiness behavior contracts without production access",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Preserve exact Human messaging evidence",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 22
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 23
+            }
+          ]
+        },
+        {
+          "id": 125499162925,
+          "name": "production-readonly-readiness",
+          "status": "completed",
+          "conclusion": "skipped",
+          "steps": []
+        }
+      ],
+      "tests": {
+        "total": 63,
+        "passed": 63,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "suites": [
+          {
+            "name": "existing_and_phase1_messaging_contracts",
+            "counts": {
+              "tests": 29,
+              "pass": 29,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0
+            },
+            "logMember": "contracts.log",
+            "countMember": "test-counts.txt",
+            "logAndCountAgreement": true
+          },
+          {
+            "name": "real_sqlite_mutation_and_recovery_contracts",
+            "counts": {
+              "tests": 10,
+              "pass": 10,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0
+            },
+            "logMember": "sqlite-contracts.log",
+            "countMember": "sqlite-test-counts.txt",
+            "logAndCountAgreement": true
+          },
+          {
+            "name": "injected_fetch_readonly_readiness_contracts",
+            "counts": {
+              "tests": 24,
+              "pass": 24,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0
+            },
+            "logMember": "readiness-contracts.log",
+            "countMember": "readiness-test-counts.txt",
+            "logAndCountAgreement": true
+          }
+        ]
+      },
+      "fullContractLog": {
+        "jobId": 125499030813,
+        "bytes": 46993,
+        "sha256": "65203b9891ea352aebd3fb6fbdffbadf2a97b31b3b01bacd01040a7bd290850e",
+        "exactCheckoutSeen": true,
+        "resultLines": [
+          "2026-11-02T19:26:49.3029341Z # tests 29",
+          "2026-11-02T19:26:49.3029888Z # pass 29",
+          "2026-11-02T19:26:49.3030086Z # fail 0",
+          "2026-11-02T19:26:49.3030297Z # cancelled 0",
+          "2026-11-02T19:26:49.3030522Z # skipped 0",
+          "2026-11-02T19:26:49.3030775Z # todo 0",
+          "2026-11-02T19:26:50.5523046Z # tests 10",
+          "2026-11-02T19:26:50.5523569Z # pass 10",
+          "2026-11-02T19:26:50.5523801Z # fail 0",
+          "2026-11-02T19:26:50.5524029Z # cancelled 0",
+          "2026-11-02T19:26:50.5524486Z # skipped 0",
+          "2026-11-02T19:26:50.5524771Z # todo 0",
+          "2026-11-02T19:26:50.7492195Z # tests 24",
+          "2026-11-02T19:26:50.7492815Z # pass 24",
+          "2026-11-02T19:26:50.7493218Z # fail 0",
+          "2026-11-02T19:26:50.7493482Z # cancelled 0",
+          "2026-11-02T19:26:50.7493833Z # skipped 0",
+          "2026-11-02T19:26:50.7494170Z # todo 0"
+        ],
+        "url": "https://github.com/bhrumom/fabushi-backend/actions/runs/41509986961/job/125499030813"
+      },
+      "artifact": {
+        "id": 13171892898,
+        "name": "human-messaging-contracts-013c5460049f2f75843ebc0c8c736e287d32789c",
+        "url": "https://api.github.com/repos/bhrumom/fabushi-backend/actions/artifacts/13171892898",
+        "archiveDownloadApiUrl": "https://api.github.com/repos/bhrumom/fabushi-backend/actions/artifacts/13171892898/zip",
+        "createdAt": "2026-11-02T19:26:51Z",
+        "expiresAt": "2027-01-31T19:26:42Z",
+        "expiredAtObservation": false,
+        "apiSizeBytes": 5428,
+        "downloadedSizeBytes": 5428,
+        "apiSha256": "sha256:64c905e371f256df43610cfeb4b0c0f8089565d8864a6c514754d7d255f7dbf1",
+        "downloadedSha256": "sha256:64c905e371f256df43610cfeb4b0c0f8089565d8864a6c514754d7d255f7dbf1",
+        "digestVerified": true,
+        "memberCount": 8,
+        "members": [
+          {
+            "name": "contracts.log",
+            "bytes": 6586,
+            "sha256": "38badf94dfa7c56f10c9b340adc6300410f2c7fed07b532d6272140d0a9885c0",
+            "actualCountLines": [
+              "# tests 29",
+              "# pass 29",
+              "# fail 0",
+              "# cancelled 0",
+              "# skipped 0",
+              "# todo 0"
+            ]
+          },
+          {
+            "name": "readiness-contracts.log",
+            "bytes": 6186,
+            "sha256": "c768095c21e7c3b53ca4c9c0c03303415c349cdf8edc06635837b7b8610107a3",
+            "actualCountLines": [
+              "# tests 24",
+              "# pass 24",
+              "# fail 0",
+              "# cancelled 0",
+              "# skipped 0",
+              "# todo 0"
+            ]
+          },
+          {
+            "name": "scope.txt",
+            "bytes": 129,
+            "sha256": "80f3d17489382903e329b16a792836bd706c4774734375c3731520c475f81bc2",
+            "content": "R14-R17 / AC-12-AC-15; handler, SQLite and injected-fetch read-only readiness contracts; no deployed-D1 or production acceptance\n"
+          },
+          {
+            "name": "readiness-test-counts.txt",
+            "bytes": 101,
+            "sha256": "fe7873ac733128b2d7686688e98fa2bef4d8d7f3cc7ed9f3eb259ea6e0fd51d5",
+            "content": "# tests 24\n# suites 0\n# pass 24\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 152.394466\n"
+          },
+          {
+            "name": "sqlite-contracts.log",
+            "bytes": 2606,
+            "sha256": "e77da55068c4af263a3a9ebb72ec0305ce96e1972babea4f9cd76a0dad12bea9",
+            "actualCountLines": [
+              "# tests 10",
+              "# pass 10",
+              "# fail 0",
+              "# cancelled 0",
+              "# skipped 0",
+              "# todo 0"
+            ]
+          },
+          {
+            "name": "sqlite-test-counts.txt",
+            "bytes": 102,
+            "sha256": "9ab707a6ce4e98a33aa5352996f2f1f230cba857764e3f00f38137dc088228eb",
+            "content": "# tests 10\n# suites 0\n# pass 10\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1197.012692\n"
+          },
+          {
+            "name": "target-sha.txt",
+            "bytes": 41,
+            "sha256": "93d7f7da3c17d79051fe32ed15a0e240dc807f3e0fcb5fa7c3f1f880fbfcc4a6",
+            "content": "013c5460049f2f75843ebc0c8c736e287d32789c"
+          },
+          {
+            "name": "test-counts.txt",
+            "bytes": 101,
+            "sha256": "c4297c8ce91847bf0616eaabaf4c57113bb9b919219458d7c926238392bbb434",
+            "content": "# tests 29\n# suites 0\n# pass 29\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 233.024382\n"
+          }
+        ]
+      }
+    },
+    {
+      "id": 41509996583,
+      "url": "https://github.com/bhrumom/fabushi-backend/actions/runs/41509996583",
+      "event": "pull_request",
+      "workflowPath": ".github/workflows/human-messaging-ci.yml",
+      "runAttempt": 1,
+      "headSha": "013c5460049f2f75843ebc0c8c736e287d32789c",
+      "status": "completed",
+      "conclusion": "success",
+      "createdAt": "2026-11-02T19:26:45Z",
+      "updatedAt": "2026-11-02T19:27:14Z",
+      "exactHeadBinding": {
+        "runHead": "013c5460049f2f75843ebc0c8c736e287d32789c",
+        "artifactRunHead": "013c5460049f2f75843ebc0c8c736e287d32789c",
+        "targetShaFile": "013c5460049f2f75843ebc0c8c736e287d32789c",
+        "checkoutShaSeenInFullLog": true
+      },
+      "jobs": [
+        {
+          "id": 125499061610,
+          "name": "human-messaging-contracts",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1
+            },
+            {
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2
+            },
+            {
+              "name": "Bind exact Human messaging source",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3
+            },
+            {
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4
+            },
+            {
+              "name": "Check handler syntax",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5
+            },
+            {
+              "name": "Check community route syntax",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6
+            },
+            {
+              "name": "Check call signaling syntax",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7
+            },
+            {
+              "name": "Run existing and Phase 1 messaging contracts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8
+            },
+            {
+              "name": "Run real SQLite mutation and recovery contracts",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9
+            },
+            {
+              "name": "Run read-only production readiness behavior contracts without production access",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 10
+            },
+            {
+              "name": "Preserve exact Human messaging evidence",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 11
+            },
+            {
+              "name": "Post Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21
+            },
+            {
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 22
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 23
+            }
+          ]
+        },
+        {
+          "id": 125499303769,
+          "name": "production-readonly-readiness",
+          "status": "completed",
+          "conclusion": "skipped",
+          "steps": []
+        }
+      ],
+      "tests": {
+        "total": 63,
+        "passed": 63,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "suites": [
+          {
+            "name": "existing_and_phase1_messaging_contracts",
+            "counts": {
+              "tests": 29,
+              "pass": 29,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0
+            },
+            "logMember": "contracts.log",
+            "countMember": "test-counts.txt",
+            "logAndCountAgreement": true
+          },
+          {
+            "name": "real_sqlite_mutation_and_recovery_contracts",
+            "counts": {
+              "tests": 10,
+              "pass": 10,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0
+            },
+            "logMember": "sqlite-contracts.log",
+            "countMember": "sqlite-test-counts.txt",
+            "logAndCountAgreement": true
+          },
+          {
+            "name": "injected_fetch_readonly_readiness_contracts",
+            "counts": {
+              "tests": 24,
+              "pass": 24,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0
+            },
+            "logMember": "readiness-contracts.log",
+            "countMember": "readiness-test-counts.txt",
+            "logAndCountAgreement": true
+          }
+        ]
+      },
+      "fullContractLog": {
+        "jobId": 125499061610,
+        "bytes": 46998,
+        "sha256": "2e61c7897e716137b34f576d82720a1a4b2502ff59fab788f32a49da1661e904",
+        "exactCheckoutSeen": true,
+        "resultLines": [
+          "2026-11-02T19:26:53.2518673Z # tests 29",
+          "2026-11-02T19:26:53.2520426Z # pass 29",
+          "2026-11-02T19:26:53.2521366Z # fail 0",
+          "2026-11-02T19:26:53.2522087Z # cancelled 0",
+          "2026-11-02T19:26:53.2523001Z # skipped 0",
+          "2026-11-02T19:26:53.2523705Z # todo 0",
+          "2026-11-02T19:26:54.3843703Z # tests 10",
+          "2026-11-02T19:26:54.3844945Z # pass 10",
+          "2026-11-02T19:26:54.3845463Z # fail 0",
+          "2026-11-02T19:26:54.3846031Z # cancelled 0",
+          "2026-11-02T19:26:54.3846741Z # skipped 0",
+          "2026-11-02T19:26:54.3847315Z # todo 0",
+          "2026-11-02T19:26:54.6759047Z # tests 24",
+          "2026-11-02T19:26:54.6778426Z # pass 24",
+          "2026-11-02T19:26:54.6779197Z # fail 0",
+          "2026-11-02T19:26:54.6779652Z # cancelled 0",
+          "2026-11-02T19:26:54.6780176Z # skipped 0",
+          "2026-11-02T19:26:54.6780619Z # todo 0"
+        ],
+        "url": "https://github.com/bhrumom/fabushi-backend/actions/runs/41509996583/job/125499061610"
+      },
+      "artifact": {
+        "id": 13172507832,
+        "name": "human-messaging-contracts-013c5460049f2f75843ebc0c8c736e287d32789c",
+        "url": "https://api.github.com/repos/bhrumom/fabushi-backend/actions/artifacts/13172507832",
+        "archiveDownloadApiUrl": "https://api.github.com/repos/bhrumom/fabushi-backend/actions/artifacts/13172507832/zip",
+        "createdAt": "2026-11-02T19:26:55Z",
+        "expiresAt": "2027-01-31T19:26:46Z",
+        "expiredAtObservation": false,
+        "apiSizeBytes": 5429,
+        "downloadedSizeBytes": 5429,
+        "apiSha256": "sha256:d840c60d7aab2b554089b02a2d0c5e3e84387f524eac9614dd72c250bf615d66",
+        "downloadedSha256": "sha256:d840c60d7aab2b554089b02a2d0c5e3e84387f524eac9614dd72c250bf615d66",
+        "digestVerified": true,
+        "memberCount": 8,
+        "members": [
+          {
+            "name": "contracts.log",
+            "bytes": 6590,
+            "sha256": "bfc7b1594913c5eaa1a8a660a5d5f80202ba94e8d726e43edc755e63d4c05e94",
+            "actualCountLines": [
+              "# tests 29",
+              "# pass 29",
+              "# fail 0",
+              "# cancelled 0",
+              "# skipped 0",
+              "# todo 0"
+            ]
+          },
+          {
+            "name": "readiness-contracts.log",
+            "bytes": 6189,
+            "sha256": "c0a7f94532215a06a162245e519fdbded52930199ceaee08aa94b9e7ab424f66",
+            "actualCountLines": [
+              "# tests 24",
+              "# pass 24",
+              "# fail 0",
+              "# cancelled 0",
+              "# skipped 0",
+              "# todo 0"
+            ]
+          },
+          {
+            "name": "readiness-test-counts.txt",
+            "bytes": 101,
+            "sha256": "a4f375e48364b03b25fefbaa8d353c5fd75754c07f8f6d3c75e82af8ebb8db90",
+            "content": "# tests 24\n# suites 0\n# pass 24\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 233.372347\n"
+          },
+          {
+            "name": "scope.txt",
+            "bytes": 129,
+            "sha256": "80f3d17489382903e329b16a792836bd706c4774734375c3731520c475f81bc2",
+            "content": "R14-R17 / AC-12-AC-15; handler, SQLite and injected-fetch read-only readiness contracts; no deployed-D1 or production acceptance\n"
+          },
+          {
+            "name": "sqlite-contracts.log",
+            "bytes": 2605,
+            "sha256": "d30cc5777c22d7fc0c09b10308be4f53fac1cb548991fee29cf0df481b06d142",
+            "actualCountLines": [
+              "# tests 10",
+              "# pass 10",
+              "# fail 0",
+              "# cancelled 0",
+              "# skipped 0",
+              "# todo 0"
+            ]
+          },
+          {
+            "name": "sqlite-test-counts.txt",
+            "bytes": 102,
+            "sha256": "9d8f26ea0814ed8fe5c51bf9621cd23098f9a1413f3c84babedaaf4678967aec",
+            "content": "# tests 10\n# suites 0\n# pass 10\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1067.501663\n"
+          },
+          {
+            "name": "target-sha.txt",
+            "bytes": 41,
+            "sha256": "93d7f7da3c17d79051fe32ed15a0e240dc807f3e0fcb5fa7c3f1f880fbfcc4a6",
+            "content": "013c5460049f2f75843ebc0c8c736e287d32789c"
+          },
+          {
+            "name": "test-counts.txt",
+            "bytes": 101,
+            "sha256": "55be02e96655b8c69da5397957fd4c2276090ee49b778224febdf931d61ad7a7",
+            "content": "# tests 29\n# suites 0\n# pass 29\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 330.473903\n"
+          }
+        ]
+      }
+    }
+  ],
+  "productionReadiness": {
+    "status": "not_executed",
+    "jobs": [
+      {
+        "runId": 41509986961,
+        "id": 125499162925,
+        "name": "production-readonly-readiness",
+        "status": "completed",
+        "conclusion": "skipped",
+        "steps": []
+      },
+      {
+        "runId": 41509996583,
+        "id": 125499303769,
+        "name": "production-readonly-readiness",
+        "status": "completed",
+        "conclusion": "skipped",
+        "steps": []
+      }
+    ],
+    "skippedIsNotPass": true,
+    "productionAcceptance": false,
+    "deployedD1Acceptance": false,
+    "limitations": [
+      "24 readiness contracts use injected fetch fixtures and do not establish live Worker source or production results.",
+      "Both runs validate exactly source head 013c5460049f2f75843ebc0c8c736e287d32789c; this evidence does not by itself qualify a later code revision.",
+      "Historical/oracle source-marker checks in the existing 29-test suite are not all independent production behavior tests.",
+      "No live authenticated production afterId=0 multipage, empty-page, denied-scope or recovery execution occurred in these runs."
+    ]
+  },
+  "scopeText": "R14-R17 / AC-12-AC-15; handler, SQLite and injected-fetch read-only readiness contracts; no deployed-D1 or production acceptance",
+  "publication": {
+    "baseCommit": "06047d3ea69313ec4cfec58bbee36a7afc9cf007",
+    "branch": "checkpoint/tdrp-stage-a-msg-mutations-7457eb1c-r1",
+    "force": false,
+    "expectedSha": "06047d3ea69313ec4cfec58bbee36a7afc9cf007",
+    "commit": "013c5460049f2f75843ebc0c8c736e287d32789c",
+    "remoteCommitRefAndFourFileContentsVerified": true,
+    "pr": 137,
+    "draft": true,
+    "merged": false,
+    "reviewsObserved": 0
+  },
+  "review": {
+    "schemaVersion": 1,
+    "repository": "bhrumom/fabushi-backend",
+    "baseCommit": "06047d3ea69313ec4cfec58bbee36a7afc9cf007",
+    "reviewedAt": "2026-11-02",
+    "reviewer": "resumed_backend_review",
+    "verdict": "no-blocking-findings-within-stated-scope",
+    "scope": "Independent static read of four candidate files and full diff, actual backend routing/identity/read query source, and canonical Platform Core identity GET; no execution.",
+    "blockingFindings": [],
+    "confirmed": [
+      "Workflow's six exact 24-case grep checks are intact; prior replacement corruption is absent.",
+      "Ordinary push and pull_request execute injected-fetch test contracts only. Production job requires workflow_dispatch, production_readiness=true, refs/heads/main, the production environment, protected authorization and source approval variables, and dedicated secrets. There is no deploy, migration, merge or fixture mutation action.",
+      "Expected source SHA is only an approval constraint. Real verification reads fixed-repository canonical main dispatch, latest run-attempt complete jobs, the uniquely named successful canonical deployment job and required successful steps, then exact checkout and one emitted Worker version in its full bounded log.",
+      "GitHub, Cloudflare and account credentials are confined to their fixed origins. Only an authenticated GitHub job-log endpoint may supply a 302 target; follow-up is limited to HTTPS Actions log hosts, contains no Authorization/cookies and rejects a second redirect.",
+      "Active Cloudflare deployment must be the first result, single version at 100 percent and match the actual logged version. Exact custom domain must route to enabled production environment for the fixed Worker. Domain and deployment are reread after message checks and changed deployment fails closed.",
+      "Real backend source routes message GET through existing friendship, participant and afterId queries. Identity, contact, friendship, message page and reaction lookups use SELECT; read_at is projected without a read receipt update. Outer security gate does not activate on these two GET paths.",
+      "Ordinary identity verifier matches actual top-level id/role/isAdmin payload. Backend canonical RS256 verification itself uses the bound Platform GET; fixed Core source validates JWT/current session and SELECTs the account without last_seen, registration or revoke writes in this route.",
+      "Pagination requires strict requested cursor echo, expected contact/pair, outgoing actor, safe strictly ascending IDs matching an approved complete fixture, bounded page size, multipage traversal, empty origin and terminal empty page. Unauthorized success requires exactly anonymous401 and authenticated noncontact403 with no data/messages payload.",
+      "Reread recovery is explicitly an in-memory client checkpoint suffix reread. It is not durable Desktop restart, D1 restore or server recovery.",
+      "Report emission omits credentials, private IDs, message bodies, raw errors, signed URLs and Cloudflare account ID. Missing evidence/config blocks nonzero; observed mismatches fail nonzero."
+    ],
+    "sourceAnchors": [
+      {
+        "repository": "bhrumom/fabushi-backend",
+        "commit": "06047d3ea69313ec4cfec58bbee36a7afc9cf007",
+        "path": "fabushi/web/worker-modular.js",
+        "blob": "341e67035d70da7e186b70f1ebc68def2e1a3e48",
+        "symbols": [
+          "fetch"
+        ]
+      },
+      {
+        "path": "fabushi/web/src/security/request-gate.js",
+        "blob": "c19ae279650abd210583fbb19e1b5ea2168cce3a",
+        "symbols": [
+          "enforceRequestSecurityGate"
+        ]
+      },
+      {
+        "path": "fabushi/web/src/router.js",
+        "blob": "71ba5d375795a0251272a8a2f2e5c61069b62a97",
+        "symbols": [
+          "route",
+          "routePlatformGateway ordering"
+        ]
+      },
+      {
+        "path": "fabushi/web/src/routes/platform-gateway-routes.js",
+        "blob": "0fa8966f289deda04ace7dcba4a0e212a6c766c3",
+        "symbols": [
+          "routePlatformGateway",
+          "fetchPlatform"
+        ]
+      },
+      {
+        "path": "fabushi/web/src/routes/community-routes.js",
+        "blob": "a9121244f37ec775e4e1aa027c9ac0dbb8351157",
+        "symbols": [
+          "GET /api/social/messages"
+        ]
+      },
+      {
+        "path": "fabushi/web/src/handlers/friends.js",
+        "blob": "fca0ed323b34fe767cad262af57cedcf0e71a79f",
+        "symbols": [
+          "requireStableAuth",
+          "mapContact",
+          "findUser",
+          "areFriends",
+          "loadReactionMap",
+          "handleListDirectMessages"
+        ]
+      },
+      {
+        "path": "fabushi/web/src/utils/auth-identity.js",
+        "blob": "6f0a81bdb4ff7b4c008b4abc90aa8ed4892a537a",
+        "symbols": [
+          "requireAuthIdentity",
+          "authIdentityFromToken",
+          "resolveUserIdByUsername"
+        ]
+      },
+      {
+        "path": "fabushi/web/auth-utils.js",
+        "blob": "05d272eacbbfd6d232e88d2d202dcde57609d7b5",
+        "symbols": [
+          "verifyToken",
+          "verifyLegacyToken",
+          "verifyMahayanaAccessToken"
+        ]
+      },
+      {
+        "path": "fabushi/web/src/services/database.js",
+        "blob": "154d39464a2417e771276d1032ab8078f0ef6e24",
+        "symbols": [
+          "constructor",
+          "prepare",
+          "getUser",
+          "getUserById"
+        ]
+      },
+      {
+        "path": ".github/workflows/production-worker-delivery.yml",
+        "blob": "54870db11c4e4d854fafe66c11d007ca5d0a2f5d",
+        "symbols": [
+          "Migrate and deploy canonical production Worker",
+          "required step names"
+        ]
+      },
+      {
+        "repository": "bhrumom/fabushi-platform-core",
+        "commit": "26c3cc8c69ab89e8fb38952adb8c438ec0b68e05",
+        "path": "third_party/mahayana/mahayana-rs/mahayana-platform-worker/src/worker_api.rs",
+        "blob": "ff46a891bf2a6c43b2a8d8b31e888838c3b86bcc",
+        "symbols": [
+          "GET /api/auth/user-info"
+        ],
+        "readBy": "identity_get_audit"
+      },
+      {
+        "repository": "bhrumom/fabushi-platform-core",
+        "commit": "26c3cc8c69ab89e8fb38952adb8c438ec0b68e05",
+        "path": "third_party/mahayana/mahayana-rs/mahayana-platform-worker/src/worker_api/account.rs",
+        "blob": "a4da82e64a227c65e1190dbec778aad3bd3dae50",
+        "symbols": [
+          "account_user_info",
+          "authenticated_live_account",
+          "authenticated_account",
+          "serialize_account_user"
+        ],
+        "readBy": "identity_get_audit"
+      }
+    ],
+    "testAuthorship": {
+      "cases": 24,
+      "executedLocally": false,
+      "executedInActionsByReviewer": false
+    },
+    "limitations": [
+      "Static review is not actual test execution or independent product ACCEPT; freeze exact candidate and require actual GitHub Actions 29 original +10 SQLite +24 readiness case results.",
+      "Current live canonical identity Worker source/version is not attested by this verifier. Exact approved live call-chain review remains a production prerequisite.",
+      "Current compatible production Worker deployment, dedicated ordinary-account/fixture authorization and actual multipage/empty/noncontact evidence remain unexecuted.",
+      "Control-plane reads before/after are bounded observed source association, not per-request cryptographic attestation or a D1 data snapshot.",
+      "Denial result checks known error/data/messages fields; this review does not claim arbitrary backend payload covert-channel analysis.",
+      "Spec-only compliance evidence edits by root do not alter runtime code and remain independently distinguishable from this static verdict."
+    ],
+    "notReleaseAccept": true,
+    "actions": {
+      "localTests": false,
+      "localBuild": false,
+      "localLint": false,
+      "localValidators": false,
+      "productionRequests": false,
+      "remoteWrites": false
+    },
+    "candidateFiles": [
+      {
+        "path": "docs/specs/human-direct-messaging-extensions.md",
+        "bytes": 31485,
+        "gitBlobSha": "7fcf0169b08fb700d061c034458d371ea1600cdb",
+        "sha256": "dc5d8299b331bc599f746e58bddf9fa5ccd9baa4f04f668908ce72fda72fc16f"
+      },
+      {
+        "path": ".github/scripts/human-messaging-production-readiness.mjs",
+        "bytes": 21633,
+        "gitBlobSha": "55afecc1c1d9d8192b11a74b62c439513d673740",
+        "sha256": "1022921a02b43ca0fba79592843294e8cb7b73a89235f0c192b6d3a54cbb1acd"
+      },
+      {
+        "path": ".github/scripts/human-messaging-production-readiness.test.mjs",
+        "bytes": 24106,
+        "gitBlobSha": "11bbfd22721622d791439fdd817597f575af8244",
+        "sha256": "5ca66caad3a228ce532b8688f5de0024f58b0a357e4032ddba0413f39961961c"
+      },
+      {
+        "path": ".github/workflows/human-messaging-ci.yml",
+        "bytes": 9086,
+        "gitBlobSha": "9c129977c1b88c13972ceeb46e8565cc1de1caa6",
+        "sha256": "4134c61a14f5163b3878097cfd24da8a6a5e4640756ca11b106f3712189c505f"
+      }
+    ]
+  },
+  "productionBoundary": {
+    "formalAuthorizationObserved": false,
+    "productionMutated": false,
+    "latestTraceableCanonicalRun": 40047409890,
+    "latestTraceableSource": "33a26692ce2f74e3fdca3940dfc4cbfb3ede151b",
+    "lastObservedVersionAtThatDelivery": "3ad1a889-4c28-4344-8472-8c8adc225a3c",
+    "currentControlPlaneSource": "not-observed",
+    "recoveryArtifact": "time-travel bookmark only, not restore evidence",
+    "remaining": [
+      "compatible authorized deployment",
+      "live messaging and bound identity Worker source",
+      "approved dedicated ordinary accounts and existing stable fixture",
+      "real authenticated afterId=0 multipage and empty pages",
+      "real anonymous/noncontact denials",
+      "durable client restart and remote recovery",
+      "full source/legal/platform/Bot/independent ACCEPT"
+    ]
+  }
+}

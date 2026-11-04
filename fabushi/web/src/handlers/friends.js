@@ -5,6 +5,7 @@ const MAX_MESSAGE_LENGTH = 4000;
 const MAX_MESSAGE_ATTACHMENTS = 10;
 const MAX_MESSAGE_RESOURCE_BYTES = 25 * 1024 * 1024;
 const MAX_MESSAGE_SEARCH_LENGTH = 200;
+const MAX_MESSAGE_MUTATION_OPERATION_ID_LENGTH = 200;
 
 async function requireStableAuth(request, env, db) {
   const auth = await requireAuthIdentity(request, env, db);
@@ -336,6 +337,70 @@ async function loadReactionMap(db, messageIds, authUserId) {
   return new Map([...map].map(([messageId, reactions]) => [messageId, [...reactions.values()]]));
 }
 
+async function sha256Hex(value) {
+  const encoded = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function parseExpectedRevision(value) {
+  const revision = Number(value);
+  return Number.isSafeInteger(revision) && revision >= 1 ? revision : null;
+}
+
+function parseMutationOperationId(value) {
+  const operationId = String(value ?? '').trim();
+  if (!operationId || operationId.length > MAX_MESSAGE_MUTATION_OPERATION_ID_LENGTH) return null;
+  return operationId;
+}
+
+// Parses an edit/delete request. Malformed or non-object JSON returns null so
+// callers answer 400 instead of throwing a 500. DELETE bodies are optional
+// because some clients/proxies drop them; operationId/expectedRevision may then
+// be supplied as query parameters. Body values take precedence.
+async function readMutationRequest(request) {
+  const raw = await request.text();
+  let body = {};
+  if (raw.trim()) {
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  }
+  const query = new URL(request.url).searchParams;
+  return {
+    ...body,
+    operationId: body.operationId ?? query.get('operationId') ?? undefined,
+    expectedRevision: body.expectedRevision ?? query.get('expectedRevision') ?? undefined,
+  };
+}
+
+async function readMutationTarget(db, messageId, authUserId) {
+  const id = Number(messageId);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  return await db.prepare(`
+    SELECT id, sender_user_id, recipient_user_id, body, attachments_json,
+      revision, edited_at, deleted_at
+    FROM direct_messages
+    WHERE id = ? AND (sender_user_id = ? OR recipient_user_id = ?)
+    LIMIT 1
+  `).bind(id, authUserId, authUserId).first();
+}
+
+async function readMessageMutation(db, authUserId, operationId) {
+  return await db.prepare(`
+    SELECT sender_user_id, operation_id, message_id, mutation_kind,
+      expected_revision, result_revision, request_digest, created_at
+    FROM direct_message_mutations
+    WHERE sender_user_id = ? AND operation_id = ?
+    LIMIT 1
+  `).bind(authUserId, operationId).first();
+}
+
 function mapDirectMessage(row, authUserId, reactionMap = new Map()) {
   return {
     id: row.id,
@@ -351,6 +416,10 @@ function mapDirectMessage(row, authUserId, reactionMap = new Map()) {
     replyToMessageId: row.reply_to_message_id ?? null,
     attachments: parseAttachmentsJson(row.attachments_json),
     reactions: reactionMap.get(row.id) || [],
+    revision: Number(row.revision ?? 1),
+    editedAt: row.edited_at ?? null,
+    deletedAt: row.deleted_at ?? null,
+    isDeleted: Boolean(row.deleted_at),
   };
 }
 
@@ -358,7 +427,7 @@ async function readCanonicalDirectMessage(db, messageId, authUserId) {
   const row = await db.prepare(`
     SELECT id, sender_user_id, sender_username, recipient_user_id,
       recipient_username, body, client_request_id, created_at, read_at,
-      reply_to_message_id, attachments_json
+      reply_to_message_id, attachments_json, revision, edited_at, deleted_at
     FROM direct_messages
     WHERE id = ?
     LIMIT 1
@@ -550,7 +619,7 @@ export async function handleListDirectMessages(request, env, db) {
   const afterRaw = (url.searchParams.get('afterId') || '').trim();
   const afterId = afterRaw ? Number(afterRaw) : 0;
   if (before && afterRaw) return jsonResponse({ success: false, error: 'before 与 afterId 不能同时使用' }, 400);
-  if (afterRaw && (!Number.isSafeInteger(afterId) || afterId <= 0)) {
+  if (afterRaw && (!/^\d+$/.test(afterRaw) || !Number.isSafeInteger(afterId) || afterId < 0)) {
     return jsonResponse({ success: false, error: 'afterId 无效' }, 400);
   }
   const query = (url.searchParams.get('q') || '').trim();
@@ -560,11 +629,11 @@ export async function handleListDirectMessages(request, env, db) {
   const like = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
   const pair = [auth.userId, target.id, target.id, auth.userId];
   let rows;
-  if (afterId > 0) {
+  if (afterRaw) {
     rows = await db.prepare(`
       SELECT id, sender_user_id, sender_username, recipient_user_id,
         recipient_username, body, client_request_id, created_at, read_at,
-        reply_to_message_id, attachments_json
+        reply_to_message_id, attachments_json, revision, edited_at, deleted_at
       FROM direct_messages
       WHERE ((sender_user_id = ? AND recipient_user_id = ?)
         OR (sender_user_id = ? AND recipient_user_id = ?))
@@ -577,7 +646,7 @@ export async function handleListDirectMessages(request, env, db) {
     rows = await db.prepare(`
       SELECT id, sender_user_id, sender_username, recipient_user_id,
         recipient_username, body, client_request_id, created_at, read_at,
-        reply_to_message_id, attachments_json
+        reply_to_message_id, attachments_json, revision, edited_at, deleted_at
       FROM direct_messages
       WHERE ((sender_user_id = ? AND recipient_user_id = ?)
         OR (sender_user_id = ? AND recipient_user_id = ?))
@@ -596,8 +665,196 @@ export async function handleListDirectMessages(request, env, db) {
     data: {
       contact: mapContact(target),
       messages,
-      nextAfterId: messages.length === 0 ? afterId || null : messages[messages.length - 1].id,
+      ...(afterRaw ? { historyCursor: { mode: 'after-id', afterId } } : {}),
+      nextAfterId: messages.length === 0
+        ? (afterRaw ? afterId : null)
+        : messages[messages.length - 1].id,
     },
+  });
+}
+
+export async function handleEditDirectMessage(request, env, db, messageId) {
+  const auth = await requireStableAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const target = await readMutationTarget(db, messageId, auth.userId);
+  if (!target) return jsonResponse({ success: false, error: '消息不存在或无权访问' }, 404);
+  if (target.sender_user_id !== auth.userId) {
+    return jsonResponse({ success: false, error: '只能编辑自己发送的消息' }, 403);
+  }
+
+  const body = await readMutationRequest(request);
+  if (!body) return jsonResponse({ success: false, error: '请求体不是有效的 JSON 对象' }, 400);
+  const operationId = parseMutationOperationId(body.operationId);
+  const expectedRevision = parseExpectedRevision(body.expectedRevision);
+  if (!operationId) return jsonResponse({ success: false, error: '消息操作编号无效' }, 400);
+  if (expectedRevision == null) return jsonResponse({ success: false, error: '消息版本无效' }, 400);
+  const text = String(body.text ?? body.message ?? '').trim();
+  if (text.length > MAX_MESSAGE_LENGTH) {
+    return jsonResponse({ success: false, error: `消息不能超过 ${MAX_MESSAGE_LENGTH} 个字符` }, 400);
+  }
+  if (!text && parseAttachmentsJson(target.attachments_json).length === 0) {
+    return jsonResponse({ success: false, error: '消息不能为空' }, 400);
+  }
+
+  const requestDigest = await sha256Hex(JSON.stringify({
+    kind: 'edit',
+    messageId: Number(target.id),
+    expectedRevision,
+    text,
+  }));
+  const prior = await readMessageMutation(db, auth.userId, operationId);
+  if (prior) {
+    if (prior.message_id !== target.id || prior.mutation_kind !== 'edit'
+        || prior.expected_revision !== expectedRevision || prior.request_digest !== requestDigest) {
+      return jsonResponse({ success: false, error: '消息操作编号已被其他操作使用' }, 409);
+    }
+    return jsonResponse({
+      success: true,
+      deduplicated: true,
+      message: await readCanonicalDirectMessage(db, target.id, auth.userId),
+    });
+  }
+  if (target.deleted_at) {
+    return jsonResponse({ success: false, error: '已删除的消息不能编辑' }, 409);
+  }
+  if (Number(target.revision ?? 1) !== expectedRevision) {
+    return jsonResponse({
+      success: false,
+      error: '消息版本已更新',
+      message: await readCanonicalDirectMessage(db, target.id, auth.userId),
+    }, 409);
+  }
+
+  const now = new Date().toISOString();
+  const resultRevision = expectedRevision + 1;
+  const [journalResult, updateResult] = await db.batch([
+    db.prepare(`
+      INSERT INTO direct_message_mutations (
+        sender_user_id, operation_id, message_id, mutation_kind,
+        expected_revision, result_revision, request_digest, created_at
+      )
+      SELECT ?, ?, id, 'edit', ?, ?, ?, ?
+      FROM direct_messages
+      WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at IS NULL
+    `).bind(
+      auth.userId, operationId, expectedRevision, resultRevision, requestDigest, now,
+      target.id, auth.userId, expectedRevision,
+    ),
+    db.prepare(`
+      UPDATE direct_messages
+      SET body = ?, revision = ?, edited_at = ?
+      WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at IS NULL
+    `).bind(text, resultRevision, now, target.id, auth.userId, expectedRevision),
+  ]);
+  if (journalResult?.meta?.changes !== 1 || updateResult?.meta?.changes !== 1) {
+    return jsonResponse({
+      success: false,
+      error: '消息版本已更新',
+      message: await readCanonicalDirectMessage(db, target.id, auth.userId),
+    }, 409);
+  }
+  return jsonResponse({
+    success: true,
+    deduplicated: false,
+    message: await readCanonicalDirectMessage(db, target.id, auth.userId),
+  });
+}
+
+export async function handleDeleteDirectMessage(request, env, db, messageId) {
+  const auth = await requireStableAuth(request, env, db);
+  if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
+  const target = await readMutationTarget(db, messageId, auth.userId);
+  if (!target) return jsonResponse({ success: false, error: '消息不存在或无权访问' }, 404);
+  if (target.sender_user_id !== auth.userId) {
+    return jsonResponse({ success: false, error: '只能删除自己发送的消息' }, 403);
+  }
+
+  const body = await readMutationRequest(request);
+  if (!body) return jsonResponse({ success: false, error: '请求体不是有效的 JSON 对象' }, 400);
+  const operationId = parseMutationOperationId(body.operationId);
+  const expectedRevision = parseExpectedRevision(body.expectedRevision);
+  if (!operationId) return jsonResponse({ success: false, error: '消息操作编号无效' }, 400);
+  if (expectedRevision == null) return jsonResponse({ success: false, error: '消息版本无效' }, 400);
+  const requestDigest = await sha256Hex(JSON.stringify({
+    kind: 'delete',
+    messageId: Number(target.id),
+    expectedRevision,
+  }));
+  const prior = await readMessageMutation(db, auth.userId, operationId);
+  if (prior) {
+    if (prior.message_id !== target.id || prior.mutation_kind !== 'delete'
+        || prior.expected_revision !== expectedRevision || prior.request_digest !== requestDigest) {
+      return jsonResponse({ success: false, error: '消息操作编号已被其他操作使用' }, 409);
+    }
+    // Repair a persisted tombstone from an older Worker that committed its
+    // journal before clearing reactions. A failed repair must remain retryable.
+    await db.prepare(`
+      DELETE FROM direct_message_reactions
+      WHERE message_id = ?
+        AND EXISTS (
+          SELECT 1 FROM direct_messages
+          WHERE id = ? AND sender_user_id = ? AND deleted_at IS NOT NULL
+        )
+    `).bind(target.id, target.id, auth.userId).run();
+    return jsonResponse({
+      success: true,
+      deduplicated: true,
+      message: await readCanonicalDirectMessage(db, target.id, auth.userId),
+    });
+  }
+  if (target.deleted_at) {
+    return jsonResponse({ success: false, error: '消息已经删除' }, 409);
+  }
+  if (Number(target.revision ?? 1) !== expectedRevision) {
+    return jsonResponse({
+      success: false,
+      error: '消息版本已更新',
+      message: await readCanonicalDirectMessage(db, target.id, auth.userId),
+    }, 409);
+  }
+
+  const now = new Date().toISOString();
+  const resultRevision = expectedRevision + 1;
+  const [journalResult, updateResult] = await db.batch([
+    db.prepare(`
+      INSERT INTO direct_message_mutations (
+        sender_user_id, operation_id, message_id, mutation_kind,
+        expected_revision, result_revision, request_digest, created_at
+      )
+      SELECT ?, ?, id, 'delete', ?, ?, ?, ?
+      FROM direct_messages
+      WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at IS NULL
+    `).bind(
+      auth.userId, operationId, expectedRevision, resultRevision, requestDigest, now,
+      target.id, auth.userId, expectedRevision,
+    ),
+    db.prepare(`
+      UPDATE direct_messages
+      SET body = '', attachments_json = '[]', revision = ?, deleted_at = ?
+      WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at IS NULL
+    `).bind(resultRevision, now, target.id, auth.userId, expectedRevision),
+    // D1 batch is a single SQL transaction. Tombstone, operation journal and
+    // reaction cleanup must all commit or all roll back together.
+    db.prepare(`
+      DELETE FROM direct_message_reactions
+      WHERE message_id = ?
+        AND EXISTS (
+          SELECT 1 FROM direct_messages
+          WHERE id = ? AND sender_user_id = ? AND revision = ? AND deleted_at = ?
+        )
+    `).bind(target.id, target.id, auth.userId, resultRevision, now),
+  ]);
+  if (journalResult?.meta?.changes !== 1 || updateResult?.meta?.changes !== 1) {
+    return jsonResponse({
+      success: false,
+      error: '消息版本已更新',
+      message: await readCanonicalDirectMessage(db, target.id, auth.userId),
+    }, 409);
+  }
+  return jsonResponse({
+    success: true,
+    deduplicated: false,
+    message: await readCanonicalDirectMessage(db, target.id, auth.userId),
   });
 }
 
@@ -605,12 +862,13 @@ export async function handleSetDirectMessageReaction(request, env, db, messageId
   const auth = await requireStableAuth(request, env, db);
   if (auth.error) return jsonResponse({ success: false, error: auth.error }, auth.status);
   const message = await db.prepare(`
-    SELECT id, sender_user_id, recipient_user_id
+    SELECT id, sender_user_id, recipient_user_id, deleted_at
     FROM direct_messages
     WHERE id = ? AND (sender_user_id = ? OR recipient_user_id = ?)
     LIMIT 1
   `).bind(Number(messageId), auth.userId, auth.userId).first();
   if (!message) return jsonResponse({ success: false, error: '消息不存在或无权访问' }, 404);
+  if (message.deleted_at) return jsonResponse({ success: false, error: '已删除的消息不能添加表情' }, 409);
   const body = await request.json();
   const emoji = String(body.emoji || '').trim();
   const emojiBytes = new TextEncoder().encode(emoji).byteLength;
@@ -621,19 +879,39 @@ export async function handleSetDirectMessageReaction(request, env, db, messageId
   if (active) {
     await db.prepare(`
       INSERT INTO direct_message_reactions (message_id, user_id, emoji, created_at)
-      VALUES (?, ?, ?, ?)
+      SELECT ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM direct_messages
+        WHERE id = ? AND deleted_at IS NULL
+          AND (sender_user_id = ? OR recipient_user_id = ?)
+      )
       ON CONFLICT(message_id, user_id, emoji) DO NOTHING
-    `).bind(message.id, auth.userId, emoji, new Date().toISOString()).run();
+    `).bind(
+      message.id, auth.userId, emoji, new Date().toISOString(),
+      message.id, auth.userId, auth.userId,
+    ).run();
   } else {
     await db.prepare(`
       DELETE FROM direct_message_reactions
       WHERE message_id = ? AND user_id = ? AND emoji = ?
-    `).bind(message.id, auth.userId, emoji).run();
+        AND EXISTS (
+          SELECT 1 FROM direct_messages
+          WHERE id = ? AND deleted_at IS NULL
+            AND (sender_user_id = ? OR recipient_user_id = ?)
+        )
+    `).bind(message.id, auth.userId, emoji, message.id, auth.userId, auth.userId).run();
   }
   const reactions = await loadReactionMap(db, [message.id], auth.userId);
+  // The initial authorization read may precede a concurrent tombstone. Never
+  // acknowledge that stale request as a successful reaction on deleted content.
+  const current = await readMutationTarget(db, message.id, auth.userId);
+  if (!current) return jsonResponse({ success: false, error: '消息不存在或无权访问' }, 404);
+  if (current.deleted_at) return jsonResponse({ success: false, error: '已删除的消息不能添加表情' }, 409);
   return jsonResponse({
     success: true,
     messageId: message.id,
     reactions: reactions.get(message.id) || [],
   });
 }
+
+
